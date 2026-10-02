@@ -1,0 +1,19 @@
+# Go build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Worktrees (spike / feature branches live here)
+/.worktrees/
+
+# Env & secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
