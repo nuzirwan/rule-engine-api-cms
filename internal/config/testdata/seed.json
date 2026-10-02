@@ -1,0 +1,193 @@
+{
+  "env": "",
+  "flows": [
+    {
+      "flowId": "orders-expedite",
+      "version": 1,
+      "method": "GET",
+      "path": "/orders/{id}",
+      "active": true,
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "GET",
+          "path": "/orders/{id}",
+          "input": { "params": ["id"] }
+        },
+        "children": [
+          {
+            "id": "read-order",
+            "type": "action",
+            "spec": {
+              "connection": "orders-pg",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT amount, status FROM orders WHERE id=$1",
+                  "params": ["{{input.id}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "order"
+            },
+            "children": [
+              {
+                "id": "classify",
+                "type": "condition",
+                "spec": {
+                  "jdmId": "order",
+                  "input": ["order.amount", "order.status"],
+                  "trueKey": "expedited",
+                  "falseKey": "standard"
+                },
+                "children": [
+                  {
+                    "id": "expedited",
+                    "type": "action",
+                    "spec": {
+                      "connection": "ship-rest",
+                      "operation": {
+                        "Kind": "http",
+                        "Payload": {
+                          "method": "POST",
+                          "path": "/expedite",
+                          "body": { "order": "{{order}}" }
+                        },
+                        "Required": true
+                      },
+                      "saveAs": "decision"
+                    },
+                    "children": [
+                      {
+                        "id": "set-expedited",
+                        "type": "set",
+                        "spec": {
+                          "targetPath": "shipping",
+                          "from": "decision.body.shipping"
+                        },
+                        "children": [
+                          {
+                            "id": "respond-expedited",
+                            "type": "response",
+                            "spec": { "status": 200, "bodyFrom": "" }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "id": "standard",
+                    "type": "action",
+                    "spec": {
+                      "connection": "ship-rest",
+                      "operation": {
+                        "Kind": "http",
+                        "Payload": {
+                          "method": "POST",
+                          "path": "/standard",
+                          "body": { "order": "{{order}}" }
+                        },
+                        "Required": true
+                      },
+                      "saveAs": "decision"
+                    },
+                    "children": [
+                      {
+                        "id": "set-standard",
+                        "type": "set",
+                        "spec": {
+                          "targetPath": "shipping",
+                          "from": "decision.body.shipping"
+                        },
+                        "children": [
+                          {
+                            "id": "respond-standard",
+                            "type": "response",
+                            "spec": { "status": 200, "bodyFrom": "" }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "fixtures": [
+        { "name": "high-value paid order expedites", "input": { "id": 1 } },
+        { "name": "low-value paid order ships standard", "input": { "id": 2 } }
+      ]
+    }
+  ],
+  "jdms": [
+    {
+      "id": "order",
+      "version": 1,
+      "doc": {
+        "nodes": [
+          {
+            "id": "in",
+            "type": "inputNode",
+            "name": "Request",
+            "position": { "x": 100, "y": 100 }
+          },
+          {
+            "id": "dt",
+            "type": "decisionTableNode",
+            "name": "Shipping",
+            "position": { "x": 350, "y": 100 },
+            "content": {
+              "hitPolicy": "first",
+              "inputs": [
+                { "id": "i1", "name": "Amount", "field": "amount", "type": "expression" },
+                { "id": "i2", "name": "Status", "field": "status", "type": "expression" }
+              ],
+              "outputs": [
+                { "id": "o1", "name": "Shipping", "field": "shipping", "type": "expression" }
+              ],
+              "rules": [
+                { "_id": "r1", "i1": "> 1000", "i2": "== 'paid'", "o1": "'expedited'" },
+                { "_id": "r2", "i1": "", "i2": "", "o1": "'standard'" }
+              ]
+            }
+          },
+          {
+            "id": "out",
+            "type": "outputNode",
+            "name": "Response",
+            "position": { "x": 600, "y": 100 }
+          }
+        ],
+        "edges": [
+          { "id": "e1", "type": "edge", "sourceId": "in", "targetId": "dt" },
+          { "id": "e2", "type": "edge", "sourceId": "dt", "targetId": "out" }
+        ]
+      }
+    }
+  ],
+  "connections": [
+    {
+      "key": "orders-pg",
+      "type": "postgres",
+      "settings": {
+        "dsn": "postgres://postgres@127.0.0.1:5432/orders?sslmode=disable",
+        "pool": { "maxConns": 4, "minConns": 1 }
+      },
+      "secretRef": "",
+      "resilience": { "timeoutMs": 2000, "maxAttempts": 1 }
+    },
+    {
+      "key": "ship-rest",
+      "type": "rest",
+      "settings": {
+        "baseURL": "http://127.0.0.1:0",
+        "headers": { "Accept": "application/json" }
+      },
+      "secretRef": "",
+      "resilience": { "timeoutMs": 2000, "maxAttempts": 1 }
+    }
+  ]
+}
