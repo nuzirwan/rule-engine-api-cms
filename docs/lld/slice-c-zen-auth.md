@@ -62,11 +62,27 @@ type JDMLoader interface {
     LoadJDM(ctx context.Context, env, jdmID string) (jdm []byte, version int, err error)
 }
 
-// Compiled is the opaque handle to a compiled JDM graph owned by zen-go.
+// Compiled is our OWN adapter interface wrapping a zen-go compiled decision. It stays as the
+// internal abstraction; the real binding is wrapped behind it (see "zen-go v2 mapping" below).
 type Compiled interface {
     Eval(ctx context.Context, input map[string]any) (map[string]any, error)
     Close()
 }
+
+// >>> zen-go v2 mapping (Phase 0 spike, 2026-10-02 — module github.com/gorules/zen-go/v2 @ v2.1.2)
+// The real binding differs from the pre-spike assumptions; the differences are absorbed INSIDE
+// this adapter so the public decision.Evaluator seam is unchanged:
+//   - compile:  zen.Engine.CreateDecision([]byte) zen.Decision   (keyed by (id,version) in cache)
+//   - evaluate: Decision.Evaluate(input any) (*EvaluationResponse, error)  — NO ctx arg
+//               -> our Compiled.Eval honors ctx AROUND the call (check ctx.Err() before/after;
+//                  optional hard-timeout goroutine). No in-eval cancellation (document in §8).
+//   - result:   resp.Result is json.RawMessage -> Unmarshal to map[string]any at this seam.
+//   - dispose:  zen.Decision.Dispose()  (our Compiled.Close() calls Dispose); Engine.Dispose() on
+//               graceful shutdown (wired by cmd/engine).
+//   - ctor:     zen.NewEngine(EngineConfig{}) returns NO error (deferred); surface init failure on
+//               first CreateDecision/Evaluate.
+//   - import:   the "/v2" path; cgo wrapper lives in zen_cgo.go (//go:build cgo).
+// <<< end zen-go v2 mapping
 
 type Engine struct {
     loader JDMLoader
@@ -154,7 +170,8 @@ zen-go wraps the Rust `zen-engine` through cgo; embedding it in-process is HLD *
 **R9** flags the CGO tax (loses static-binary/cross-compile ease, harder crash debugging).
 
 - **Build tags isolate the dependency.** `zen_cgo.go` carries `//go:build cgo` and holds the only
-  `import "github.com/gorules/zen-go"` and the only `import "C"` indirection. `zen_stub.go`
+  `import "github.com/gorules/zen-go/v2"` (note the `/v2`, confirmed by the spike) and the only
+  `import "C"` indirection (indirect — via the binding). `zen_stub.go`
   carries `//go:build !cgo` and provides the same package API but every constructor returns a
   `Validation`-classified error ("engine built without CGO; ZEN unavailable"). Result: a non-CGO
   build still *compiles* (useful for pure-Go lint/vet lanes and for other slices' unit tests that

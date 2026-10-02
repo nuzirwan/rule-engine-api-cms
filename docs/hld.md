@@ -162,12 +162,26 @@ Each decision is recorded context → decision → consequences, per `[[decision
 - **Consequences**: arbitrary nesting supported; interpreter is recursive (bound depth to avoid
   abuse). More complex visual editor (nested containers) — deferred (Path B).
 
-### ADR-003 — Embed ZEN in-process (accept CGO)
+### ADR-003 — Embed ZEN in-process (accept CGO) — **validated by Phase 0 spike (GO)**
 - **Context**: ZEN is Rust with Go bindings (CGO) or could run as a sidecar.
-- **Decision**: **embed `zen-go`** in-process.
+- **Decision**: **embed `github.com/gorules/zen-go/v2`** (pinned `v2.1.2`) in-process.
 - **Consequences**: simplest runtime, lowest latency, no extra deployable. Build/CI must enable
-  CGO + a C toolchain; cross-compile and fully-static linking are constrained. Revisit as a
-  sidecar only if the build constraint becomes painful.
+  CGO + a C toolchain; cross-compile and fully-static linking are constrained.
+- **Spike findings (2026-10-02, see `phase0-spike-report.md`)** — ADR holds; concrete facts:
+  - **Module path is `.../zen-go/v2`** (not `zen-go`); pin `v2.1.2`.
+  - **Native lib ships vendored in-module** (`deps/<os>_<arch>/libzen_ffi.a` + header) — **no
+    separate Rust build**; `go get` pulls it, cgo links `-lzen_ffi`. We add zero cgo flags.
+  - **The target image MUST be glibc-based** (debian-slim / distroless). The binary dynamically
+    links glibc; **Alpine/musl is not supported** out of the box, and fully-static linking warns
+    and is non-portable. (Rebuilding `libzen_ffi` for musl is an option, not a v1 task.)
+  - **Non-CGO lane**: `CGO_ENABLED=0` compiles via a `//go:build !cgo` stub that **refuses at
+    runtime** ("built without CGO; ZEN unavailable") — never a silent no-op.
+  - **Cross-compile** is limited to the arches with a vendored `deps/<os>_<arch>` lib, each
+    needing the matching cross C toolchain → build in/for the target arch.
+  - **No in-eval cancellation**: `Decision.Evaluate` takes no `context.Context`; the `decision`
+    package honors ctx *around* the call (fine for microsecond evals; publish-time validation
+    bounds pathological JDMs).
+  - Sidecar remains the documented fallback, now unlikely to be needed.
 
 ### ADR-004 — Control plane / data plane split; Strapi is the CMS
 - **Context**: need a CMS to author config without building an admin UI; engine must stay
