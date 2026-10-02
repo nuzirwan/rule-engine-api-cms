@@ -77,7 +77,7 @@ func (e *Engine) Evaluate(ctx context.Context, jdmID string, input map[string]an
 
 	jdm, version, err := e.loader.LoadJDM(ctx, env, jdmID)
 	if err != nil {
-		return nil, wrapErr(NotFound, jdmID, 0, "load jdm", err)
+		return nil, classifyLoadErr(jdmID, err)
 	}
 
 	compiled, err := e.cache.getOrCompile(jdmID, version, jdm)

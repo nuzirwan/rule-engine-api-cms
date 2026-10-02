@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nzr-rules-engine/internal/connect"
+	"nzr-rules-engine/internal/decision"
 )
 
 // --- fakes -----------------------------------------------------------------
@@ -256,6 +257,78 @@ func TestInterpreter_ActionOnErrorContinue(t *testing.T) {
 	}
 	if err := New().Run(context.Background(), tree, Version{}, NewCtx("r", "t", "e", nil), Deps{Conns: reg}); err != nil {
 		t.Fatalf("OnError continue should swallow the failure, got: %v", err)
+	}
+}
+
+func TestInterpreter_ConnErrorClassCrossesSeam(t *testing.T) {
+	// A *connect.ConnError returned by a driver must keep its class across the
+	// flow seam so httpapi maps Upstream->502, NotFound->404, Timeout->504 rather
+	// than collapsing everything to 500/internal.
+	cases := []struct {
+		name  string
+		class connect.ErrClass
+		want  error
+	}{
+		{"upstream", connect.Upstream, ErrUpstream},
+		{"not_found", connect.NotFound, ErrNotFound},
+		{"timeout", connect.Timeout, ErrTimeout},
+		{"validation", connect.Validation, ErrValidation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ce := connect.NewConnError(tc.class, "orders-pg", "query", "driver failed", nil)
+			reg := &fakeRegistry{client: &fakeClient{err: ce}}
+			tree := &Node{
+				ID:   "root",
+				Type: TypeTrigger,
+				Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
+				Children: []Node{{
+					ID:   "load",
+					Type: TypeAction,
+					Spec: raw(t, ActionSpec{ConnRef: ConnRef{Connection: "orders-pg"}, Operation: connect.Operation{Kind: "query"}, SaveAs: "x"}),
+				}},
+			}
+			err := New().Run(context.Background(), tree, Version{}, NewCtx("r", "t", "e", nil), Deps{Conns: reg})
+			if err == nil {
+				t.Fatal("expected the driver error to abort the walk")
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("class not preserved across seam: errors.Is(err, %v)==false; err=%v", tc.want, err)
+			}
+			if tc.want != ErrInternal && errors.Is(err, ErrInternal) {
+				t.Fatalf("class collapsed to internal: %v", err)
+			}
+		})
+	}
+}
+
+func TestInterpreter_DecisionErrorClassCrossesSeam(t *testing.T) {
+	// A *decision.DecisionError returned by the evaluator must keep its class
+	// across the flow seam (NotFound JDM -> 404, malformed JDM/input -> 400).
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"not_found", &decision.DecisionError{Class: decision.NotFound, JDMID: "order"}, ErrNotFound},
+		{"validation", &decision.DecisionError{Class: decision.Validation, JDMID: "order"}, ErrValidation},
+		{"timeout", &decision.DecisionError{Class: decision.Timeout, JDMID: "order"}, ErrTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := &fakeRegistry{client: &fakeClient{result: map[string]any{"amount": 1500, "status": "paid"}}}
+			eval := &fakeEvaluator{err: tc.err}
+			err := New().Run(context.Background(), buildTree(t), Version{}, NewCtx("r", "t", "e", map[string]any{}), Deps{Conns: reg, Decide: eval})
+			if err == nil {
+				t.Fatal("expected the decision error to abort the walk")
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("class not preserved across seam: errors.Is(err, %v)==false; err=%v", tc.want, err)
+			}
+			if errors.Is(err, ErrInternal) {
+				t.Fatalf("class collapsed to internal: %v", err)
+			}
+		})
 	}
 }
 

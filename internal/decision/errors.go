@@ -116,6 +116,25 @@ func wrapErr(class ErrClass, jdmID string, version int, msg string, cause error)
 	return &DecisionError{Class: class, JDMID: jdmID, Version: version, msg: msg, cause: cause}
 }
 
+// classifyLoadErr maps a JDMLoader error into the taxonomy. An already-classified
+// *DecisionError passes through unchanged; a ctx deadline/cancel => Timeout; any
+// other loader error is a miss => NotFound (the thin-slice in-memory loader only
+// ever reports a miss, so this preserves today's behavior while a future
+// DB-backed loader keeps its own classified Timeout/Validation).
+func classifyLoadErr(jdmID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var de *DecisionError
+	if errors.As(err, &de) {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return wrapErr(Timeout, jdmID, 0, "load jdm", err)
+	}
+	return wrapErr(NotFound, jdmID, 0, "load jdm", err)
+}
+
 // classifyEvalErr maps an error observed around a compile/evaluate into the
 // taxonomy. A ctx deadline/cancel => Timeout; anything else from zen-go is a
 // malformed-graph / bad-input fault => Validation. A recovered panic is mapped

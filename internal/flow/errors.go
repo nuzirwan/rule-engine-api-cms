@@ -3,6 +3,8 @@ package flow
 import (
 	"errors"
 	"fmt"
+	"nzr-rules-engine/internal/connect"
+	"nzr-rules-engine/internal/decision"
 )
 
 // ErrClass is the cross-seam error taxonomy. Every error that crosses a slice
@@ -120,8 +122,11 @@ func validationf(format string, args ...any) *FlowError {
 }
 
 // classOf returns the taxonomy class of err. A *FlowError reports its own class;
-// otherwise the sentinels and context errors are consulted via errors.Is, and an
-// unclassified error is treated as internal.
+// a *connect.ConnError or *decision.DecisionError crossing the seam has its
+// per-package class translated into the flow taxonomy (so a driver's Upstream /
+// NotFound / Timeout / Validation is preserved rather than collapsed to
+// internal); otherwise the sentinels and context errors are consulted via
+// errors.Is, and an unclassified error is treated as internal.
 func classOf(err error) ErrClass {
 	if err == nil {
 		return ClassInternal
@@ -129,6 +134,14 @@ func classOf(err error) ErrClass {
 	var fe *FlowError
 	if errors.As(err, &fe) {
 		return fe.Class
+	}
+	var ce *connect.ConnError
+	if errors.As(err, &ce) {
+		return classFromConnect(ce.Class)
+	}
+	var de *decision.DecisionError
+	if errors.As(err, &de) {
+		return classFromDecision(de.Class)
 	}
 	switch {
 	case errors.Is(err, ErrTimeout):
@@ -139,6 +152,39 @@ func classOf(err error) ErrClass {
 		return ClassValidation
 	case errors.Is(err, ErrUpstream):
 		return ClassUpstream
+	default:
+		return ClassInternal
+	}
+}
+
+// classFromConnect maps the connect package's error class onto the flow taxonomy
+// so a driver-returned *connect.ConnError keeps its true class across the seam.
+func classFromConnect(c connect.ErrClass) ErrClass {
+	switch c {
+	case connect.Timeout:
+		return ClassTimeout
+	case connect.NotFound:
+		return ClassNotFound
+	case connect.Validation:
+		return ClassValidation
+	case connect.Upstream:
+		return ClassUpstream
+	default:
+		return ClassInternal
+	}
+}
+
+// classFromDecision maps the decision package's error class onto the flow
+// taxonomy. The decision slice has no Upstream class; a malformed JDM / bad input
+// is Validation and a missing JDM is NotFound.
+func classFromDecision(c decision.ErrClass) ErrClass {
+	switch c {
+	case decision.Timeout:
+		return ClassTimeout
+	case decision.NotFound:
+		return ClassNotFound
+	case decision.Validation:
+		return ClassValidation
 	default:
 		return ClassInternal
 	}
