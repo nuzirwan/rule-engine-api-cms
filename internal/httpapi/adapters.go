@@ -72,19 +72,84 @@ type templatingClient struct {
 	ctx   *flow.Ctx
 }
 
-// Execute resolves "{{path}}" placeholders in op.Payload (recursively) against
-// the merged Ctx view, runs the inner client, then normalizes the result so the
-// pure flow core's GetPath can read it. A placeholder whose path does not
-// resolve is left as-is so the driver can reject it with a classified error
-// rather than silently sending an empty value.
+// Execute resolves "{{path}}" placeholders in op.Payload against the merged Ctx
+// view, binds each positional SQL param to its DECLARED type (config-driven
+// typing — see flow.ParseParam/ConvertParam), runs the inner client, then
+// normalizes the result so the pure flow core's GetPath can read it. A
+// placeholder whose path does not resolve is left as-is so the driver can reject
+// it with a classified error rather than silently sending an empty value. A
+// typed-param conversion failure (e.g. "as":"int" over a non-integer value) is a
+// classified Validation error surfaced before the query runs.
 func (c *templatingClient) Execute(ctx context.Context, op connect.Operation) (any, error) {
-	op.Payload = resolveTemplates(op.Payload, c.ctx).(map[string]any)
+	payload, err := c.resolvePayload(op.Payload)
+	if err != nil {
+		return nil, err
+	}
+	op.Payload = payload
 	res, err := c.inner.Execute(ctx, op)
 	if err != nil {
 		return res, err
 	}
 	return normalizeResult(res), nil
 }
+
+// resolvePayload resolves every template in the payload and, for a SQL op, binds
+// the positional "params" array to the declared types. The non-params parts
+// (sql, body, key, ...) resolve as before. The params array is handled specially
+// so a typed-param object {"value","as"} is converted to its Go type instead of
+// being left as a map the driver cannot bind.
+func (c *templatingClient) resolvePayload(payload map[string]any) (map[string]any, error) {
+	out := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if k == "params" {
+			params, err := c.resolveParams(v)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = params
+			continue
+		}
+		out[k] = resolveTemplates(v, c.ctx)
+	}
+	return out, nil
+}
+
+// resolveParams binds each element of the positional params array: a bare string
+// resolves as a template and binds as TEXT (its natural type); a typed-param
+// object {"value","as"} resolves then converts to the declared Go type via
+// flow.ConvertParam. The declared "as" — not the value's shape — decides the
+// bind type, so a digit-only identifier in a text column is never silently
+// turned into a number. A non-list params is passed through for the driver to
+// reject with its own Validation error.
+func (c *templatingClient) resolveParams(raw any) (any, error) {
+	list, ok := raw.([]any)
+	if !ok {
+		return raw, nil
+	}
+	out := make([]any, len(list))
+	for i, elem := range list {
+		tmpl, as, typed, wellFormed := flow.ParseParam(elem)
+		if !wellFormed {
+			// Should have been caught by ValidateTree; refuse at runtime too.
+			return nil, flow.MalformedParamError(posLabel(i))
+		}
+		resolved := resolveTemplateString(tmpl, c.ctx)
+		if !typed {
+			// Bare string: bind as text in whatever native form it resolved to.
+			out[i] = resolved
+			continue
+		}
+		v, err := flow.ConvertParam(posLabel(i), stringify(resolved), as)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// posLabel renders a 0-based param index as its positional SQL label ($1..).
+func posLabel(i int) string { return "$" + stringify(i+1) }
 
 // normalizeResult bridges the connect driver output shapes to the shapes
 // flow.Ctx.GetPath descends (map[string]any / []any). The postgres driver

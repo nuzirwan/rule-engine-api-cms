@@ -63,8 +63,8 @@ func TestSeedResolvesFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connections: %v", err)
 	}
-	if len(conns) != 2 {
-		t.Fatalf("connections = %d; want 2", len(conns))
+	if len(conns) != 3 {
+		t.Fatalf("connections = %d; want 3 (orders-pg, ship-rest, fmc-pg)", len(conns))
 	}
 	keys := map[string]string{}
 	for _, c := range conns {
@@ -75,6 +75,9 @@ func TestSeedResolvesFlow(t *testing.T) {
 	}
 	if keys["ship-rest"] != "rest" {
 		t.Fatalf("ship-rest type = %q; want rest", keys["ship-rest"])
+	}
+	if keys["fmc-pg"] != "postgres" {
+		t.Fatalf("fmc-pg type = %q; want postgres", keys["fmc-pg"])
 	}
 
 	// Ping is reachable.
@@ -97,12 +100,22 @@ func TestActiveRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveRoutes: %v", err)
 	}
-	if len(routes) != 1 {
-		t.Fatalf("active routes = %d; want 1 (%+v)", len(routes), routes)
+	// The seed activates three flows: orders-expedite plus the two FMC demo flows.
+	if len(routes) != 3 {
+		t.Fatalf("active routes = %d; want 3 (%+v)", len(routes), routes)
 	}
-	got := routes[0]
-	if got.FlowID != "orders-expedite" || got.Method != "GET" || got.Path != "/orders/{id}" {
-		t.Fatalf("route = %+v; want {orders-expedite GET /orders/{id}}", got)
+	byPath := map[string]RouteInfo{}
+	for _, r := range routes {
+		byPath[r.Path] = r
+	}
+	if got, ok := byPath["/orders/{id}"]; !ok || got.FlowID != "orders-expedite" || got.Method != "GET" {
+		t.Fatalf("route /orders/{id} = %+v (ok=%v); want {orders-expedite GET}", got, ok)
+	}
+	if got, ok := byPath["/order/{order_id}"]; !ok || got.FlowID != "fmc-order-by-id" || got.Method != "GET" {
+		t.Fatalf("route /order/{order_id} = %+v (ok=%v); want {fmc-order-by-id GET}", got, ok)
+	}
+	if got, ok := byPath["/order/msisdn/{msisdn}"]; !ok || got.FlowID != "fmc-order-by-msisdn" || got.Method != "GET" {
+		t.Fatalf("route /order/msisdn/{msisdn} = %+v (ok=%v); want {fmc-order-by-msisdn GET}", got, ok)
 	}
 
 	// A new flow version that is PUT but never SetActive must not appear.
@@ -124,8 +137,8 @@ func TestActiveRoutes(t *testing.T) {
 			t.Fatalf("inactive flow version returned by ActiveRoutes: %+v", r)
 		}
 	}
-	if len(routes) != 1 {
-		t.Fatalf("active routes after inactive put = %d; want 1", len(routes))
+	if len(routes) != 3 {
+		t.Fatalf("active routes after inactive put = %d; want 3", len(routes))
 	}
 
 	// An env with no active routes returns a non-nil empty slice.

@@ -27,7 +27,7 @@ type RefResolver interface {
 type nopRefs struct{}
 
 func (nopRefs) HasConnection(string) bool { return true }
-func (nopRefs) HasJDM(string) bool         { return true }
+func (nopRefs) HasJDM(string) bool        { return true }
 
 // controlTypes are node types that MUST own at least one child.
 var controlTypes = map[NodeType]bool{
@@ -120,6 +120,9 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 				} else if !refs.HasConnection(spec.Connection) {
 					add(n.ID, "dangling_connection", fmt.Sprintf("connection %q not found", spec.Connection))
 				}
+				// Reject a malformed typed-param object or an unknown "as" bind
+				// type at validate/publish time so bad config never reaches runtime.
+				checkParamTypes(add, n.ID, spec.Operation.Payload)
 			}
 		case TypeCondition:
 			if spec, err := parseSpec[ConditionSpec](n.Spec); err == nil {
@@ -193,6 +196,36 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 	issues = append(issues, validateResponsePaths(root)...)
 
 	return issues
+}
+
+// checkParamTypes validates the typed-param declarations in an action's SQL
+// operation payload: each element of the "params" array must be either a bare
+// string (default text binding) or a well-formed {"value","as"} object whose
+// "as" names a supported bind type. A malformed object or an unknown "as" is a
+// validation issue so bad config is caught at publish/validate time, not at
+// request time. A payload with no "params" (or a non-list) is left to the driver.
+func checkParamTypes(add func(id, code, msg string), nodeID string, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	raw, ok := payload["params"]
+	if !ok || raw == nil {
+		return
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return // the driver reports a non-list params as a Validation error
+	}
+	for i, elem := range list {
+		_, as, typed, wellFormed := ParseParam(elem)
+		if !wellFormed {
+			add(nodeID, "bad_param", fmt.Sprintf("params[%d] is not a string or a {value,as} object", i))
+			continue
+		}
+		if typed && !IsValidParamType(as) {
+			add(nodeID, "unknown_param_type", fmt.Sprintf("params[%d] has unknown bind type %q", i, string(as)))
+		}
+	}
 }
 
 // checkJDM records a dangling-jdm issue when the referenced JDM does not resolve.

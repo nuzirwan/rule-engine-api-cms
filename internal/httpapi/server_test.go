@@ -303,22 +303,36 @@ func TestStatusForFlow(t *testing.T) {
 	}
 }
 
-// TestCoercePathParam maps a numeric id to an int and leaves other values as
-// strings.
-func TestCoercePathParam(t *testing.T) {
-	cases := []struct {
-		in   string
-		want any
-	}{
-		{"1", 1},
-		{"1500", 1500},
-		{"007", "007"}, // leading zero: not a clean round-trip, stays a string
-		{"abc", "abc"},
+// TestPathParamsLiftAsStrings proves the edge no longer guesses a path param's
+// type from its string shape: every captured {name} segment is lifted into
+// Ctx.Input as a STRING in its natural wire form, including a digit-only one. A
+// flow whose SQL targets a non-text column casts the PARAMETER to that type in
+// its own config ($1::int), so type handling is config-driven, not an edge
+// heuristic. The flow is trigger->set(echo the lifted param)->response, so the
+// echoed value's type is exactly what reached Ctx.Input.
+func TestPathParamsLiftAsStrings(t *testing.T) {
+	resp := flow.Node{ID: "resp", Type: flow.TypeResponse, Spec: json.RawMessage(`{"status":200}`)}
+	echo := flow.Node{ID: "echo", Type: flow.TypeSet, Spec: json.RawMessage(`{"targetPath":"got","from":"id"}`), Children: []flow.Node{resp}}
+	trig := flow.Node{ID: "t", Type: flow.TypeTrigger, Spec: json.RawMessage(`{"method":"GET","path":"/orders/{id}","input":{"params":["id"]}}`), Children: []flow.Node{echo}}
+	store := fakeStore{fv: config.FlowVersion{FlowID: "f", Version: 1, Method: "GET", Path: "/orders/{id}", Tree: trig}}
+
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
 	}
-	for _, tc := range cases {
-		if got := coercePathParam(tc.in); got != tc.want {
-			t.Errorf("coercePathParam(%q) = %v (%T) want %v (%T)", tc.in, got, got, tc.want, tc.want)
-		}
+
+	// A digit-only segment is lifted as the STRING "1500", not an int.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orders/1500", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if derr := json.Unmarshal(rec.Body.Bytes(), &body); derr != nil {
+		t.Fatalf("decode body: %v", derr)
+	}
+	if body["got"] != "1500" {
+		t.Fatalf("echoed param = %#v want the string \"1500\" (no shape-based int coercion)", body["got"])
 	}
 }
 

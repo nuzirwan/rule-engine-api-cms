@@ -1,0 +1,7 @@
+{
+  "task_id": "task-ops-demo",
+  "task_description": "Core architectural fix for nzr-rules-engine: make the HTTP router build its routes FROM the config store (not hardcoded Go handler registrations), so the premise 'add an API = add CONFIG, no code change' holds. Also mount the currently-unmounted ops endpoints (/livez, /readyz, /metrics) on the same mux, and prove config-driven routing by adding two FMC demo flows (GET /order/{order_id}, GET /order/msisdn/{msisdn}) as SEED CONFIG ROWS plus a shared ZEN decision table and an fmc-pg data-source connection. Build/verify against EPHEMERAL postgres:16 + valkey only.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

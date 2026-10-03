@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"nzr-rules-engine/internal/config"
@@ -142,13 +141,18 @@ func genericFlowHandler(store Store, interp *flow.Interpreter, deps Deps) http.H
 			return
 		}
 
-		// Build the per-request Ctx from the captured path params. A param arrives
-		// as a string; a purely-numeric value is coerced to an int so it binds to an
-		// integer SQL parameter (pgx rejects a text value against an int4 column
-		// under the extended protocol); any other value stays a string.
+		// Build the per-request Ctx from the captured path params. A path segment
+		// is lifted in its NATURAL wire form — a string — and the engine does NOT
+		// guess a param's type from its shape. The bind type is a DECLARED datum in
+		// config: a flow whose SQL binds a non-text column marks that param
+		// `{"value":"{{input.x}}","as":"int"}` and the edge converts it before pgx
+		// encodes it (see adapters.go resolveParams + flow.ConvertParam). This keeps
+		// typing config-driven and never mangles a digit-only string into a number
+		// (which would break a text column holding digits, like an msisdn, and
+		// misbehave on leading-zero or '+' values).
 		input := make(map[string]any, len(params))
 		for name, val := range params {
-			input[name] = coercePathParam(val)
+			input[name] = val
 		}
 		c := flow.NewCtx(requestID(r), traceID(r), defaultEnv, input)
 
@@ -285,16 +289,6 @@ func statusForConfig(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
-}
-
-// coercePathParam maps a purely-numeric path param to an int so it binds to an
-// integer SQL parameter; any other value (leading zero, non-numeric) is returned
-// as the original string unchanged.
-func coercePathParam(s string) any {
-	if n, err := strconv.Atoi(s); err == nil && strconv.Itoa(n) == s {
-		return n
-	}
-	return s
 }
 
 // requestID returns a request id from the X-Request-Id header, or empty when

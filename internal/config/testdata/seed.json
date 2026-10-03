@@ -25,7 +25,7 @@
                 "Kind": "query",
                 "Payload": {
                   "sql": "SELECT amount, status FROM orders WHERE id=$1",
-                  "params": ["{{input.id}}"]
+                  "params": [{ "value": "{{input.id}}", "as": "int" }]
                 },
                 "Required": true
               },
@@ -120,6 +120,200 @@
         { "name": "high-value paid order expedites", "input": { "id": 1 } },
         { "name": "low-value paid order ships standard", "input": { "id": 2 } }
       ]
+    },
+    {
+      "flowId": "fmc-order-by-id",
+      "version": 1,
+      "method": "GET",
+      "path": "/order/{order_id}",
+      "active": true,
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "GET",
+          "path": "/order/{order_id}",
+          "input": { "params": ["order_id"] }
+        },
+        "children": [
+          {
+            "id": "read-order",
+            "type": "action",
+            "spec": {
+              "connection": "fmc-pg",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT order_id, msisdn, order_status, payment_status, payment_amount, product_name FROM fmc_order.order_status WHERE order_id = $1",
+                  "params": ["{{input.order_id}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "row"
+            },
+            "children": [
+              {
+                "id": "echo-order_id",
+                "type": "set",
+                "spec": { "targetPath": "order_id", "from": "row.order_id" },
+                "children": [
+                  {
+                    "id": "echo-msisdn",
+                    "type": "set",
+                    "spec": { "targetPath": "msisdn", "from": "row.msisdn" },
+                    "children": [
+                      {
+                        "id": "echo-order_status",
+                        "type": "set",
+                        "spec": { "targetPath": "order_status", "from": "row.order_status" },
+                        "children": [
+                          {
+                            "id": "echo-payment_status",
+                            "type": "set",
+                            "spec": { "targetPath": "payment_status", "from": "row.payment_status" },
+                            "children": [
+                              {
+                                "id": "echo-payment_amount",
+                                "type": "set",
+                                "spec": { "targetPath": "payment_amount", "from": "row.payment_amount" },
+                                "children": [
+                                  {
+                                    "id": "echo-product_name",
+                                    "type": "set",
+                                    "spec": { "targetPath": "product_name", "from": "row.product_name" },
+                                    "children": [
+                                      {
+                                        "id": "decide",
+                                        "type": "decision",
+                                        "spec": {
+                                          "jdmId": "fmc-payment",
+                                          "input": ["row.payment_status"],
+                                          "saveAs": "dec"
+                                        }
+                                      },
+                                      {
+                                        "id": "set-action",
+                                        "type": "set",
+                                        "spec": { "targetPath": "action", "from": "dec.action" }
+                                      },
+                                      {
+                                        "id": "respond",
+                                        "type": "response",
+                                        "spec": { "status": 200, "bodyFrom": "" }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "flowId": "fmc-order-by-msisdn",
+      "version": 1,
+      "method": "GET",
+      "path": "/order/msisdn/{msisdn}",
+      "active": true,
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "GET",
+          "path": "/order/msisdn/{msisdn}",
+          "input": { "params": ["msisdn"] }
+        },
+        "children": [
+          {
+            "id": "read-order",
+            "type": "action",
+            "spec": {
+              "connection": "fmc-pg",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT order_id, msisdn, order_status, payment_status, payment_amount, product_name FROM fmc_order.order_status WHERE msisdn = $1 ORDER BY last_updated DESC LIMIT 1",
+                  "params": ["{{input.msisdn}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "row"
+            },
+            "children": [
+              {
+                "id": "echo-order_id",
+                "type": "set",
+                "spec": { "targetPath": "order_id", "from": "row.order_id" },
+                "children": [
+                  {
+                    "id": "echo-msisdn",
+                    "type": "set",
+                    "spec": { "targetPath": "msisdn", "from": "row.msisdn" },
+                    "children": [
+                      {
+                        "id": "echo-order_status",
+                        "type": "set",
+                        "spec": { "targetPath": "order_status", "from": "row.order_status" },
+                        "children": [
+                          {
+                            "id": "echo-payment_status",
+                            "type": "set",
+                            "spec": { "targetPath": "payment_status", "from": "row.payment_status" },
+                            "children": [
+                              {
+                                "id": "echo-payment_amount",
+                                "type": "set",
+                                "spec": { "targetPath": "payment_amount", "from": "row.payment_amount" },
+                                "children": [
+                                  {
+                                    "id": "echo-product_name",
+                                    "type": "set",
+                                    "spec": { "targetPath": "product_name", "from": "row.product_name" },
+                                    "children": [
+                                      {
+                                        "id": "decide",
+                                        "type": "decision",
+                                        "spec": {
+                                          "jdmId": "fmc-payment",
+                                          "input": ["row.payment_status"],
+                                          "saveAs": "dec"
+                                        }
+                                      },
+                                      {
+                                        "id": "set-action",
+                                        "type": "set",
+                                        "spec": { "targetPath": "action", "from": "dec.action" }
+                                      },
+                                      {
+                                        "id": "respond",
+                                        "type": "response",
+                                        "spec": { "status": 200, "bodyFrom": "" }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     }
   ],
   "jdms": [
@@ -166,6 +360,49 @@
           { "id": "e2", "type": "edge", "sourceId": "dt", "targetId": "out" }
         ]
       }
+    },
+    {
+      "id": "fmc-payment",
+      "version": 1,
+      "doc": {
+        "nodes": [
+          {
+            "id": "in",
+            "type": "inputNode",
+            "name": "Request",
+            "position": { "x": 100, "y": 100 }
+          },
+          {
+            "id": "dt",
+            "type": "decisionTableNode",
+            "name": "Payment",
+            "position": { "x": 350, "y": 100 },
+            "content": {
+              "hitPolicy": "first",
+              "inputs": [
+                { "id": "i1", "name": "PaymentStatus", "field": "payment_status", "type": "expression" }
+              ],
+              "outputs": [
+                { "id": "o1", "name": "Action", "field": "action", "type": "expression" }
+              ],
+              "rules": [
+                { "_id": "r1", "i1": "== 'PAID'", "o1": "'proceed_fulfillment'" },
+                { "_id": "r2", "i1": "", "o1": "'await_payment'" }
+              ]
+            }
+          },
+          {
+            "id": "out",
+            "type": "outputNode",
+            "name": "Response",
+            "position": { "x": 600, "y": 100 }
+          }
+        ],
+        "edges": [
+          { "id": "e1", "type": "edge", "sourceId": "in", "targetId": "dt" },
+          { "id": "e2", "type": "edge", "sourceId": "dt", "targetId": "out" }
+        ]
+      }
     }
   ],
   "connections": [
@@ -185,6 +422,16 @@
       "settings": {
         "baseURL": "http://127.0.0.1:0",
         "headers": { "Accept": "application/json" }
+      },
+      "secretRef": "",
+      "resilience": { "timeoutMs": 2000, "maxAttempts": 1 }
+    },
+    {
+      "key": "fmc-pg",
+      "type": "postgres",
+      "settings": {
+        "dsn": "postgres://root:root@127.0.0.1:5432/fmc_utility?sslmode=disable",
+        "pool": { "maxConns": 4, "minConns": 1 }
       },
       "secretRef": "",
       "resilience": { "timeoutMs": 2000, "maxAttempts": 1 }
