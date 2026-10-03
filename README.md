@@ -41,14 +41,19 @@ engine. A `CGO_ENABLED=0` build still *compiles* the whole tree via the
 `//go:build !cgo` stub in `internal/decision`, but that binary **refuses ZEN at
 runtime** with a Validation-class error — it never silently no-ops.
 
+The Go engine lives under `engine/` (its own `go.mod`); run all Go commands from
+there. The Strapi CMS lives under `cms/`. From the repo root you can also use the
+`Makefile` targets (`make build`, `make test`, `make vet`, `make test-integration`),
+which `cd` into `engine/` for you.
+
 ```sh
-# Build the whole tree (CGO on).
-CGO_ENABLED=1 go build ./...
+# Build the whole engine tree (CGO on).
+cd engine && CGO_ENABLED=1 go build ./...
 
 # Run the engine (serves :8080, loads the committed seed).
-CGO_ENABLED=1 go run ./cmd/engine
+cd engine && CGO_ENABLED=1 go run ./cmd/engine
 # or choose the address / seed:
-CGO_ENABLED=1 go run ./cmd/engine -addr :9090 -seed internal/config/testdata/seed.json
+cd engine && CGO_ENABLED=1 go run ./cmd/engine -addr :9090 -seed internal/config/testdata/seed.json
 ```
 
 The process starts the HTTP server and blocks on `SIGINT`/`SIGTERM`. On a
@@ -70,12 +75,12 @@ runtime.
 ```sh
 # Unit tests (fakes only — no Docker, no network). CGO on so the whole tree,
 # including the real decision package, is exercised.
-CGO_ENABLED=1 go test ./...
+cd engine && CGO_ENABLED=1 go test ./...
 
 # Real-HTTP end-to-end integration test (Docker REQUIRED). Starts an ephemeral
 # postgres:16 and an in-process httptest REST stub, drives the real handler +
 # real registry + real ZEN engine, and asserts both branch cases.
-CGO_ENABLED=1 go test -tags 'integration cgo' ./internal/httpapi
+cd engine && CGO_ENABLED=1 go test -tags 'integration cgo' ./internal/httpapi
 ```
 
 The integration test is guarded by `//go:build integration && cgo`, so a plain
@@ -85,16 +90,24 @@ server accepts connections, then tears the container down.
 
 ## Layout
 
+Two separate components at the repo root — the Go engine (data plane) and the
+Strapi CMS (control plane / authoring UI):
+
 ```
-cmd/engine/        process wiring + graceful shutdown
-internal/
-  flow/            interpreter, ctx accumulator, node handlers (pure core)
-  connect/         connection registry + resilience
-    drivers/       postgres + rest connectors
-  decision/        ZEN decision engine (cgo) + non-cgo stub + compiled cache
-  config/          in-memory config store, seeded from JSON
-  observ/          slog-backed tracer + logger
-  httpapi/         stdlib ServeMux edge, Ctx construction, per-request adapters
+engine/            the Go rules engine (own go.mod, module nzr-rules-engine)
+  cmd/engine/      process wiring + graceful shutdown
+  internal/
+    flow/          interpreter, ctx accumulator, node handlers (pure core)
+    connect/       connection registry + resilience
+      drivers/     postgres + valkey + rest connectors
+    decision/      ZEN decision engine (cgo) + non-cgo stub + compiled cache
+    config/        config store (in-memory seed + Postgres), seeded from JSON
+    observ/        slog-backed tracer + logger + metrics
+    auth/          JWT (data plane) + operator-token (admin plane) auth
+    httpapi/       stdlib ServeMux edge, Ctx construction, admin API, adapters
+  migrations/      embedded config-store SQL migrations
+cms/               the Strapi 5 CMS (own package.json, own Postgres db+schema)
+docs/              HLD, ADRs, per-slice LLDs, state/handoff
 ```
 
 See `docs/` for the HLD, ADRs, and the per-slice LLDs this slice realizes.

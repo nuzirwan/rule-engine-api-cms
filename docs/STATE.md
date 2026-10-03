@@ -29,9 +29,10 @@ untouched); the data-source `fmc-pg` connection reads the user's real `fmc_utili
 Config is driven by `.env` (gitignored). Keys the engine READS: `CONFIG_DSN` (config store, e.g.
 `postgres://root:root@127.0.0.1:5432/matcha?sslmode=disable`), `CONFIG_SCHEMA` (`rule_engine`),
 `VALKEY_ADDR` (`127.0.0.1:6379`), `ENGINE_ADDR` (`:8080`). The data-source DSN (`fmc_utility`) is
-baked in the seed's `fmc-pg` connection (NOT read from env). Build + run:
+baked in the seed's `fmc-pg` connection (NOT read from env). The Go engine now
+lives under `engine/` (its own go.mod); run from there. Build + run:
 ```
-CGO_ENABLED=1 go build -o bin/engine ./cmd/engine && ./bin/engine
+cd engine && CGO_ENABLED=1 go build -o bin/engine ./cmd/engine && ./bin/engine
 # then: curl -s http://127.0.0.1:8080/order/ORD-TEST-TRK ; echo
 #       curl -s http://127.0.0.1:8080/order/ORD-TEST-BAD ; echo
 #       curl -s http://127.0.0.1:8080/order/msisdn/628111015450 ; echo
@@ -79,8 +80,15 @@ in the docs below.
 Go 1.26 (go.mod floor 1.22) · gcc/CGO present · **CGO_ENABLED=1 required** for ZEN · Docker up
 (ephemeral postgres:16 for integration tests) · stdlib net/http only (no chi/gin).
 
-## Build / test commands
+## Repo layout (post-restructure)
+Two top-level components: `engine/` (the Go rules engine, own go.mod, module
+`nzr-rules-engine`) and `cms/` (the Strapi CMS, own package.json + own Postgres
+db+schema). `docs/` and system docs stay at root. Run all Go commands from
+`engine/`; the root `Makefile` targets cd into it for you.
+
+## Build / test commands (run from engine/)
 ```
+cd engine
 CGO_ENABLED=1 go build ./...
 CGO_ENABLED=1 go vet ./...
 CGO_ENABLED=1 go test ./...
