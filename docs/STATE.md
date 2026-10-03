@@ -122,6 +122,29 @@ Pick the next milestone (product-priority call):
   idempotency/rate-limit/saga).
 
 ## AFTER v1 engine — remaining project arc
+
+- **Config-management admin API (NEXT PHASE — not built).** Today the engine has the config-write
+  STORE METHODS but exposes NO HTTP endpoint for them; config enters only via the seed JSON at
+  startup. Expose a privileged (operator-auth, separate from the public JWT path) control-plane API
+  that turns the existing store methods into HTTP, so flows/rules/connections can be created and
+  managed over HTTP (via curl/Postman now, and as the clean API Strapi calls later — Strapi should
+  go through this API, not write the DB directly). Proposed surface:
+  - `POST /admin/flows` → `PutFlowVersion` (create a flow version)
+  - `POST /admin/flows/{id}/publish` and `/rollback` → `SetActive` (activate / move pointer back)
+  - `POST /admin/jdms` → `PutJDMVersion` (create a JDM/rule)
+  - `POST /admin/connections`, `GET /admin/connections` → `PutConnectionVersion` / `Connections`
+    (register a connection def that POINTS AT an existing DB/REST — the engine never provisions a DB)
+  - `POST /admin/flows/validate` (structure + fixtures, publish-blocking) and `/admin/flows/dry-run`
+    (writes suppressed via observ.WithDryRun) — the originally-approved validate/dry-run pair
+  - `GET /admin/audit/{type}/{id}` → `AuditTrail`
+  All store methods already exist (PutFlowVersion/PutJDMVersion/PutConnectionVersion/SetActive/
+  MarkValidated/PromoteVersion/AuditTrail) — this is a thin HTTP + auth + request-shape layer on top,
+  mounted as code-registered /admin/* routes (control plane, precedence over the public catch-all).
+  Design the endpoints + privileged auth + request shapes first (per design-before-implementation),
+  then build worktree-isolated with the usual gate. NOTE: also fix the two live-run bugs alongside —
+  /readyz 503 false-negative, and per-flow idempotent seeding (currently "any active flow exists =>
+  skip all", which silently leaves new flows unwritten against an already-seeded store).
+
 - **Strapi control-plane module (the CMS)** — separate Node/React build: content types,
   `@gorules/jdm-editor` + React Flow drag-and-drop canvas, validation hooks, draft/publish,
   promotion, the publish transform into the engine config store. (This is the original ask.)
