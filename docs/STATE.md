@@ -3,10 +3,15 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-03 · mainline HEAD at handoff: `30061ad`
+Last updated: 2026-10-03 · mainline HEAD at handoff: `df547be` (feat/admin-api fast-forwarded in)
 
 ## LATEST STATUS (read this first)
-The **v1 engine is complete and proven LIVE** against the user's real Postgres + Valkey. Config
+The **v1 engine is complete and proven LIVE**, and the **config-management Admin API (control
+plane) is now BUILT, reviewed APPROVED, and merged** — see "Config-management admin API — DONE"
+below. **Both live-run bugs are fixed with tests** (`/readyz` false-negative; per-object idempotent
+seeding). What remains is the Strapi CMS and productionize (see NEXT).
+
+The v1 engine is proven LIVE against the user's real Postgres + Valkey. Config
 store runs in `matcha` DB under the dedicated `rule_engine` schema (the user's `public` tables are
 untouched); the data-source `fmc-pg` connection reads the user's real `fmc_utility` DB, schema
 `fmc_order`, table `order_status`. Three config-defined flows are active, two of them verified live:
@@ -31,19 +36,26 @@ CGO_ENABLED=1 go build -o bin/engine ./cmd/engine && ./bin/engine
 NOTE on `.env` cruft: `SHIP_REST_BASE_URL`/`RUN_REST_STUB`/`REST_STUB_PORT` are UNUSED leftovers
 (old shipping demo) — the engine ignores them; safe to delete.
 
-### TWO LIVE BUGS to fix (found during the live run)
-1. **`/readyz` returns 503 (false-negative)** — endpoints serve fine, but the readiness probe
-   fails; its registry/store health check is too strict. `/livez` is 200.
-2. **Idempotent seeding too coarse** — `SeedPgStore` is "if ANY active flow exists => skip ALL
-   seeding", so new flows added to the seed are silently NOT written against an already-seeded
-   store. Workaround used: `DROP SCHEMA rule_engine CASCADE` then restart to reseed. Real fix:
-   per-flow/per-object seeding (seed each missing object, not all-or-nothing).
+### TWO LIVE BUGS — BOTH FIXED (with tests), merged on mainline
+1. **`/readyz` false-negative — FIXED.** The probe gated on `registry.HealthCheck` over every
+   data-source connection, so a down downstream source (e.g. the external `fmc_utility` DB) took the
+   whole engine out of rotation. Now gates on the **config-store `Ping` only** (the engine's
+   serve-dependency); data-source health is per-request (`502/504`), not a readiness gate.
+   Pinned by `internal/httpapi/ops_test.go` (healthy store + failing data-source registry ⇒ 200).
+2. **Coarse idempotent seeding — FIXED.** `SeedPgStore` was all-or-nothing ("any active flow exists
+   ⇒ skip ALL"), silently dropping new flows added to an already-seeded store (destructive
+   `DROP SCHEMA … CASCADE` workaround). Rewritten to **per-object create-if-absent** via new
+   `FlowExists`/`JDMExists`/`ConnectionExists` PK reads: each absent object written, each present
+   one skipped (bootstrap-only, no version churn). Pinned by
+   `internal/config/seed_pg_integration_test.go` (seed #1 writes alpha; seed #2 adds only beta,
+   alpha byte-identical; seed #3 pure no-op).
 
 ### Endpoint planes (clarified)
 - **Public (data plane):** config-defined business routes (the `/order/*` flows). Live, dynamic.
-- **Ops:** `/livez` `/readyz` `/metrics` — code-registered, live (but see /readyz bug).
-- **Admin (control plane):** NOT built as HTTP yet — see "Config-management admin API" below. Config
-  currently enters only via the seed JSON; the store Put* methods exist but aren't exposed over HTTP.
+- **Ops:** `/livez` `/readyz` `/metrics` — code-registered, live (`/readyz` bug now fixed).
+- **Admin (control plane):** BUILT — a privileged, operator-authed `/admin/*` HTTP surface over the
+  config-write store methods (see "Config-management admin API — DONE" below). This is the clean API
+  Strapi integrates against; the as-built contract is in `docs/lld/slice-f-admin-api.md`.
 
 
 ## What this project is
@@ -150,41 +162,71 @@ actually wired by the increment below.
   the PgStore. Full gate green: build, vet, unit (incl. envfile + schema validator), the
   CGO_ENABLED=0 decision-stub build, and the config + httpapi integration suites.
 
+### Config-management admin API — DONE (reviewed APPROVED, merged @ `df547be`)
+The privileged `/admin/*` control plane is BUILT — a thin HTTP + operator-auth + request-shape layer
+over the EXISTING config-write store methods (no store method reimplemented; pure flow/config cores
+untouched). stdlib `net/http` only (Go 1.22 method-aware patterns, longest-pattern precedence over
+the public `"/"` catch-all, same as the ops endpoints). Full build/increment report:
+`docs/.increments/admin-api-report.md`. As-built contract (for Strapi integration):
+`docs/lld/slice-f-admin-api.md` (reconciled to AS-BUILT).
+
+Endpoint surface (each operator-guarded, deny-by-default):
+- `POST /admin/flows` → `PutFlowVersion` (store assigns version; structural+ref validate first; bad
+  tree ⇒ 400). `POST /admin/flows/{id}/publish` & `/rollback` → `SetActive` (route-derived action).
+- `POST /admin/flows/validate` → stored mode (`flowId`+`version`: load via `GetFlowVersion`, validate,
+  `MarkValidated` on all-pass) + candidate mode (inline `flow`, stateless); always 200 with `{ok,
+  structural[], fixtures[]}`.
+- `POST /admin/flows/dry-run` → writes suppressed via `observ.WithDryRun`; returns trace + response.
+- `POST /admin/jdms` → `PutJDMVersion`. `POST`/`GET /admin/connections` → `PutConnectionVersion` /
+  `Connections` (secret_ref ONLY; inline secret ⇒ 400; list redacted). `GET /admin/audit/{type}/{id}`
+  → `AuditTrail`.
+
+Status-code contract (by `errors.Is`, priority-ordered — the two specific sentinels before the
+generic one): 409 route `(method,path)` collision (`config.ErrRouteConflict`, SQLSTATE 23505 on
+`flows_method_path_key`); 422 publish of an un-validated version (`config.ErrUnvalidated`); 404
+NotFound; 400 request-shape / bad tree / secret-value / generic Validation; 504 Timeout; 502
+Upstream; 500 Internal / nil-store. 201 on create; 200 on publish/rollback/list/audit and
+validate/dry-run.
+
+Operator auth (`internal/auth/operator.go`) — a SEPARATE trust domain from the public JWT, NOT a
+role on the JWKS token: `OperatorAuthenticator`/`Operator`/`OperatorGuard` + `StaticTokenOperatorAuth`
+(sha256 allow-list, constant-time match, fail-fast on malformed/empty/duplicate config). Deny-by-
+default: nil authenticator ⇒ 503 mount-closed, bad credential ⇒ 401, missing role ⇒ 403. RBAC per
+route (`requireRole`): write ⇒ `flow.write`, publish/rollback ⇒ `flow.publish`, validate/dry-run/GET
+⇒ `flow.read`. Per-operator audit attribution via `config.WithAuditActor(ctx, subject)` (no signature
+change). `cmd/engine` reads `ADMIN_ENABLED`/`ADMIN_TOKENS` (fatal on bad/empty) and passes one
+`*config.PgStore` as both the hot-path `store` and `deps.Admin`; `auth.bearerToken` exported as
+`auth.BearerToken`.
+
+Both live-run bugs fixed in the same increment (see "TWO LIVE BUGS — BOTH FIXED" above). Store seam
+additions (all additive, no frozen-seam signature change): `GetFlowVersion`,
+`FlowExists`/`JDMExists`/`ConnectionExists`, SQLSTATE-23505 route-conflict classify, `WithAuditActor`.
+Dry-run write-suppression wired into `flow.actionHandler` (`observ.IsDryRun`+`CollectorFrom`); dead
+`flow/dryrun.go` shim removed. `.env.example` documents `ADMIN_ENABLED`/`ADMIN_TOKENS`.
+
+Verification (ACTUALLY RUN from the worktree root, all GREEN; evidence in
+`docs/.agents/tasks/admin-api/verification.md`): `CGO_ENABLED=1 go build/vet/test ./...`; integration
+`-tags 'integration cgo'` for `./internal/httpapi` and `./internal/config` on ephemeral postgres:16
+(+ valkey); `CGO_ENABLED=0 go build ./internal/decision` (stub). Documented limitations: in-memory
+mode has no admin writes; single-env (`""`); dry-run reads can hit live sources when `mocks` omitted;
+dry-run trace is suppressed-write + response, not a full per-node walk; validate resolves refs
+against the active set; seed is bootstrap-only; one cosmetic stale `Deps.Store` doc comment.
+
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
 non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
 `Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
 
-## NEXT — the v1 ENGINE is done; what remains is the broader system (see arc below)
-Pick the next milestone (product-priority call):
-- Build the **Strapi CMS** (the authoring UI — the original ask), OR
-- **Productionize** the engine first (deploy with hand-seeded/Strapi-written config), OR
+## NEXT — v1 engine + admin control plane are done; what remains is the broader system (see arc below)
+The config-management admin API is now BUILT (see "Config-management admin API — DONE") and both
+live-run bugs are fixed. Pick the next milestone (product-priority call):
+- Build the **Strapi CMS** (the authoring UI — the original ask), integrating against the now-built
+  `/admin/*` control plane (as-built contract in `docs/lld/slice-f-admin-api.md`), OR
+- **Productionize** the engine (deploy with hand-seeded/admin-API/Strapi-written config), OR
 - Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
   JSON-source rule-match — both specced as next-phase below; full per-node dry-run trace;
   idempotency/rate-limit/saga).
 
 ## AFTER v1 engine — remaining project arc
-
-- **Config-management admin API (NEXT PHASE — not built).** Today the engine has the config-write
-  STORE METHODS but exposes NO HTTP endpoint for them; config enters only via the seed JSON at
-  startup. Expose a privileged (operator-auth, separate from the public JWT path) control-plane API
-  that turns the existing store methods into HTTP, so flows/rules/connections can be created and
-  managed over HTTP (via curl/Postman now, and as the clean API Strapi calls later — Strapi should
-  go through this API, not write the DB directly). Proposed surface:
-  - `POST /admin/flows` → `PutFlowVersion` (create a flow version)
-  - `POST /admin/flows/{id}/publish` and `/rollback` → `SetActive` (activate / move pointer back)
-  - `POST /admin/jdms` → `PutJDMVersion` (create a JDM/rule)
-  - `POST /admin/connections`, `GET /admin/connections` → `PutConnectionVersion` / `Connections`
-    (register a connection def that POINTS AT an existing DB/REST — the engine never provisions a DB)
-  - `POST /admin/flows/validate` (structure + fixtures, publish-blocking) and `/admin/flows/dry-run`
-    (writes suppressed via observ.WithDryRun) — the originally-approved validate/dry-run pair
-  - `GET /admin/audit/{type}/{id}` → `AuditTrail`
-  All store methods already exist (PutFlowVersion/PutJDMVersion/PutConnectionVersion/SetActive/
-  MarkValidated/PromoteVersion/AuditTrail) — this is a thin HTTP + auth + request-shape layer on top,
-  mounted as code-registered /admin/* routes (control plane, precedence over the public catch-all).
-  Design the endpoints + privileged auth + request shapes first (per design-before-implementation),
-  then build worktree-isolated with the usual gate. NOTE: also fix the two live-run bugs alongside —
-  /readyz 503 false-negative, and per-flow idempotent seeding (currently "any active flow exists =>
-  skip all", which silently leaves new flows unwritten against an already-seeded store).
 
 - **Strapi control-plane module (the CMS)** — separate Node/React build: content types,
   `@gorules/jdm-editor` + React Flow drag-and-drop canvas, validation hooks, draft/publish,

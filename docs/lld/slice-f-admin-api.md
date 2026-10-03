@@ -13,6 +13,51 @@ plus a separate operator-auth mechanism, plus the validate/dry-run author tools,
 live-run bug fixes. It is a **thin HTTP + auth + request-shape layer** over the frozen
 `config.Store` seam (`docs/lld-contracts.md`); it does **not** reimplement any store method.
 
+---
+
+## AS-BUILT reconciliation (read first — this doc is now the integration contract)
+
+> **Status: BUILT + reviewed APPROVED + merged (commit `df547be`, branch `feat/admin-api`).**
+> This document was written as a design with open decisions and "contingent" items. Everything
+> below the design hedges actually **shipped**; the AS-BUILT facts in this block override any
+> design-phase hedge later in the doc. Strapi integrates against these facts.
+
+What the design flagged as pending/contingent/requested and is now **confirmed in code** (verified
+against the worktree source + `docs/.agents/tasks/admin-api/review.md`):
+
+- **§0 scope correction is settled.** validate + dry-run were built fresh here; dry-run
+  write-suppression is wired into `flow.actionHandler.Exec` on the live `observ` seam
+  (`observ.IsDryRun` + `CollectorFrom`, records `wrote:"suppressed"`, skips `client.Execute` for
+  write ops), and the dead `flow/dryrun.go` shim was deleted (only `isWriteOp` kept). AC-14 is met.
+- **§2.3 — 409 is NOT contingent; it is live.** `classifyPg` detects SQLSTATE `23505` on
+  `flows_method_path_key` and wraps it as a `Validation` carrying `config.ErrRouteConflict`;
+  `statusForAdmin` maps `ErrRouteConflict` ⇒ **409**. A route collision is NOT a 502. The design's
+  "until the tweak lands this reports 502" no longer applies.
+- **§2.6 — `GetFlowVersion` exists** on the admin store method-set (and `*config.PgStore`); stored-
+  mode validate uses it. Mode discriminator is as specified.
+- **§3.5 / §8.1 — actor-on-context landed (option B).** `config.WithAuditActor(ctx, subject)` is
+  implemented and read by the store's audit inserts (`actorFor(ctx)`); the admin edge stamps the
+  operator subject before each write. The single-`"admin"`-actor fallback was NOT taken.
+- **§8 requested seam changes are ALL done:** `FlowExists`/`JDMExists`/`ConnectionExists`,
+  `GetFlowVersion`, the 23505 route-conflict classify, `WithAuditActor`, the `SeedPgStore` rewrite,
+  the dry-run suppression branch, the `/readyz` gate narrowing, `auth.BearerToken` export, the
+  `OperatorGuard`/`StaticTokenOperatorAuth` mechanism, the `Deps.Admin`/`Deps.OperAuth` wiring, and
+  the `cmd/engine` `ADMIN_ENABLED`/`ADMIN_TOKENS` wiring (fatal on bad/empty).
+- **§9 open decisions D1–D5 are resolved as the design's chosen default:** D1 static hashed bearer
+  tokens; D2 validate-stored gated on `flow.read`; D3 seed is bootstrap-only; D4 actor-on-context
+  (option B); D5 dry-run trace = suppressed-write records + response, not a full per-node walk.
+- **AS-BUILT error sentinels:** `config.ErrUnvalidated` (⇒ 422) and `config.ErrRouteConflict`
+  (⇒ 409) are distinct sentinels matched before the generic `config.ErrValidation` (⇒ 400), so 409
+  and 422 never alias each other or a generic 400.
+- **One known cosmetic drift (non-blocking):** the `httpapi.Deps.Store` field doc comment still
+  describes the old `Conns.HealthCheck AND Store.Ping` readyz gate; the code correctly gates on
+  `Store.Ping` only (§5.2). Comment lags; behavior is as this doc states.
+
+Everything else in this document (routing/precedence, request/response JSON, the full status-code
+table in §2.9, operator-auth behavior, RBAC map, the two bug fixes) reflects what shipped.
+
+---
+
 Grounded in the engineering-standards wiki (same vault the sibling slices cite):
 - **`[[config-driven-boundaries]]`** — the admin plane manipulates config; it carries no business
   logic, and it never provisions infrastructure (a connection def only *points at* an existing
