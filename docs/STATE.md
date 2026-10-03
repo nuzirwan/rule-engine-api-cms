@@ -85,6 +85,20 @@ sony/gobreaker/v2, golang-jwt/v5, prometheus/client_golang, go.opentelemetry.io/
   promotion, the publish transform into the engine config store. (This is the original ask.)
 - **Deferred engine items as needed**: idempotency for required writes (R4), rate limiting (R6),
   cross-source saga/compensation (R3).
+- **Collection logic over result sets (NEXT PHASE — not MVP).** The engine can return multi-row
+  arrays, index into them, and iterate (`forEach`) with per-row ZEN decisions. It does NOT yet
+  have first-class **`filter` / `find` / `map` / `reduce`/aggregate** nodes to select or compute a
+  subset *across* rows in-engine. MVP guidance: push filtering/finding/aggregation down into the
+  SQL query (that works today). Build in-engine collection nodes only when the data comes from a
+  non-queryable source or must be combined across sources. Needs: collection node types with a
+  ZEN predicate per element + a `Set`/append mode that builds arrays (current no-clobber `Set`
+  can't build collections well). Spec into HLD/LLD with its own ACs before building.
+- **JSON-file data source + rule-match (NEXT PHASE — not MVP).** Two shapes: (A) if the reference
+  data is rule-shaped (conditions→outcome), author it as a **ZEN decision table** — works TODAY,
+  no new code (this is the idiomatic answer to "config data + find exact match by rules"). (B) if
+  it's a separate JSON *dataset* loaded then searched, needs a new **`json`/`file` connector type**
+  + the collection `find`/`filter` nodes above. Prefer (A) wherever the match is rule-like; build
+  (B) as a designed increment only if a genuine load-and-search-arbitrary-dataset need exists.
 - **Productionize**: glibc-based container image (ADR-003/R9), the 3 per-env config stores +
   valkeys, secrets backend (Vault/SSM), CI/CD, multi-env wiring, load testing (esp. R10 breakers).
 
