@@ -40,36 +40,56 @@ CGO_ENABLED=0 go build ./internal/decision                         # stub must c
   (Trigger→Postgres read→ZEN condition→branch REST→Set→Response) over real HTTP against real
   Postgres + REST stub, two branches. Build/vet/unit/integration all green.
 
-### Thin-slice deliberate SHORTCUTS to replace in later increments
-- `internal/config` is **in-memory**, seeded from `testdata/seed.json` — the real Postgres Store +
-  migrations + versioning + cache are not built yet.
-- `internal/connect` resilience is **timeout-only** (retry/breaker minimal/stubbed); **valkey
-  connector not built**.
-- `internal/flow` has only trigger/action/condition/set/response handlers; **switch/parallel/
-  forEach/decision/logger are Validation-returning stubs**.
-- **No auth** (AuthN/AuthZ) yet. No observability depth (OTel), no admin validate/dry-run endpoints.
-- `Interpreter.Run` takes `(ctx, tree *flow.Node, ver flow.Version, c *Ctx, dep Deps)` (not
-  `config.FlowVersion`) to break a flow↔config import cycle — documented seam deviation, AC-11
-  intent preserved.
+### v1 packages — now BUILT (parallel fan-out merged to mainline @ 8ba7d60)
+All four fan-out increments landed and merged; full gate green (build, vet, unit, and
+Docker-backed integration against real postgres:16 + valkey):
+- `internal/config` — **real** Postgres Store (pgxpool) + embedded migrations + config
+  versioning (immutable versions, active_pointer, publish/rollback, audit) + valkey-go Cache
+  (namespaced/versioned keys, TTL+jitter, pub/sub invalidation, degrade-to-store, defensive
+  decode). The in-memory memStore+seed is kept behind the same seam (used by httpapi today).
+- `internal/connect` — valkey connector added; full resilience envelope (timeout→breaker→retry
+  with jitter, idempotent-only retry, idempotency-key dedup lock); per-instance breakers (R10).
+- `internal/observ` — OTel Tracer/Span + RED Prometheus metrics + central Redactor + dry-run
+  TraceCollector/WithDryRun/IsDryRun; slog Logger kept.
+- `internal/auth` — JWKS Authenticator (rotation without restart) + net/http Authn/Authz
+  middleware (deny-by-default) + ZEN Authorizer.
+- `internal/flow` — switch/parallel/forEach/decision/logger handlers + depth/work/ctx budget +
+  extended ValidateTree. (A real data race on the shared budget was found and fixed via -race.)
 
-## NEXT — remaining v1, parallelizable (disjoint package ownership)
-These depend only on the frozen contracts, so they can run concurrently off `mainline`, each
-owning its own package dir; a final sequential step wires them in `cmd/engine`:
-1. `internal/config` — real Postgres Store + golang-migrate migrations + config versioning
-   (immutable versions, active_version pointer, rollback, audit) + Valkey cache w/ pub/sub
-   invalidation. (Slice D) — **recommended first; it's the backbone others read.**
-2. `internal/connect` — valkey connector + full retry+jitter+circuit-breaker resilience. (Slice B)
-3. `internal/observ` (OTel tracing + RED metrics) + `internal/auth` (JWT/JWKS + AuthZ via ZEN).
-   (Slice E + C)
-4. `internal/flow` — remaining node types: switch/parallel/forEach/decision/logger + loop budgets.
-   (Slice A)
-5. Admin endpoints `POST /admin/flows/validate` + `/admin/flows/dry-run` + flow-test fixtures.
-   (Slice D/§6b) — includes the dry-run write-suppression seam (`observ.WithDryRun`/`IsDryRun`;
-   Slice A actionHandler must honor it).
-Then: sequential wiring/integration join in `cmd/engine` + `internal/httpapi`.
+Dep notes from the merge: go directive is now **1.26.0**; added valkey-go v1.0.78,
+sony/gobreaker/v2, golang-jwt/v5, prometheus/client_golang, go.opentelemetry.io/otel*.
 
-Merge-contention rule for parallel runs: each worktree edits only its own package; nothing but
-the final join step touches `go.mod` / `cmd/engine`.
+### STILL deferred (not yet wired/built)
+- **Wiring join**: `cmd/engine` + `internal/httpapi` still use the thin-slice wiring. The real
+  config.Store, auth middleware, OTel provider, and new node types are built but **not yet wired
+  into the running server**. This is the NEXT step.
+- Admin endpoints `POST /admin/flows/validate` + `/admin/flows/dry-run` + flow-test fixtures
+  (Slice D §6b) — not built.
+- `Interpreter.Run` seam deviation `(ctx, tree *flow.Node, ver flow.Version, c *Ctx, dep Deps)`
+  (import-cycle break) still stands.
+- v1 documented constraints unchanged: non-atomic cross-source writes (R3), no rate limiting
+  (R6), per-instance breakers (R10).
+
+## NEXT
+1. **Wiring/integration join (sequential, one increment):** wire the real `internal/config`
+   Postgres Store (behind an env flag or config, falling back to the in-memory seed for local),
+   the `internal/auth` middleware chain, the OTel provider from `internal/observ`, and register
+   the new `internal/flow` node types — into `cmd/engine` + `internal/httpapi`. Add the admin
+   validate/dry-run endpoints (Slice D §6b) with the dry-run write-suppression honored by the
+   action handler. Full gate + an integration test exercising auth + a multi-node flow.
+2. Then v1 engine is AC-1..26 complete. Remaining project arc below.
+
+## AFTER v1 engine — remaining project arc
+- **Strapi control-plane module (the CMS)** — separate Node/React build: content types,
+  `@gorules/jdm-editor` + React Flow drag-and-drop canvas, validation hooks, draft/publish,
+  promotion, the publish transform into the engine config store. (This is the original ask.)
+- **Deferred engine items as needed**: idempotency for required writes (R4), rate limiting (R6),
+  cross-source saga/compensation (R3).
+- **Productionize**: glibc-based container image (ADR-003/R9), the 3 per-env config stores +
+  valkeys, secrets backend (Vault/SSM), CI/CD, multi-env wiring, load testing (esp. R10 breakers).
+
+Merge-contention rule for any future parallel runs: each worktree edits only its own package;
+only the final join step touches `go.mod` / `cmd/engine`.
 
 ## How to resume in a fresh session (paste this)
 > Continue the nzr-rules-engine build. Read docs/STATE.md on the mainline branch of
