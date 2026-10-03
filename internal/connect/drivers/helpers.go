@@ -1,10 +1,15 @@
 package drivers
 
 import (
+	"encoding/json"
 	"strings"
 
 	"nzr-rules-engine/internal/connect"
 )
+
+// jsonMarshal is a thin alias so drivers encode a composite value consistently
+// (used by the valkey SET value coercion).
+func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 // stringSetting reads a string setting by key, tolerating absent/non-string.
 func stringSetting(s map[string]any, key string) (string, bool) {

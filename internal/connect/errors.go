@@ -54,7 +54,21 @@ var (
 	ErrValidation = errors.New("validation error")
 	// ErrUpstream is the sentinel for a downstream dependency failure.
 	ErrUpstream = errors.New("upstream error")
+	// ErrBreakerOpen is the sentinel wrapped when a per-key circuit breaker is
+	// open (or rejecting a half-open probe). It surfaces to callers as an
+	// Upstream *ConnError (see breakerOpenErr); the breaker is OUTER so this is
+	// never retried in-call.
+	ErrBreakerOpen = errors.New("circuit breaker open")
 )
+
+// breakerOpenErr builds the Upstream *ConnError that represents an open-circuit
+// rejection, wrapping ErrBreakerOpen so callers match it via errors.Is while
+// still classifying as Upstream (errors.Is(err, ErrUpstream) is true via the
+// ConnError.Is class check). No inner client was invoked, so there is no
+// downstream cause beyond the sentinel.
+func breakerOpenErr(key, op string) *ConnError {
+	return wrapErr(Upstream, key, op, "circuit breaker open", ErrBreakerOpen)
+}
 
 // sentinelFor returns the sentinel error for a class.
 func sentinelFor(c ErrClass) error {

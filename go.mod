@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/gorules/zen-go/v2 v2.1.2
 	github.com/jackc/pgx/v5 v5.6.0
+	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/valkey-io/valkey-go v1.0.78
 	golang.org/x/sync v0.22.0
 )

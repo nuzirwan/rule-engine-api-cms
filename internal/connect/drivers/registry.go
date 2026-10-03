@@ -14,7 +14,12 @@ func All() []connect.Connector {
 	restAlias := newRESTConnector("http")
 	return []connect.Connector{
 		newPGConnector(),
+		newValkeyConnector(),
 		rest,
 		restAlias,
 	}
 }
+
+// valkeyClient additionally satisfies connect.DedupStore so the registry can use
+// a valkey connection to back the idempotency-key dedup lock (R4, §6.2).
+var _ connect.DedupStore = (*valkeyClient)(nil)
