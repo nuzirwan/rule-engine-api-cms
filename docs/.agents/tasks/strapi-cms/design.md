@@ -1,6 +1,6 @@
 # Design — Strapi CMS control-plane module
 
-Status: **revised after design-review (round 3)** · Last updated: 2026-10-03
+Status: **revised after design-review (round 4) — reconciled to the FROZEN as-built admin API** · Last updated: 2026-10-03
 
 This design covers the **Strapi CMS control-plane module** for `nzr-rules-engine` — the authoring
 UI that is the original ask of the whole project (HLD §2, ADR-004/005/006; `docs/STATE.md`
@@ -12,31 +12,67 @@ engine's admin HTTP API. It never touches the engine's Postgres config store dir
 
 All npm version numbers below were verified against the npm registry on 2026-10-03 (`npm view`),
 including peer-dependency ranges and the exact `reactflow` version `@gorules/jdm-editor@1.52.0`
-bundles. The admin HTTP wire contract below was reconciled against the **real** admin-API spec
-`.worktrees/admin-api/docs/lld/slice-f-admin-api.md` (branch `feat/admin-api`), not the earlier
-sketch in `slice-d-configstore.md` §5, and the connection settings schema was settled against the
-**actual Slice B postgres driver** `internal/connect/drivers/postgres.go`.
+bundles. The admin HTTP wire contract below was reconciled against the **FROZEN, AS-BUILT** admin
+API — now merged to mainline at commit `df547be` — reading the **real Go request/response structs**
+in `internal/httpapi/admin_handlers.go` / `admin_validate.go` and the serialized
+`connect.ConnectionDef` / `connect.ResiliencePolicy` structs in `internal/connect/connect.go`, not
+the design-phase prose in `slice-f-admin-api.md` or the earlier sketch in `slice-d-configstore.md`
+§5. The connection settings schema was settled against the **actual Slice B postgres driver**
+`internal/connect/drivers/postgres.go`.
 
-> **Revision note (round 3).** This revision resolves the 5 round-2 findings (0 HIGH, 3 MEDIUM, 2
-> NIT) in `docs/.agents/tasks/strapi-cms/design-review.md`: the **validate request is pinned to
-> `slice-f` stored mode** — `{ env, flowId, version:N }` as top-level siblings, no `flow` wrapper
-> (finding 1, new §5.1.1); the Connection **settings shape is explicitly stated to follow the real
-> driver** (`pool.{maxConns,minConns}`, no flat `poolMax`, no `schema` key — schema qualification
-> lives in the SQL) (finding 2); the secret denylist is relabelled a **strict superset** of the
-> engine edge guard (`pwd` is CMS-only), dropping the "mirror" wording (finding 3); §6.3 pins the
-> **version write-back source keys** (`createFlow().version` vs `publishFlow().activeVersion`)
-> (finding 4); and the `listConnections` reconcile step specifies **authored-key settings comparison
-> with defaults normalized, erring toward a harmless re-create** (finding 5). It also corrects a
-> round-2 inaccuracy caught while verifying source: `GET /admin/audit/{type}/{id}` **is** mounted in
-> `slice-f` (§2.1/§2.8), so the CMS ships a typed `audit()` client method and defers only the audit
-> **viewer** as scope (§10.1 R3-C). All resolutions were checked against the real
-> `.worktrees/admin-api/docs/lld/slice-f-admin-api.md` and `internal/connect/drivers/postgres.go`;
-> stale `slice-f §3.x` citations were corrected to the spec's real `§2.x`/`§3`/`§9` numbering.
-> Round-2 changes (13 round-1 findings — wrapped envelopes, `env=""`, driver-faithful credential-free
-> Connection, named operator bearer, create→validate→publish ordering, JDM create==activate, JDM
-> `version:0`, pinned resilience shapes, nullable fixtures, mixed spec casing, wired
-> `listConnections`, `type:'json'` custom fields) remain in force; full per-finding responses for
-> both rounds are in §10.
+> **Round-4 CONTRACT CORRECTION (load-bearing) — the admin request bodies are FLAT, not wrapped.**
+> Reading the merged handler structs shows every create body is a **flat object with `env` as a
+> top-level sibling**, decoded with `DisallowUnknownFields` — there is **no `{env, flow:{…}}` /
+> `{env, connection:{…}}` wrapper**. Rounds 1–3 of this design emitted a nested `flow`/`connection`
+> envelope; against the real strict decoder that nesting is an **unknown field ⇒ 400**, so the
+> round-3 client would not have talked to the engine at all. The as-built shapes are, verbatim from
+> the Go structs:
+> - `POST /admin/flows` ← `{ env?, flowId, method, path, tree, fixtures?, note?, version? }` (`version`
+>   accepted-and-ignored). Flat; no `flow` wrapper (`createFlowRequest`).
+> - `POST /admin/flows/{id}/publish` & `/rollback` ← `{ env?, version, reason? }` (`setActiveRequest`).
+> - `POST /admin/flows/validate` ← **stored:** `{ env?, flowId, version }` (flat siblings);
+>   **candidate:** `{ env?, flow: { flowId, method, path, tree, fixtures? } }` — candidate mode is the
+>   **one** body with a `flow` sub-object (`validateFlowRequest` + `candidateFlowBody`). The CMS uses
+>   stored mode (flat).
+> - `POST /admin/jdms` ← `{ env?, jdmId, doc, version?, note? }` (`createJDMRequest`).
+> - `POST /admin/connections` ← `{ env?, key, type, settings?, secretRef?, resilience? }` (flat;
+>   `createConnectionRequest`). Secret-value keys (`password`/`secret`/`token`/`apiKey`) are declared
+>   only to be rejected `400`.
+>
+> "Wrapped envelope carrying `env`" is therefore read as **"`env` rides in the body as a top-level
+> field"** (vs a header or URL) — satisfied by the flat shape — not as a nested `flow`/`connection`
+> object. Every §5 payload, the §6 nock interceptors, and the client types are pinned to these flat
+> shapes. See §5.2 and §10.3.
+
+> **Revision note (round 4).** This revision closes the 5 round-3 findings (0 HIGH, 2 MEDIUM, 3 NIT)
+> in `design-review.md` **directly against the FROZEN, as-built admin API** (merged @ `df547be`),
+> reading the real Go handler/structs rather than the spec prose:
+> - **MED finding 1 — publish-blocking status is 422, not 409.** Every occurrence on the **publish**
+>   path is now `422` (`config.ErrUnvalidated`): §5.1 `publishFlow` row, §5.3 step, §5.4 step 6, §5.5
+>   error row, §6.3 test name + interceptor. `409` is kept **only** for the create-time route
+>   `(method,path)` collision, and corrected to its **live as-built behavior** (`config.ErrRouteConflict`,
+>   SQLSTATE `23505` on `flows_method_path_key`) — the "502 until a store fix lands" hedge is gone,
+>   because the fix landed (slice-f AS-BUILT block; finding 4).
+> - **MED finding 2 — operator RBAC.** §5.1/§3.4/§5.6 now state the CMS operator token's engine-side
+>   subject must be granted **`flow.read` + `flow.write` + `flow.publish`** (the publish sequence
+>   touches all three); §5.5 adds a `403` (authenticated-but-under-privileged) row, not retry-recoverable.
+> - **NIT finding 3 — stored-mode validate 404.** §5.5 gains a `validateFlow → 404 (version not found)`
+>   row.
+> - **NIT finding 4 — create-time route collision.** Reconciled to the as-built **409** and §5.6 adds a
+>   client-side route-uniqueness pre-check so a genuine, author-fixable collision is not shown as a
+>   retry-forever outage.
+> - **NIT finding 5 — `GET /admin/connections` key casing.** Verified against the **real** source: the
+>   handler emits camelCase **top-level** keys (`key/type/settings/secretRef/resilience`) by an explicit
+>   map, but the nested `resilience` value is the **tag-less `connect.ResiliencePolicy`** struct, so it
+>   serializes **Go-cased** (`Timeout` as **nanoseconds**, `Retry.MaxAttempts`, `Breaker.*`). §5.4 and
+>   §6.3 are pinned to those real keys.
+> - **Round-4 contract correction (beyond the review):** the create request bodies are **flat, not
+>   wrapped** — see the box above and §5.2 — fixed across §5.1/§5.2/§6.
+>
+> Round-1→3 changes (`env=""`, driver-faithful credential-free Connection, named operator bearer,
+> create→validate(stored)→publish ordering, JDM create==activate, JDM `version:0`, nullable fixtures,
+> mixed spec casing, wired `listConnections`, `type:'json'` custom fields, typed `audit()` client)
+> remain in force; full per-finding responses for all rounds are in §10.
 
 ---
 
@@ -282,24 +318,29 @@ this relates to the engine's own edge guard (finding 3):
 
 #### 3.3.2 Pinned `resilience` request shape (finding 8)
 
-Three resilience encodings appear across the codebase: the seed uses flat `{timeoutMs, maxAttempts}`;
-`slice-f` §2.8 **request** uses `{timeoutMs, retry: {maxAttempts}}`; the `slice-f` §2.8 **GET
-response** returns `{timeout: <nanoseconds>, retry: {...}}` (the Go `ResiliencePolicy` marshalled
-with `time.Duration` as ns). The CMS **sends the `slice-f` request shape** and **reads the GET
-response shape**:
+**Casing settled against the real struct, not the spec prose (finding 5).** On the wire the
+`resilience` field — both in the create **request** (`createConnectionRequest.Resilience
+*connect.ResiliencePolicy`) and the GET **response** (`d.Resilience` emitted raw) — decodes/encodes
+the **tag-less `connect.ResiliencePolicy`** struct (`internal/connect/connect.go`, verified: no JSON
+tags). `encoding/json` therefore uses the **Go field names**, and `Timeout` is a `time.Duration`
+(**nanoseconds** as a JSON integer):
 
 ```jsonc
-// resilience as the CMS SENDS it on create (slice-f §3.7 request):
-{ "timeoutMs": 2000, "retry": { "maxAttempts": 2 } }
-// resilience as the CMS READS it back from GET /admin/connections (ns + nested retry):
-{ "timeout": 2000000000, "retry": { "maxAttempts": 2 } }
+// resilience as the CMS SENDS it on create (flat body; Go-cased, ns Timeout):
+{ "Timeout": 2000000000, "Retry": { "MaxAttempts": 2 } }
+// resilience as the CMS READS it back from GET /admin/connections (identical casing):
+{ "Timeout": 2000000000, "Retry": { "MaxAttempts": 2, "BaseBackoff": 0, "MaxBackoff": 0 },
+  "Breaker": { "FailureThreshold": 0, "FailureRatio": 0, "OpenTimeout": 0 } }
 ```
 
-The `resilience-policy` component authors `timeoutMs` (ms) + `retry.maxAttempts`; the transform emits
-the request shape verbatim. When reconciling against a GET (presence check, §5.4 step 1), the client
-converts the response `timeout` ns → ms before comparing. The transform is **unit-tested to emit
-exactly `{timeoutMs, retry:{maxAttempts}}`** (§6.1), closing the "three observed encodings"
-ambiguity.
+The author-facing `resilience-policy` component still authors `timeoutMs` (ms) + `retry.maxAttempts`
+in human units; the **transform converts** to the engine's Go-cased ns shape (`timeoutMs` ms →
+`Timeout` ns; `retry.maxAttempts` → `Retry.MaxAttempts`) on the way out, and converts back
+(`Timeout` ns → ms) when reconciling a GET (§5.4). Sending the earlier camelCase `{timeoutMs,
+retry:{maxAttempts}}` would be rejected: `DisallowUnknownFields` recurses into the nested
+`ResiliencePolicy`, so `timeoutMs` is an unknown field ⇒ **400**. The transform is **unit-tested to
+emit exactly `{ Timeout:<ns>, Retry:{ MaxAttempts } }`** (§6.1), and the reconcile test feeds a
+Go-cased ns response (§6.3), closing the casing ambiguity for good.
 
 ### 3.4 Environment
 
@@ -317,7 +358,7 @@ tells the publish-transform *which engine admin API* to target.
 | --- | --- | --- |
 | `name` | uid (dev/staging/prod) | selects the target engine deployment (base URL + operator token). **Not** sent as the payload `env`. |
 | `adminApiBaseUrl` | string | base URL of that env's engine admin plane; overrides the global default. This is the real cross-env selector. |
-| `operatorTokenRef` | string | reference (env var name / secret-backend pointer) to that env's operator plaintext bearer token; resolved at call time, never stored as a value. |
+| `operatorTokenRef` | string | reference (env var name / secret-backend pointer) to that env's operator plaintext bearer token; resolved at call time, never stored as a value. The token's **engine-side subject must be granted `flow.read`+`flow.write`+`flow.publish`** (slice-f §3.4 RBAC; the publish sequence needs all three) — an engine-side provisioning requirement, not a CMS setting (§5.1/§5.6, MED finding 2). |
 | `payloadEnv` | string (default `""`) | the value sent in the admin payload's `env` field. Defaults to `""` (the single served env) and **must equal the target engine's served env**, else the engine 400s. Configurable only for a future multi-env-aware engine. |
 
 Promotion (dev→staging→prod) in v1 is modeled as: select a validated Flow/Jdm/Connection entry,
@@ -415,27 +456,46 @@ A thin typed wrapper over native `fetch`, configured from env/Environment:
   **never persisted** in Strapi's DB and **never logged**.
   - Naming is explicit to prevent conflation with the engine side: the CMS variable
     `ADMIN_API_OPERATOR_TOKEN` holds the **plaintext bearer** the CMS sends. The **engine** stores
-    only `sha256(token)` hashes in its own `ADMIN_OPERATOR_TOKENS` (comma-separated `id:sha256hex`,
-    `slice-f` §2.2–2.3) — the CMS does **not** configure that engine var and must never be given a
-    plaintext token to put there. A `401` from the admin plane is the deny-by-default path
-    (`slice-f` §2.5).
+    only `sha256(token)` hashes in its own `ADMIN_TOKENS` allow-list (`;`-separated
+    `sha256hex:subject:comma,roles`, slice-f §3.3) — the CMS does **not** configure that engine var
+    and must never be given a plaintext token to put there. A `401` from the admin plane is the
+    deny-by-default path.
+- **Operator token RBAC roles — all three (MED finding 2).** The engine runs a route→role RBAC map
+  (slice-f §3.4): `flow.write` for the create routes (`POST /admin/flows`, `/jdms`, `/connections`),
+  `flow.publish` for `publish`/`rollback`, and `flow.read` for `validate`, `dry-run`, `GET
+  /admin/connections`, and `GET /admin/audit/...`. The full publish sequence (§5.4) touches **all
+  three**: reconcile uses `listConnections` (`flow.read`), the creates use `flow.write`, stored-mode
+  validate uses `flow.read`, and publish uses `flow.publish`. So the engine-side **subject** of the
+  CMS operator token **must be granted `flow.read` + `flow.write` + `flow.publish`** in the engine's
+  `ADMIN_TOKENS` entry (`sha256hex:op:strapi:flow.read,flow.write,flow.publish`). This is configured
+  **engine-side, not in the CMS** — the CMS only presents the bearer. A single-role token succeeds on
+  some steps and **`403`s mid-sequence** (e.g. a `flow.write`-only token creates the flow then 403s on
+  publish), leaving a created-but-unpublished version; §5.5 handles the 403 and §5.6 states the
+  provisioning requirement.
 - **Payload `env` (finding 2)**: every admin body carries `env` = the Environment's `payloadEnv`
   (default `""`). The client never sends `dev`/`staging`/`prod` as `env`.
-- **Strict shapes (finding 1)**: `slice-f` §2 decodes every body with `json.Decoder` +
-  `DisallowUnknownFields`, so the client sends **exactly** the documented wrapped envelopes and no
-  extra fields; a mis-shaped or bare body is a hard `400`.
+- **Strict, FLAT shapes (finding 1 + round-4 correction)**: `decodeJSON` decodes every body with
+  `json.Decoder` + `DisallowUnknownFields` (verified in `admin.go`), so the client sends **exactly**
+  the documented **flat** bodies — `env` and the object's fields as top-level siblings, **no
+  `flow`/`connection` wrapper** — and no extra fields; a wrapper or a stray field is a hard `400`
+  (§5.2).
 
-Methods map to the real `slice-f` contract (wrapped envelopes shown in §5.2):
+Methods map to the real as-built `slice-f` contract (flat bodies shown in §5.2):
 
-| Method | Endpoint | Request envelope | Response | Purpose |
+All request bodies are **flat objects** (no `flow`/`connection` wrapper) with `env` as a top-level
+sibling, decoded `DisallowUnknownFields` — verified against the merged handler structs (§5.2, and
+the round-4 correction box above). The one exception is **candidate-mode** validate, whose body
+carries a `flow` sub-object; the CMS does not use candidate mode on the publish path (§5.1.1).
+
+| Method | Endpoint | Request body (flat; verbatim keys) | Response | Purpose |
 | --- | --- | --- | --- | --- |
-| `createFlow(env, flow)` | `POST /admin/flows` | `{ env, flow }` | `201 { flowId, version, validated:false }` | create a flow version (`PutFlowVersion`); does NOT publish. |
-| `validateFlow(env, flowId, version)` | `POST /admin/flows/validate` | **stored mode:** `{ env, flowId, version }` (top-level siblings, **no** inline `flow`) | `200 { ok, structural, fixtures }` | structure+fixtures; marks the persisted `{flowId, version}` validated on all-pass. See §5.1.1 for why the CMS always uses stored mode. |
-| `publishFlow(env, flowId, version)` | `POST /admin/flows/{id}/publish` | `{ env, version }` | `200 { flowId, activeVersion, action:"publish" }` | advance active pointer (`SetActive`); **409 if the version is not validated**. |
+| `createFlow(env, flow)` | `POST /admin/flows` | `{ env, flowId, method, path, tree, fixtures?, note? }` | `201 { flowId, version, validated:false }` | create a flow version (`PutFlowVersion`); does NOT publish. (`createFlowRequest`.) |
+| `validateFlow(env, flowId, version)` | `POST /admin/flows/validate` | **stored mode:** `{ env, flowId, version }` (flat siblings, **no** inline `flow`) | `200 { ok, structural, fixtures }` | structure+fixtures; marks the persisted `{flowId, version}` validated on all-pass. §5.1.1. Stored-mode `version` that resolves to no stored version ⇒ **404** (the one non-200 case). |
+| `publishFlow(env, flowId, version)` | `POST /admin/flows/{id}/publish` | `{ env, version }` | `200 { flowId, activeVersion, action:"publish" }` | advance active pointer (`SetActive`); **422 if the version is not validated** (`config.ErrUnvalidated`, publish-blocking AC-13). |
 | `rollbackFlow(env, flowId, version)` | `POST /admin/flows/{id}/rollback` | `{ env, version }` | `200 { flowId, activeVersion, action:"rollback" }` | move pointer back. |
-| `createJdm(env, jdmId, doc)` | `POST /admin/jdms` | `{ env, jdmId, version:0, doc }` | `201 { jdmId, version }` | create **and activate** a JDM version (one transaction). |
-| `createConnection(env, conn)` | `POST /admin/connections` | `{ env, connection }` | `201 { key, version }` | register+activate a connection def (secret_ref only). |
-| `listConnections(env)` | `GET /admin/connections` | — | `200 { connections: [ { key, type, settings, secretRef, resilience } ] }` | list active connection defs (resilience in ns/`retry` shape). |
+| `createJdm(env, jdmId, doc)` | `POST /admin/jdms` | `{ env, jdmId, doc, version:0 }` | `201 { jdmId, version }` | create **and activate** a JDM version (one transaction). (`createJDMRequest`.) |
+| `createConnection(env, conn)` | `POST /admin/connections` | `{ env, key, type, settings, secretRef, resilience }` | `201 { key, version }` | register+activate a connection def (secret_ref only). (`createConnectionRequest`.) |
+| `listConnections(env)` | `GET /admin/connections` | — | `200 { connections: [ { key, type, settings, secretRef, resilience } ] }` | list active connection defs. **Top-level keys camelCase; `resilience` nested value is Go-cased `{ Timeout:<ns>, Retry:{ MaxAttempts, … }, Breaker:{…} }`** (tag-less struct — §5.4, finding 5). |
 | `dryRunFlow(env, req)` | `POST /admin/flows/dry-run` | `{ env, flowId, version?, input, mocks? }` | `200 { trace, response, errors }` | trace, writes suppressed (optional preview, not a gate). |
 | `audit(env, type, id)` | `GET /admin/audit/{type}/{id}` | — | `200 { objectType, objectId, entries:[…] }` | read audit trail (`type` ∈ flow/jdm/connection). Client method exists; no v1 publish-path caller (§8, finding 12). |
 
@@ -459,17 +519,23 @@ and a non-2xx HTTP status as a transport/engine error (§5.5).
 `slice-f` §2.6 defines **two** validate modes selected by the body fields, decoded with
 `DisallowUnknownFields`, so the exact field placement matters (a wrong guess is a hard `400`):
 
-- **Candidate mode** — body `{ env, flow: { flowId, method, path, tree, fixtures } }`. Validates the
-  inline candidate **statelessly**; it **never** calls `MarkValidated`. Useful for a pre-save "is
-  this draft structurally sound" check, but it does **not** mark a persisted version.
+- **Candidate mode** — body `{ env, flow: { flowId, method, path, tree, fixtures } }`. This is the
+  **one** admin body that carries a `flow` sub-object (`validateFlowRequest.Flow *candidateFlowBody`,
+  verified). Validates the inline candidate **statelessly**; it **never** calls `MarkValidated`.
+  Useful for a pre-save "is this draft structurally sound" check, but it does **not** mark a
+  persisted version.
 - **Stored mode** — body `{ env, flowId, version }` with `flowId` present and `version` a **positive
-  int**, as **top-level siblings** (no `flow` wrapper). The engine loads that persisted version's
-  tree, validates it, and on all-pass calls `MarkValidated(flowId, version)`. An inline `flow`
-  object, if also present, is **ignored** in stored mode (`version` is the explicit discriminator).
+  int**, as **flat top-level siblings** (no `flow` wrapper). The engine loads that persisted
+  version's tree via `GetFlowVersion`, validates it, and on all-pass calls `MarkValidated(flowId,
+  version)`. The discriminator in the as-built handler is `stored := req.FlowID != "" && req.Version
+  > 0` (verified in `admin_validate.go`); if both a `flow` object and `flowId`+`version` are present,
+  stored mode wins. A `version` that resolves to **no stored version** is a **`404`** — the single
+  non-200 validate case (§5.5, NIT finding 3).
 
 The publish gate requires the engine to actually mark the created version validated (an inline
-candidate-mode validate marks nothing, so publish would 409). **Decision: the publish sequence
-always uses stored mode** — it sends exactly `{ env, flowId, version: N }` (top-level), the three
+candidate-mode validate marks nothing, so publish would **422** — the publish-blocking status, not
+409; see §5.4/§5.5). **Decision: the publish sequence always uses stored mode** — it sends exactly
+`{ env, flowId, version: N }` (top-level), the three
 fields and nothing else, after `createFlow` has persisted version `N`. This is the one concrete,
 decoder-safe location: `version` is a top-level sibling of `flowId`, not a field inside a `flow`
 object, and no `flow` object is sent at all. The §6.3 happy-path nock interceptor asserts this body
@@ -479,52 +545,53 @@ The pre-save candidate-mode check (`{ env, flow }`) is available to the UI as a 
 convenience, but it is **not** part of the publish-blocking gate; only the stored-mode call (which
 flips the engine's `validated` flag) gates publish.
 
-### 5.2 Publish-transform (`publish-transform.ts`) — wrapped envelopes (finding 1)
+### 5.2 Publish-transform (`publish-transform.ts`) — flat bodies (finding 1 + round-4 correction)
 
 Pure functions (no I/O) that convert a CMS entry into the engine payload. Being pure makes them
-directly unit-testable (§6). Every function emits the **wrapped envelope carrying `env`** that the
-real admin API requires:
+directly unit-testable (§6). Every function emits the **flat body carrying `env` as a top-level
+sibling** that the real admin API decodes — **no `flow`/`connection` wrapper** (round-4 correction;
+a wrapper is an unknown field ⇒ 400):
 
 ```ts
 // env is the Environment.payloadEnv (default "")
 flowToEnginePayload(entry, env) -> {
-  env,
-  flow: { flowId, method, path, tree, fixtures }   // fixtures: present-only mocks/expect
+  env, flowId, method, path, tree, fixtures          // flat; fixtures present-only mocks/expect
+  // (note optional; `version` omitted — the store assigns it and ignores a client version)
 }
 
 jdmToEnginePayload(entry, env) -> {
-  env,
-  jdmId,
-  version: 0,                                       // 0 => engine auto-assigns max+1 (finding 7)
-  doc                                               // the {nodes, edges} graph, passed through
+  env, jdmId, doc, version: 0                         // flat; 0 => engine auto-assigns max+1 (finding 7)
 }
 
 connectionToEnginePayload(entry, env) -> {
-  env,
-  connection: {
-    key, type,
-    settings,                                       // discrete, credential-free (§3.3.1)
-    secretRef,
-    resilience: { timeoutMs, retry: { maxAttempts } } // pinned request shape (§3.3.2, finding 8)
-  }
+  env, key, type,
+  settings,                                           // discrete, credential-free (§3.3.1)
+  secretRef,
+  resilience: { Timeout, Retry: { MaxAttempts } }     // Go-cased, ns Timeout (§3.3.2, finding 5/8)
 }
 ```
 
-- `flowToEnginePayload` passes `tree` through (the canvas already serialized the engine `Node`
-  shape, mixed casing preserved — §4.2), maps the `fixtures` component array to the FlowFixture
-  array (omitting absent `mocks`/`expect`), carries `note`.
-- `jdmToEnginePayload` passes the JDM graph through and **always sets `version: 0`** so the strict
-  decoder gets the documented auto-assign (`slice-f` §2.8: `version<=0` ⇒ auto-assign) and never a missing-field surprise
-  (finding 7).
-- `connectionToEnginePayload` passes the discrete settings through and **asserts no secret value is
-  present** — it throws a `TransformError` if the settings denylist matches (`password`, `pwd`,
-  `secret`, `token`, `apikey`, `dsn`), re-applying the content-type guard's **superset** denylist
-  (belt and suspenders; a strict superset of the engine edge guard, which adds `pwd` — see §3.3.1,
-  finding 3). It emits the pinned resilience request shape.
+- `flowToEnginePayload` emits the flat `createFlowRequest` shape: `tree` passes through (the canvas
+  already serialized the engine `Node` shape, mixed casing preserved — §4.2), `fixtures` map to the
+  wire `AdminFixture` array (`{name, input, mocks?, expect?}`, omitting absent `mocks`/`expect`),
+  `note` optional. No `flow` wrapper.
+- `jdmToEnginePayload` emits the flat `createJDMRequest` shape and **always sets `version: 0`** so the
+  strict decoder gets the documented auto-assign (`version<=0` ⇒ auto-assign) and never a
+  missing-field surprise (finding 7).
+- `connectionToEnginePayload` emits the flat `createConnectionRequest` shape, passes the discrete
+  settings through, and **asserts no secret value is present** — it throws a `TransformError` if the
+  settings denylist matches (`password`, `pwd`, `secret`, `token`, `apikey`, `dsn`), re-applying the
+  content-type guard's **superset** denylist (belt and suspenders; a strict superset of the engine
+  edge guard — which rejects `password/secret/token/apiKey` top-level and in `settings`, plus a
+  blanket `dsn` — the CMS additionally adds `pwd`, see §3.3.1, finding 3). The `resilience` value is
+  emitted in the engine's **tag-less Go shape** — `{ Timeout: <nanoseconds>, Retry: { MaxAttempts } }`
+  — because `createConnectionRequest.Resilience` decodes into the un-tagged
+  `connect.ResiliencePolicy` under `DisallowUnknownFields`, so a camelCase `{timeoutMs, retry:{maxAttempts}}`
+  would be an unknown field ⇒ 400 (§3.3.2).
 
-Each transform returns the exact envelope the matching endpoint decodes with
-`DisallowUnknownFields`; a round-trip unit test asserts no stray fields leak into the envelope
-(finding 1).
+Each transform returns the exact **flat** body the matching endpoint decodes with
+`DisallowUnknownFields`; a round-trip unit test asserts no `flow`/`connection` wrapper and no stray
+top-level fields leak (finding 1 + round-4 correction).
 
 ### 5.3 Validation hook (`validation.ts`) — publish-blocking
 
@@ -543,14 +610,14 @@ the gate's contract is:
 4. If `ok:false` → **block** publish; store the `{structural, fixtures}` result on `lastValidation`
    and set `lastPublishStatus = failed`; the `ValidationPanel` renders the structural errors and
    per-fixture diffs inline (slice-d §5 response shape). The engine has **not** marked `N` validated,
-   so even a stray `publishFlow` would 409.
+   so even a stray `publishFlow` would **422** (publish-blocking, `config.ErrUnvalidated` — not 409).
 5. If `ok:true` → the engine has marked `N` validated; proceed to `publishFlow` (§5.4). Optionally
    run `dryRunFlow` for a trace preview, but dry-run is **not** a gate (writes suppressed, may hit
    real read sources) — author-facing insight only.
 
 A flow can **never** be published with `ok:false` or an unreachable validator — enforced twice: the
-hook blocks, and the engine's `SetActive` 409s an un-validated version. This is the guarantee the §6
-tests assert.
+hook blocks, and the engine's `SetActive` returns **422** on an un-validated version
+(`config.ErrUnvalidated`). This is the guarantee the §6 tests assert.
 
 Connections and JDMs have no standalone validate endpoint in the contract; they are validated
 transitively (a flow referencing an unknown `jdmId`/`connection key` fails `/admin/flows/validate`
@@ -559,9 +626,11 @@ connections and JDMs **before** validating the flow that references them.
 
 ### 5.4 Publish sequence (orchestrated by `publish.ts` controller)
 
-Triggered by an admin-only route `POST /rule-engine/flows/:id/publish` (Strapi RBAC: operator role
-only). For a given Flow entry and its target Environment (which supplies `baseURL`, bearer token, and
-`payloadEnv` — default `""`):
+Triggered by an admin-only route `POST /rule-engine/flows/:id/publish` (Strapi's own RBAC gates
+*who in the CMS* may trigger a publish — distinct from the **engine-side** RBAC, which gates the
+operator token's subject per route and requires `flow.read`+`flow.write`+`flow.publish` for the full
+sequence, §5.1/§5.6). For a given Flow entry and its target Environment (which supplies `baseURL`,
+bearer token, and `payloadEnv` — default `""`):
 
 ```
 env = environment.payloadEnv            // default ""  (NOT the Environment name)
@@ -584,31 +653,42 @@ env = environment.payloadEnv            // default ""  (NOT the Environment name
      if transport/5xx OR res.ok == false: BLOCK (abort), store lastValidation, lastPublishStatus=failed
      // on all-pass the engine MarkValidated(N)
 6. publishFlow(env, flowId, N)                           // POST /admin/flows/{id}/publish {env, version:N}
-     if 409 "not validated": abort, surface "validate first" (should not happen after step 5 ok)
+     if 422 "not validated": abort, surface "validate first" (should not happen after step 5 ok)
+     if 403: abort, surface "operator token lacks flow.publish" (token mis-provisioned, §5.1/§5.5)
 7. write back lastPublishStatus=published; clear lastValidation errors
 ```
 
-Ordering rationale (finding 5): `slice-f` §2.3 lands a version `validated=false`; `slice-f` §2.6
-marks it validated **only in stored mode, when validate references the persisted `{flowId, version}`
-as top-level fields** (§5.1.1); `slice-f` §2.4 **409s publish on an un-validated version**. So create
-(step 4) must precede validate (step 5), and validate must reference the created version `N` in
-stored mode, before publish (step 6). The earlier validate-before-create ordering would have left
-`N` un-validated and 409'd on publish.
+Ordering rationale (finding 5 + MED finding 1): `slice-f` §2.3 lands a version `validated=false`;
+stored-mode validate marks it validated **only when validate references the persisted `{flowId,
+version}` as flat top-level fields** (§5.1.1); publish returns **422** (`config.ErrUnvalidated`) on an
+un-validated version. So create (step 4) must precede validate (step 5), and validate must reference
+the created version `N` in stored mode, before publish (step 6). The earlier validate-before-create
+ordering would have left `N` un-validated and **422'd** on publish. (The create-time route
+`(method,path)` collision is the engine's **only** `409` — `config.ErrRouteConflict`, live as-built;
+it is unrelated to the publish gate. See §5.5/§5.6.)
 
 Connection presence check (finding 11): step 1 now calls `listConnections` and **skips** keys already
 present with matching settings/resilience, because `PutConnectionVersion` is append-and-activate
 (`slice-f` §2.8) — re-sending an unchanged connection on every publish causes needless version
 churn. The comparison is deliberately **conservative so a spurious diff never defeats the
 churn-avoidance goal (finding 5)**:
-- **Resilience**: the GET response encodes `timeout` in nanoseconds with a nested `retry`
-  (§3.3.2); the client normalizes it to the CMS's ms shape (`timeout` ns → `timeoutMs`) before
-  comparing, then compares only `timeoutMs` + `retry.maxAttempts`.
-- **Settings**: compared on the **authored keys present in the CMS entry only** — the GET response
-  may include driver-defaulted keys the author never set (e.g. `port` defaulting to `5432`,
-  `sslmode` to `disable`, or a different key order), and a naive deep-equal over the full response
-  would report a false diff and re-create. So the client compares each key the CMS authored against
-  the response value (filling the same documented driver defaults on the CMS side before compare),
-  and ignores response-only keys.
+- **Resilience (key casing verified — finding 5)**: the GET response's `resilience` is the
+  **tag-less `connect.ResiliencePolicy`** marshalled by `encoding/json`, so its keys are **Go-cased**:
+  `Timeout` is a `time.Duration` serialized as a **nanosecond integer**, and retry is nested as
+  `Retry.MaxAttempts` (plus `Retry.BaseBackoff`/`MaxBackoff` and a `Breaker.*` block, also ns). The
+  client reads `resilience.Timeout` (ns) and `resilience.Retry.MaxAttempts`, converts `Timeout` ns →
+  ms, and compares against the CMS's authored `timeoutMs` + `retry.maxAttempts`. (The **request** side
+  also sends Go-cased `{ Timeout:<ns>, Retry:{ MaxAttempts } }` per §3.3.2/§5.2 — one casing on both
+  directions, both verified against the struct, not the spec prose.)
+- **Settings**: compared on the **authored keys present in the CMS entry only** — the GET response's
+  `settings` is the raw author-supplied map (run through the engine's `Redactor` backstop), and may
+  include driver-defaulted keys the author never set (e.g. `port` defaulting to `5432`, `sslmode` to
+  `disable`, or a different key order), so a naive deep-equal over the full response would report a
+  false diff and re-create. So the client compares each key the CMS authored against the response
+  value (filling the same documented driver defaults on the CMS side before compare), and ignores
+  response-only keys. (Settings keys are author-chosen and pass through unchanged — only the
+  top-level connection object keys `key/type/settings/secretRef/resilience` are fixed by the handler
+  map, all camelCase except the nested `resilience` noted above.)
 - **Inconclusive comparison errs toward *skip* when only defaults/ordering differ.** If the
   comparison cannot cleanly decide (unexpected shape in the response), the step treats it as a
   **harmless re-create** rather than silently skipping a genuine change — an extra immutable
@@ -630,18 +710,27 @@ admin route.
 | Operation | Failure | Recoverable? | Caller receives | Logged? |
 | --- | --- | --- | --- | --- |
 | `listConnections` | 5xx/transport | yes | publish blocked; "engine unavailable, retry" | warn, `env` |
-| `createConnection`/`createJdm`/`createFlow` | 4xx (bad payload / 400 unknown field / `dsn` in settings) | no (author must fix) | publish aborted; field-level error; `lastPublishStatus=failed` | error, redacting any value |
+| `createFlow` | **409 route `(method,path)` collision** (`config.ErrRouteConflict`, SQLSTATE 23505 — live as-built, NIT finding 4) | no (author must fix) | publish aborted; "route `<method> <path>` is already owned by another flow — change the route or edit the existing flow"; `lastPublishStatus=failed` | error |
+| `createConnection`/`createJdm`/`createFlow` | 4xx (bad payload / 400 unknown field / wrapper sent / `dsn` or secret in settings) | no (author must fix) | publish aborted; field-level error; `lastPublishStatus=failed` | error, redacting any value |
 | `createConnection`/`createJdm`/`createFlow` | 5xx/transport | yes | publish aborted; "engine unavailable, retry" | error |
 | `validateFlow` | transport/5xx | yes | publish blocked; "validation unreachable, retry" | warn, `flowId/env` |
+| `validateFlow` | **404 version not found** (stored-mode `version` resolves to no stored version — NIT finding 3) | no (not retry-recoverable) | publish blocked; "created version not found; re-create and retry"; `lastPublishStatus=failed` | error, `flowId/version` |
 | `validateFlow` | 200 `ok:false` | yes (fix flow) | publish blocked; structural+fixture diffs in `ValidationPanel` | info (expected negative) |
-| `publishFlow`/`rollbackFlow` | **409 un-validated version** | no | abort; "validate first" (should not occur post-validate) | error |
+| `publishFlow`/`rollbackFlow` | **422 un-validated version** (`config.ErrUnvalidated`, publish-blocking AC-13) | no | abort; "validate first" (should not occur post-validate) | error |
 | `publishFlow`/`rollbackFlow` | 404 version absent | no | abort; "version not found" | error |
 | `publishFlow`/`rollbackFlow` | 5xx/transport | yes | abort; retry | error |
+| **any admin op** | **403 (authenticated but role not granted — MED finding 2)** | **no (fix token roles, not retry)** | abort; "operator token lacks the required engine role (`<route needs flow.read / flow.write / flow.publish>`)" — the token's engine-side subject must carry all three (§5.1/§5.6) | error, token redacted |
 | transform (`connectionToEnginePayload`) | secret value detected in settings | no (author must remove) | publish aborted BEFORE any admin call; "remove secret, use secretRef" | error, **never log the value** |
-| auth | 401 from admin plane (missing/invalid bearer) | no | "operator credential invalid/expired" | error, token redacted |
+| auth | 401 from admin plane (missing/invalid/absent bearer) | no | "operator credential invalid/expired" | error, token redacted |
 
 The operator token is referenced by key, never echoed to logs or responses. Any admin response body
-is logged with a redactor that drops keys on the secret denylist.
+is logged with a redactor that drops keys on the secret denylist. Note the **distinct** statuses the
+engine returns (slice-f status-code contract, all verified against `statusForAdmin` + the AS-BUILT
+block): `422` = publish-blocking un-validated version; `409` = create-time route collision; `400` =
+bad request (incl. a non-empty `env`, a sent wrapper, an inline secret); `404` = no stored version
+match; `403` = under-privileged operator; `401` = bad/absent bearer; `502` = store upstream error;
+`504` = store timeout. The CMS keys recovery/UX off these exact codes — in particular a publish-path
+interceptor matches **422, never 409**.
 
 ### 5.6 Input validation rules (CMS edge, before any admin call)
 
@@ -654,17 +743,38 @@ is logged with a redactor that drops keys on the secret denylist.
 | `connection.type` | yes | enum postgres/valkey/rest | enum guard |
 | `connection.settings` | yes | JSON object; **no `dsn`**; no secret-denylist keys | lifecycle guard rejects (§3.3) |
 | `secretRef` | optional | string ≤ 256, opaque reference | — |
-| `resilience` | optional | `timeoutMs` int ≥ 0; `retry.maxAttempts` int ≥ 1 | component validation |
+| `resilience` | optional | `timeoutMs` int ≥ 0; `retry.maxAttempts` int ≥ 1 (authored in ms; emitted Go-cased ns per §5.2) | component validation |
+| `route (method,path) uniqueness` | yes (NIT finding 4) | no other **active** Flow entry (any `flowId`) owns the same `(method, path)` | **pre-create** check against existing CMS Flow entries; save/publish rejected with "route `<method> <path>` is already owned by flow `<otherId>`" |
 | `fixtures[].name` | yes (if fixtures present) | non-empty, unique within flow | component validation |
 | `fixtures[].mocks`/`[].expect` | optional (nullable) | JSON object when present | — (finding 9) |
 | `ADMIN_API_BASE_URL` | yes (env or Environment) | valid `http(s)://` URL | plugin bootstrap fails fast with a clear message |
-| `ADMIN_API_OPERATOR_TOKEN` | yes (env or Environment) | non-empty plaintext bearer | bootstrap fails fast |
+| `ADMIN_API_OPERATOR_TOKEN` | yes (env or Environment) | non-empty plaintext bearer whose **engine-side subject is granted `flow.read`+`flow.write`+`flow.publish`** (MED finding 2) | bootstrap fails fast if the token is empty; an under-privileged token is detected only at call time as a `403` (§5.5) — documented so operators provision all three roles up front |
 | `payloadEnv` | optional | string; default `""`; must equal target engine's served env | engine 400s a mismatch (surfaced) |
 
 Invariant ownership: the CMS owns **shape/edge** validation (fail fast, good UX); the **engine owns
 semantic/structural authority** via `/admin/flows/validate` and its own version/pointer transaction
 (slice-d/slice-f). The CMS never assumes its local checks are sufficient to publish — the engine's
 validate is always the final publish-blocking gate (R11: both sides validate the contract).
+
+**Operator-token provisioning (MED finding 2).** The CMS presents one operator bearer per
+Environment, but the engine authorizes it per route against its RBAC map (slice-f §3.4). Because the
+publish sequence spans `flow.read` (reconcile/validate), `flow.write` (creates) and `flow.publish`
+(publish/rollback), the token's engine-side subject in `ADMIN_TOKENS` **must carry all three roles**
+(e.g. `…:op:strapi:flow.read,flow.write,flow.publish`). This is an **engine-side provisioning
+requirement** the CMS documents (in `.env.example` and the setup docs) but cannot enforce — a
+single-role token passes bootstrap and then **`403`s mid-sequence** (§5.5), stranding a
+created-but-unpublished version. The 403 is surfaced with the specific missing role so the operator
+knows which grant to add; it is **not** retried.
+
+**Route-uniqueness pre-check (NIT finding 4).** The engine enforces route `(method,path)` uniqueness
+with a UNIQUE constraint and returns a **live `409`** (`config.ErrRouteConflict`, SQLSTATE 23505) on
+a collision — this is the engine's only 409 and it is author-fixable, not transient. To avoid a
+confusing round-trip, the CMS **pre-checks** route uniqueness against its own active Flow entries
+before `createFlow` and blocks the save/publish with a clear message naming the conflicting flow. If
+a collision still slips through (two entries published near-simultaneously), the `createFlow` `409`
+is mapped to the same author-fixable message (§5.5) — never to a "retry, engine unavailable" copy.
+(The round-3 "502 until a store fix lands" hedge is removed: the fix is merged, so a route collision
+is a `409`, and a `502` from `createFlow` now means a genuine store-upstream fault.)
 
 ---
 
@@ -673,22 +783,27 @@ validate is always the final publish-blocking gate (R11: both sides validate the
 Tests use **vitest** with **nock** mocking the admin API HTTP endpoints — no real engine, no real
 network, no Strapi DB needed for the unit layer. The two things under test are exactly the two the
 task names: the **publish-transform** and the **validation-hook/publish-sequence** logic. Every
-nock interceptor asserts the **wrapped envelope** and the **`Authorization: Bearer` header**.
+nock interceptor asserts the **flat body** (no `flow`/`connection` wrapper, `env` top-level) and the
+**`Authorization: Bearer` header**.
 
 ### 6.1 Unit — publish-transform (pure functions)
-- `flowToEnginePayload` wraps as `{ env:"", flow:{...} }` and reproduces the `seed.json` flow trees
-  (structure round-trip) for `fmc-order-by-id` / `orders-expedite`, preserving the mixed spec casing
-  (finding 10). Assert **no stray top-level fields** (strict-decoder safety, finding 1).
-- Fixtures array maps to the FlowFixture shape with `mocks`/`expect` **omitted when absent**
-  (finding 9); a `{name, input}`-only seed fixture round-trips.
-- `jdmToEnginePayload` wraps as `{ env:"", jdmId, version:0, doc }` and reproduces `seed.json` JDM
-  graphs (`fmc-payment`, `order`); assert `version === 0` is always present (finding 7).
-- `connectionToEnginePayload` wraps as `{ env:"", connection:{...} }`, passes `secretRef` through,
-  emits resilience as `{ timeoutMs, retry:{ maxAttempts } }` (finding 8), and **throws** when a
-  secret value appears in `settings` (assert the denylist catches `password`, `dsn`, `token`, etc.).
-  Fixtures are **credential-free discrete-shape** connections (`host/port/database` + `secretRef`),
-  NOT the literal seed DSNs (finding 3); a test explicitly asserts a seed-style `dsn` connection is
-  **rejected** by the transform.
+- `flowToEnginePayload` emits the flat `{ env:"", flowId, method, path, tree, fixtures }` body (no
+  `flow` wrapper) and reproduces the `seed.json` flow trees (structure round-trip) for
+  `fmc-order-by-id` / `orders-expedite`, preserving the mixed spec casing (finding 10). Assert **no
+  `flow` wrapper and no stray top-level fields** (strict-decoder safety, finding 1 + round-4
+  correction).
+- Fixtures array maps to the wire `AdminFixture` shape (`{name, input, mocks?, expect?}`) with
+  `mocks`/`expect` **omitted when absent** (finding 9); a `{name, input}`-only seed fixture round-trips.
+- `jdmToEnginePayload` emits the flat `{ env:"", jdmId, doc, version:0 }` body and reproduces
+  `seed.json` JDM graphs (`fmc-payment`, `order`); assert `version === 0` is always present (finding 7).
+- `connectionToEnginePayload` emits the flat `{ env:"", key, type, settings, secretRef, resilience }`
+  body (no `connection` wrapper), passes `secretRef` through, emits resilience **Go-cased with a ns
+  `Timeout`** — `{ Timeout:<ns>, Retry:{ MaxAttempts } }` (finding 5/8; assert the authored
+  `timeoutMs` ms is converted to the ns `Timeout`), and **throws** when a secret value appears in
+  `settings` (assert the denylist catches `password`, `dsn`, `token`, etc.). Fixtures are
+  **credential-free discrete-shape** connections (`host/port/database` + `secretRef`), NOT the literal
+  seed DSNs (finding 3); a test explicitly asserts a seed-style `dsn` connection is **rejected** by
+  the transform.
 
 ### 6.2 Unit — flow-canvas serializer (UI half)
 - Canvas graph → engine tree → canvas graph round-trip over the seed trees (branch keys, nesting,
@@ -698,12 +813,16 @@ nock interceptor asserts the **wrapped envelope** and the **`Authorization: Bear
   camelCase. A naive all-camelCase serialization fails this test.
 
 ### 6.3 Integration — validation hook + publish sequence (nock-mocked admin API)
-Each test asserts the **exact calls, order, wrapped payloads, and bearer header**, and the
+Each test asserts the **exact calls, order, flat payloads (no wrapper), and bearer header**, and the
 **blocking behavior**:
-- **Happy path**: assert order `listConnections` → `createConnection*` (only missing keys) →
-  `createJdm*` (each `{env:"", jdmId, version:0, doc}`) → `createFlow` → `validateFlow` (stored mode,
-  body `{env:"", flowId, version:N}` — §5.1.1) → `ok:true` → `publishFlow` (`{env:"", version:N}`);
-  every request carries `Authorization: Bearer <token>`.
+- **Happy path**: assert order `listConnections` → `createConnection*` (only missing keys, flat
+  `{env:"", key, type, settings, secretRef, resilience}`) → `createJdm*` (each flat `{env:"", jdmId,
+  doc, version:0}`) → `createFlow` (flat `{env:"", flowId, method, path, tree, fixtures}`) →
+  `validateFlow` (stored mode, body `{env:"", flowId, version:N}` — §5.1.1) → `ok:true` →
+  `publishFlow` (`{env:"", version:N}`); every request carries `Authorization: Bearer <token>` and no
+  request body carries a `flow`/`connection` wrapper. The test fixture provisions a token subject
+  with all three roles (`flow.read,flow.write,flow.publish`) so the mocked happy path mirrors a
+  correctly-provisioned real token (MED finding 2).
   - **Write-back source keys pinned (finding 4)**: the test asserts the version write-backs read
     **distinct** response keys — `flowEntry.engineVersion` from **`createFlow().version`** (the
     create response is `{flowId, version, validated:false}`), `jdmEntry.engineVersion` from
@@ -716,8 +835,19 @@ Each test asserts the **exact calls, order, wrapped payloads, and bearer header*
   `lastValidation`. (The flow version `N` was created but never validated — harmless.)
 - **Validator unreachable**: `validateFlow` → 503; assert publish blocked, `publishFlow` never
   called, recoverable error surfaced.
-- **Publish 409 (un-validated)**: force `publishFlow` → 409; assert abort + "validate first" surfaced
-  (defense-in-depth path, finding 5).
+- **Validate 404 (version not found) (NIT finding 3)**: stored-mode `validateFlow` → `404`; assert
+  publish blocked, `publishFlow` never called, non-recoverable "re-create and retry" surfaced,
+  `lastPublishStatus=failed`.
+- **Publish 422 (un-validated) (MED finding 1)**: force `publishFlow` → **422**; assert abort +
+  "validate first" surfaced (defense-in-depth path). The interceptor is keyed to **422**, matching
+  the engine's `config.ErrUnvalidated` mapping — a 409 interceptor here would never match the real
+  engine.
+- **Create route collision 409 (NIT finding 4)**: force `createFlow` → **409**
+  (`ErrRouteConflict`); assert abort, `validateFlow`/`publishFlow` never called, and the
+  author-fixable "route already owned" message (not a retry/outage copy) is surfaced;
+  `lastPublishStatus=failed`.
+- **Under-privileged operator 403 (MED finding 2)**: force `publishFlow` → **403**; assert abort,
+  non-recoverable "operator token lacks `flow.publish`" surfaced, and no retry.
 - **Secret in settings**: transform throws before any admin call; assert **zero** admin HTTP calls.
 - **`dsn` in settings (finding 3)**: a connection carrying `settings.dsn` is rejected by the
   transform before any call; assert zero admin HTTP calls.
@@ -725,10 +855,13 @@ Each test asserts the **exact calls, order, wrapped payloads, and bearer header*
   `publishFlow` not called, `lastPublishStatus=failed`.
 - **Connection reconcile (findings 11, 5)**: `listConnections` returns an existing key whose GET
   response carries driver-defaulted keys the author never set (`port:5432`, `sslmode:"disable"`) and
-  resilience in ns; assert `createConnection` is **not** called for it (settings compared on authored
-  keys with defaults filled, resilience ns→ms normalized), proving a defaulted/ns response does not
-  trigger a spurious re-create. A separate case with a genuinely changed `maxConns` **does** call
-  `createConnection`.
+  **Go-cased resilience** `{ Timeout: 2000000000, Retry: { MaxAttempts: 2 } }` (ns `Timeout`, verified
+  casing); assert `createConnection` is **not** called for it (settings compared on authored keys with
+  defaults filled, `Timeout` ns→ms normalized against the authored `timeoutMs`), proving a
+  defaulted/Go-cased/ns response does not trigger a spurious re-create. The test pins the response
+  object's top-level keys to the real `{ key, type, settings, secretRef, resilience }` (camelCase) and
+  the nested `resilience` to the Go-cased ns shape. A separate case with a genuinely changed
+  `maxConns` **does** call `createConnection`.
 - **Operator credential**: assert every intercepted admin request carries
   `Authorization: Bearer <token>` from env/Environment, and that no interceptor ever receives a
   secret value or the token in a body.
@@ -816,11 +949,16 @@ Notes on these pins (all verified via `npm view` 2026-10-03):
   the `admin-client` exposes a typed `audit(type, id)` method for it, but a polished in-product audit
   timeline (flow/jdm/connection history with actor + from/to version) is a follow-up; v1 ships the
   client method only (finding 12).
-- **DB-level operator audit attribution** — `slice-f` §3.5 proposes an actor-on-context seam so each
-  admin write attributes to the operator subject; its fallback attributes all admin writes to a
-  single `"admin"` actor with the operator subject in the access log. Either way this is an
-  engine-side concern, not a CMS one.
-- **Full RBAC role matrix** beyond the single operator role gating publish.
+- **DB-level operator audit attribution** — as-built, the engine took the actor-on-context seam
+  (`config.WithAuditActor(ctx, subject)`), so each admin write already attributes to the operator
+  subject carried on the bearer token. This is an engine-side concern, not a CMS one; the CMS just
+  presents a correctly-provisioned token (§5.1).
+- **A richer CMS-side RBAC** mapping distinct CMS editor roles to distinct per-env operator tokens
+  (e.g. a publisher role whose token carries `flow.publish`, an author role whose token carries only
+  `flow.write`+`flow.read`). v1 uses **one** operator token per Environment whose engine-side subject
+  carries all three roles `flow.read`+`flow.write`+`flow.publish` (§5.1/§5.6, MED finding 2); the
+  engine's route→role map (slice-f §3.4) is the authority, and splitting the CMS token by editor role
+  is a follow-up.
 
 ---
 
@@ -833,20 +971,45 @@ Notes on these pins (all verified via `npm view` 2026-10-03):
   ranges verified via `npm view`; both custom fields register with base `type: 'json'`.
 - Validation gate: §5.3 enforces `/admin/flows/validate` as publish-blocking (HLD §6b, AC-13,
   slice-d §5, slice-f §2.6), with the create→validate(stored-mode by version)→publish ordering.
-- Publish transform through the admin API only (never direct DB): §5.1–5.4 — wrapped envelopes
-  carrying `env=""`, `Authorization: Bearer` (ADR-005, STATE.md admin plane, slice-f §2–3, task
-  contract).
+- Publish transform through the admin API only (never direct DB): §5.1–5.4 — flat bodies carrying
+  `env=""` as a top-level sibling, `Authorization: Bearer` (ADR-005, STATE.md admin plane, as-built
+  slice-f, task contract).
 - `secret_ref` only, never a value: §3.3 + §5.2 + §5.5 (`[[config-and-secrets]]`, slice-d §2,
   slice-f §2.8, AC-20).
-- Tests mock the admin API and assert wrapped payloads + bearer header + that validation failure
-  blocks publish: §6 (task requirement 6).
+- Tests mock the admin API and assert flat payloads (no wrapper) + bearer header + that validation
+  failure blocks publish with the right status (422): §6 (task requirement 6).
 - Exact-version pinning: §7 (task requirement 7).
 
 ---
 
 ## 10. Responses to the design review
 
-### 10.1 Round 2 → round 3 (current revision)
+### 10.1 Round 3 → round 4 (current revision — against the FROZEN as-built admin API)
+
+Reviewed doc: `docs/.agents/tasks/strapi-cms/design-review.md` (round 3/4, verdict
+CHANGES_REQUESTED; 0 HIGH, 2 MEDIUM, 3 NIT). All 5 findings resolved; none backlogged. Every
+resolution was checked against the **merged, as-built admin API** (commit `df547be`) by reading the
+real Go handler structs (`internal/httpapi/admin_handlers.go`, `admin_validate.go`, `admin.go`) and
+the tag-less `connect.ConnectionDef`/`connect.ResiliencePolicy` (`internal/connect/connect.go`), not
+the design-phase spec prose. One correction beyond the five findings (R4-C, flat bodies) was caught
+while reading those structs and is called out because it is load-bearing for every §5/§6 payload.
+
+| # | Sev | Finding | Resolution |
+| --- | --- | --- | --- |
+| 1 | MED | Publish-blocking status is 422, not 409 | **Fixed.** Verified in `admin_handlers.go` (`setActive` comment + `statusForAdmin`) and the AS-BUILT block: an un-validated publish is `config.ErrUnvalidated` ⇒ **422**. Replaced every publish-path `409` with `422`: §5.1 `publishFlow` row, §5.3 step 4 + the "enforced twice" line, §5.4 step 6 + ordering rationale, §5.5 error row, §6.3 test name + interceptor ("Publish 422 (un-validated)"). `409` is kept **only** for the create-time route collision and corrected to its live behavior (next row). |
+| 2 | MED | Operator RBAC roles understated; single-role token 403s mid-sequence | **Fixed.** §5.1 (new "Operator token RBAC roles" bullet), §5.4 trigger note, and §5.6 ("Operator-token provisioning") state the token's engine-side subject must be granted **`flow.read`+`flow.write`+`flow.publish`** (slice-f §3.4 route→role map; the publish sequence touches all three). §5.5 adds a **403** row (not retry-recoverable; surfaces the specific missing role). §6.3 happy-path provisions all three roles; a dedicated 403 test asserts the mid-sequence abort. |
+| 3 | NIT | Stored-mode validate 404 (version not found) unhandled | **Fixed.** Verified in `admin_validate.go` (stored-mode `GetFlowVersion` ⇒ `NotFound` ⇒ 404). §5.1.1 and the §5.1 table note the 404; §5.5 adds a `validateFlow → 404 (version not found)` row (not retry-recoverable); §6.3 adds a validate-404 test. |
+| 4 | NIT | Route collision reports 502, not an author-fixable 4xx | **Fixed (reconciled to as-built).** The slice-f §2.3 store fix **landed** (AS-BUILT block: `classifyPg` detects SQLSTATE `23505` on `flows_method_path_key` ⇒ `config.ErrRouteConflict` ⇒ **409**), so the round-3 "502 forever" hedge is removed. §5.5 adds a `createFlow → 409 route collision` row with author-fixable copy; §5.6 adds a client-side route `(method,path)` uniqueness pre-check against existing Flow entries; a `502` from `createFlow` now unambiguously means a store-upstream fault. §6.3 adds a create-409 test. |
+| 5 | NIT | `GET /admin/connections` key casing not verified against `connect.ConnectionDef` | **Fixed (verified against source).** Read `listConnections` (`admin_handlers.go`) and `connect.ConnectionDef`/`ResiliencePolicy` (`connect.go`). The handler builds an **explicit map**, so the **top-level** keys are camelCase (`key/type/settings/secretRef/resilience`) — but the nested `resilience` value is the raw **tag-less** `ResiliencePolicy`, so it serializes **Go-cased** with `Timeout` as a **nanosecond** integer and `Retry.MaxAttempts`/`Breaker.*`. Pinned §3.3.2 (both request + response are Go-cased ns), §5.4 reconcile (read `resilience.Timeout` ns + `resilience.Retry.MaxAttempts`), and §6.3 reconcile test (feeds the Go-cased ns shape). |
+| R4-C | — | **(beyond review) Request bodies are FLAT, not wrapped** | **Fixed.** The create handlers (`createFlowRequest`/`createJDMRequest`/`createConnectionRequest`) decode **flat** bodies with `env` top-level and `DisallowUnknownFields` — no `{env, flow:{…}}`/`{env, connection:{…}}` wrapper (candidate-mode validate is the only `flow`-wrapped body, which the CMS doesn't use). Rounds 1–3 emitted a wrapper that the real decoder would 400. Corrected the header box, §5.1 strict-shapes bullet + methods table, §5.2 transform outputs, and all §6.1/§6.3 payload assertions to the flat shapes. This also subsumes round-3 finding 1's intent: the stored-mode validate body `{env, flowId, version}` is already flat and correct. |
+
+### 10.2 Round 2 → round 3 (prior revision)
+
+Reviewed doc: `docs/.agents/tasks/strapi-cms/design-review.md` (round 2, verdict CHANGES_REQUESTED;
+0 HIGH, 3 MEDIUM, 2 NIT). All 5 findings resolved; none backlogged. Each resolution was checked
+against the **real** source in the worktree (`.worktrees/admin-api/docs/lld/slice-f-admin-api.md`
+and `internal/connect/drivers/postgres.go`), and the stale `slice-f §3.x` section citations
+inherited from round 2 were corrected to the real spec's `§2.x`/`§3`/`§9` numbering.
 
 Reviewed doc: `docs/.agents/tasks/strapi-cms/design-review.md` (round 2, verdict CHANGES_REQUESTED;
 0 HIGH, 3 MEDIUM, 2 NIT). All 5 findings resolved; none backlogged. Each resolution was checked
@@ -869,7 +1032,7 @@ The round-2 design claimed `GET /admin/audit/{type}/{id}` was **not** mounted in
 in-product audit **viewer** as editorial scope — the earlier `NotImplemented` stub framing is
 removed. Flagged here for traceability since it contradicts a round-2 "fixed" claim.
 
-### 10.2 Round 1 → round 2 (prior revision)
+### 10.3 Round 1 → round 2 (prior revision)
 
 Reviewed doc (round 1): verdict CHANGES_REQUESTED; 4 HIGH, 5 MEDIUM, 4 NIT. All 13 findings addressed;
 none backlogged.

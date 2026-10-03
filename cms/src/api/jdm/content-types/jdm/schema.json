@@ -5,7 +5,7 @@
     "singularName": "jdm",
     "pluralName": "jdms",
     "displayName": "Jdm",
-    "description": "A versioned GoRules ZEN decision graph (design §3.2), mirroring the engine's jdms + jdm_versions. `doc` is a plain json field for now; FEAT-004 repoints it to the rule-engine.jdm-editor custom field."
+    "description": "A versioned GoRules ZEN decision graph (design §3.2), mirroring the engine's jdms + jdm_versions. `doc` is authored on the rule-engine.jdm-editor custom field (base type json)."
   },
   "options": {
     "draftAndPublish": true
@@ -17,7 +17,8 @@
       "required": true
     },
     "doc": {
-      "type": "json"
+      "type": "customField",
+      "customField": "plugin::rule-engine.jdm-editor"
     },
     "environment": {
       "type": "relation",

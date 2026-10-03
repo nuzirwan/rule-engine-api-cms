@@ -1,0 +1,7 @@
+{
+  "task_id": "task-strapi-cms",
+  "task_description": "Build a working Strapi 5 CMS control-plane module under .worktrees/strapi-cms/cms, isolated from the Go module: scaffold with exact-pinned deps; four content types mirroring the engine config model (Flow/Jdm/Connection/Environment) with draft/publish; two editor custom fields (@gorules/jdm-editor ZEN editor + a reactflow 11 flow-canvas serializing to the engine's recursive Node tree); and the publish pipeline (publish-transform + admin-client + validation hook) that pushes CMS content THROUGH the admin HTTP API only (create connection/jdm/flow -> validate(stored {flowId,version:N}) -> publish), with flat bodies carrying env=\"\" and Authorization: Bearer, secret_ref only (never raw secrets), vitest+nock tests asserting ordering/payloads/header and that a 422 / unreachable-validator / detected-inline-secret EACH block publish with zero createFlow/publishFlow calls. The Go module must remain untouched.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

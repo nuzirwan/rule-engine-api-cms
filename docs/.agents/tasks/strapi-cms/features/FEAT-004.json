@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Mount the two visual editors as Strapi 5 custom fields and surface validation results (design §4, §5 ValidationPanel): JdmEditorField (@gorules/jdm-editor DecisionGraph), FlowCanvasField (reactflow 11 canvas using the FEAT-003 pure serializer), and ValidationPanel. Register both custom fields with base type:'json' from the plugin admin entrypoint, and point Flow.tree/Jdm.doc at them. Depends on FEAT-003 (the serializer and the server services) and FEAT-002 (the content types). This is the UI layer; its gate is that the Strapi admin builds with both custom fields registered and the serializer round-trip test still passes.",
+  "steps": [
+    "Plugin admin entrypoint (cms/src/plugins/rule-engine/admin/src/index.ts) per §4: app.customFields.register for rule-engine.flow-canvas and rule-engine.jdm-editor, BOTH with type:'json' (design finding 13), wiring the components below.",
+    "JdmEditorField (admin/src/components/JdmEditorField/) per §4.1: wrap @gorules/jdm-editor <JdmConfigProvider>/<DecisionGraph value onChange> in a @strapi/design-system Field, debounce onChange, write the serialized graph back via Strapi onChange({target:{name,value,type:'json'}}). Falls back to a raw-JSON editor + error if the stored value fails to parse (never a blank/broken editor).",
+    "FlowCanvasField (admin/src/components/FlowCanvasField/) per §4.2: a reactflow 11 <ReactFlow> canvas with the engine Node palette (trigger/action/condition/switch/sequence/parallel/forEach/decision/set/logger/response) and per-node spec side-panel forms; use the FEAT-003 pure serialize.ts to convert canvas<->engine tree on change, keeping x/y in the sidecar layout map; same raw-JSON fallback on parse failure. Reuse (do not duplicate) serialize.ts from FEAT-003.",
+    "ValidationPanel (admin/src/components/ValidationPanel/) per §5.3/§5.4: render the lastValidation {structural[], fixtures[]} result inline (structural codes + per-fixture pass/fail diffs); shown on the Flow edit view.",
+    "Point Flow.tree at the rule-engine.flow-canvas custom field and Jdm.doc at rule-engine.jdm-editor in their schema.json (replacing the FEAT-002 plain json), confirming the base type stays json so Strapi persists the serialized value into the JSON column (no double-encode).",
+    "Add the lightweight admin smoke test (design §6.4): both fields register with base type:'json' without throwing; a malformed stored JSON renders the raw-JSON fallback rather than crashing."
+  ],
+  "acceptance_criteria": [
+    "`npm run build` succeeds with both custom fields registered and Flow.tree/Jdm.doc pointing at them (the Strapi admin bundle compiles).",
+    "Both custom fields register with base type:'json' (asserted by the §6.4 smoke test).",
+    "The FlowCanvasField consumes the SAME serialize.ts delivered in FEAT-003 (no duplicated serializer); the §6.2 round-trip + casing test still passes.",
+    "A malformed stored JSON value renders the raw-JSON fallback, not a crash (smoke test).",
+    "`npm run test` (full suite incl. FEAT-003 tests + the §6.4 smoke) runs green."
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/strapi-cms/cms && npm run build  (exit 0 — admin bundle with both custom fields compiles)",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/strapi-cms/cms && npm run test  (vitest run exits 0 — serializer round-trip + §6.4 smoke pass)",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/strapi-cms && CGO_ENABLED=1 go build ./...  (exit 0 — Go untouched)"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

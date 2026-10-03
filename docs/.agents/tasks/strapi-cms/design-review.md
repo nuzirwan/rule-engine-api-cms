@@ -1,239 +1,241 @@
-# Design Review — Strapi CMS control-plane module (round 4)
+# Design Review — Strapi CMS control-plane module (round 5, resume)
 
-Reviewed doc: `docs/.agents/tasks/strapi-cms/design.md` (status: "revised after design-review (round 3)").
+Reviewed doc: `docs/.agents/tasks/strapi-cms/design.md` (status: "revised after design-review
+(round 4) — reconciled to the FROZEN as-built admin API").
 Reviewer: fresh design-review subagent, no authoring context.
 Date: 2026-10-03.
 
-Sources read and cross-checked:
-- `.worktrees/admin-api/docs/lld/slice-f-admin-api.md` (the real admin-API wire contract)
-- `docs/lld/slice-d-configstore.md` (config store + versioning + validate/dry-run)
-- `docs/lld-contracts.md` (`Store`/`FlowVersion`/`FlowFixture` seams)
-- `internal/connect/drivers/postgres.go` (the real postgres driver `buildDSN`/`applyPoolSettings`)
-- `internal/config/testdata/seed.json` (the real flow trees, JDM graphs, connections, fixtures)
-- worktree layout under `.worktrees/strapi-cms` and `go.mod`
+This is a **resume review**. The design was already APPROVED on the big architectural calls; the
+round-4 review left **0 HIGH, 2 MEDIUM, 3 NIT** findings. The job here is to verify those five
+findings are now correctly closed against the FROZEN, AS-BUILT admin contract — not to re-litigate
+settled architecture. Wire-level details were checked against `slice-f-admin-api.md` **and** the
+real Go source in the worktree's `internal/`, not against the design's prose.
 
-Verdict basis: this is round 3 of the design and most of the earlier structural problems are
-genuinely fixed and verifiable against source. One concrete, test-affecting contract mismatch
-remains, plus a few smaller gaps. Count of HIGH+MEDIUM findings drives the verdict.
+Sources read and cross-checked (as-built):
+- `docs/lld/slice-f-admin-api.md` — the AS-BUILT admin-API contract (merged @ `df547be`), incl. the
+  "AS-BUILT reconciliation" block, §2.3/§2.4/§2.6/§2.8/§2.9 status map, and §3.3/§3.4 RBAC.
+- `internal/connect/connect.go` — the real `connect.ConnectionDef` and `connect.ResiliencePolicy`
+  struct definitions (JSON-tag check).
+- `internal/httpapi/admin_handlers.go` — the real `createFlowRequest` / `setActiveRequest` /
+  `createJDMRequest` / `createConnectionRequest` structs, `setActive`, and the `listConnections`
+  response-building map.
+- `internal/httpapi/admin.go` — `statusForAdmin` error→status map, `decodeJSON`
+  (`DisallowUnknownFields`), `knownMethods`.
+- `internal/httpapi/admin_validate.go` — `validateFlowRequest` / `candidateFlowBody`, stored-vs-
+  candidate discriminator, stored-mode 404 path.
+- `internal/httpapi/admin_test.go` — `TestStatusForAdmin`, `TestAdminPublishUnvalidated`,
+  `TestAdminListConnectionsRedacts` (pin the as-built status codes + list keys).
+
+Verdict basis: the five round-4 findings are each verified **closed and correct against source**.
+No new HIGH/MEDIUM arose. Count of HIGH+MEDIUM drives the verdict.
 
 ---
 
-## Findings
+## Status of the five round-4 findings
 
-### 1. MEDIUM — Publish-blocking status code is wrong: design says 409, the real spec says 422
+### Finding 1 (MED, round 4) — Publish-blocking status is 422, not 409 — CLOSED ✓
 
-The design states throughout that publishing a not-yet-validated flow version returns **409**:
+Verified against source:
+- `statusForAdmin` (`internal/httpapi/admin.go`) maps `config.ErrUnvalidated → 422`
+  (`http.StatusUnprocessableEntity`) and `config.ErrRouteConflict → 409` (`http.StatusConflict`) as
+  two **distinct** sentinels matched before the generic `config.ErrValidation → 400`. `slice-f` §2.4/
+  §2.9 and the AS-BUILT block agree.
+- `setActive` (`admin_handlers.go`) routes a `SetActive` error through `a.fail → statusForAdmin`, so
+  a publish of an un-validated version surfaces as **422**. `TestAdminPublishUnvalidated` and
+  `TestStatusForAdmin` pin this.
 
-- §5.1 methods table: `publishFlow` — "**409 if the version is not validated**".
-- §5.3 step 5 and the closing sentence: "even a stray `publishFlow` would 409".
-- §5.4 step 6: "if 409 'not validated': abort".
-- §5.5 error table row: "**409 un-validated version**".
-- §6.3 test: "**Publish 409 (un-validated)**: force `publishFlow` → 409".
-
-The real contract disagrees. `slice-f` §2.4 is explicit:
-
-> `SetActive` refuses an un-validated version (publish-blocking, AC-13), so publishing a
-> never-validated version returns **`422 Unprocessable Entity`** (mapped from the store's
-> `Validation` "cannot publish un-validated" case — see §2.9 for why this one maps to 422 not 400).
-
-`slice-f` §2.9 confirms it in the status table: `config.Validation "publish un-validated" → 422`.
-The **only** `409` in the entire `slice-f` spec is the create-time route `(method,path)` collision
-on `POST /admin/flows`, and even that is **contingent on an unlanded store fix** — until that fix
-lands the engine reports `502` for a route collision (`slice-f` §2.3, §2.9). So `409` is not the
-publish-gate code under any reading.
-
-Why this blocks: §6.3's "Publish 409 (un-validated)" nock test would assert the wrong HTTP status.
-A nock interceptor keyed to 409 will not match the engine's 422, so the test either fails or (worse)
-passes against a mock that encodes the wrong contract and ships a client that mishandles the real
-422. §5.5's error-handling row also keys recovery/UX off the wrong code.
-
-Concrete fix: replace every "409 (un-validated / not validated)" occurrence for the **publish** path
-with **422**. Specifically:
-- §5.1 `publishFlow` row: "`200 { flowId, activeVersion, action:"publish" }`; **422 if the version
-  is not validated**".
-- §5.3 step 5 / closing line: "a stray `publishFlow` would **422**".
+Design closure is correct and complete:
+- §5.1 methods table: `publishFlow` row says "**422 if the version is not validated**
+  (`config.ErrUnvalidated`)".
+- §5.3 step 4/closing line: "a stray `publishFlow` would **422** (publish-blocking,
+  `config.ErrUnvalidated` — not 409)".
 - §5.4 step 6: "if **422** 'not validated': abort".
-- §5.5 table: "**422** un-validated version".
-- §6.3 test name + interceptor: "Publish 422 (un-validated): force `publishFlow` → 422".
+- §5.5 error table: `publishFlow`/`rollbackFlow` → "**422 un-validated version**
+  (`config.ErrUnvalidated`)".
+- §6.3 test: "**Publish 422 (un-validated)**… interceptor is keyed to **422**… a 409 interceptor
+  here would never match".
 
-Keep `409` only if/when the design intends to model the create-time route collision — and if it
-does, note that collision currently surfaces as `502` until the `slice-f` §2.3 store fix lands (see
-finding 4).
+`409` is kept **only** for the create-time route `(method,path)` collision, and crucially the
+round-3 "502 until a store fix lands" hedge is **removed** — correct, because the AS-BUILT block
+confirms the fix landed: `classifyPg` detects SQLSTATE `23505` on `flows_method_path_key` and wraps
+it as `config.ErrRouteConflict ⇒ 409`. This is a live code path, not contingent. §5.5/§5.6/§6.3 all
+treat the collision as an author-fixable live `409`.
 
-### 2. MEDIUM — Operator RBAC role requirement is understated; a single "operator role" token will 403 on publish
+### Finding 2 (MED, round 4) — Operator RBAC understated — CLOSED ✓
 
-§5.4 and §5.1 describe the operator credential as one bearer token with a single "operator role
-only" (Strapi RBAC) gating publish. But `slice-f` §3.4 defines a **route→role RBAC map** on the
-engine side with **distinct** roles the bearer token's subject must actually carry:
+Verified against `slice-f` §3.4 RBAC map: creates → `flow.write`; publish/rollback → `flow.publish`;
+validate/dry-run and `GET /admin/connections` + audit → `flow.read`. The full publish sequence
+(reconcile via `listConnections` → creates → stored-mode validate → publish) therefore touches all
+three roles, exactly as the design now states.
 
-| Route the CMS calls | Required engine role (`slice-f` §3.4) |
-| --- | --- |
-| `POST /admin/flows`, `/admin/jdms`, `/admin/connections` | `flow.write` |
-| `POST /admin/flows/{id}/publish`, `/rollback` | `flow.publish` |
-| `POST /admin/flows/validate`, `/dry-run` | `flow.read` |
-| `GET /admin/connections`, `GET /admin/audit/...` | `flow.read` |
+Design closure is correct and complete:
+- §5.1 "Operator token RBAC roles — all three (MED finding 2)": states the engine-side **subject**
+  of the CMS operator token must be granted `flow.read` + `flow.write` + `flow.publish` in the
+  engine's `ADMIN_TOKENS` (e.g. `…:op:strapi:flow.read,flow.write,flow.publish`), configured
+  engine-side, not in the CMS; explains the single-role token 403s mid-sequence.
+- §3.4 Environment `operatorTokenRef` note and §5.6 "Operator-token provisioning" repeat the
+  three-role requirement as an engine-side provisioning requirement the CMS documents but cannot
+  enforce.
+- §5.5 adds the `any admin op → 403 (authenticated but role not granted)` row: not retry-recoverable,
+  surfaces "operator token lacks the required engine role", token redacted.
+- §6.3 happy-path provisions a token subject with all three roles, and adds an "Under-privileged
+  operator 403" case forcing `publishFlow → 403`.
 
-The engine's `ADMIN_TOKENS` entry maps each token to `subject : comma-roles` (`slice-f` §3.3). A
-CMS operator token provisioned with only one role (e.g. `flow.write`) will succeed on create but get
-a **403** on `publishFlow` (needs `flow.publish`), and a token with only `flow.publish` will 403 on
-create. The full publish sequence (reconcile → create connections/JDMs → createFlow → validate →
-publish) touches **all three** roles: `flow.read` (listConnections, validate), `flow.write` (creates),
-and `flow.publish` (publish/rollback).
+### Finding 3 (NIT, round 4) — Stored-mode validate 404 unhandled — CLOSED ✓
 
-Why this matters: the design never states the token subject must carry `flow.read` + `flow.write` +
-`flow.publish`, nor does §5.5 handle the 403 for a correctly-authenticated-but-under-privileged token
-(the 401 row covers only missing/invalid bearer). An operator setting up the CMS from this design
-would hand it a single-role token and the publish flow would fail mid-sequence with an unhandled 403.
+Verified against `admin_validate.go`: stored mode (`stored := req.FlowID != "" && req.Version > 0`)
+calls `a.store.GetFlowVersion(...)`; a `NotFound` is routed through `a.fail → statusForAdmin
+(config.ErrNotFound → 404)`. `slice-f` §2.6 confirms the 404 is the one non-200 validate case.
 
-Concrete fix:
-- In §5.1 (Operator credential) and §3.4/§5.6, state that the CMS operator token's engine-side
-  subject **must be granted all three roles** `flow.read, flow.write, flow.publish` (per `slice-f`
-  §3.3/§3.4), and that this is configured in the engine's `ADMIN_TOKENS`, not in the CMS.
-- Add a §5.5 error row: `any admin op → 403 (authenticated but role not granted) | no (fix token
-  roles) | "operator token lacks required role (<route needs flow.write/publish/read>)" | error,
-  token redacted`.
-- Optionally add a §6.3 assertion that the test token subject is configured with all three roles so
-  the mocked happy-path mirrors a correctly-provisioned real token.
+Design closure: §5.1 methods table (stored-mode `version` that resolves to no stored version ⇒ 404),
+§5.1.1, and the §5.5 row `validateFlow → 404 (version not found)` — not retry-recoverable, "created
+version not found; re-create and retry", `lastPublishStatus=failed`. §6.3 adds a "Validate 404" test
+asserting publish is blocked and `publishFlow` never called.
 
-### 3. NIT — Stored-mode validate can return 404; neither the error table nor the sequence handles it
+### Finding 4 (NIT, round 4) — Create-time route collision reconciled — CLOSED ✓
 
-§5.1.1 pins the publish gate to stored-mode validate (`{env, flowId, version:N}`). `slice-f` §2.6
-states that stored mode is the **one** validate case that can be non-200: "A `version` that resolves
-to **no stored version** is a `404` ... a request to validate a thing that doesn't exist is a bad
-request, not a negative result." The design's §5.3/§5.5 handle only transport/5xx and `200 ok:false`
-for `validateFlow` — a 404 falls through unclassified.
+Verified: `config.ErrRouteConflict ⇒ 409` is live (AS-BUILT block + `statusForAdmin` +
+`TestStatusForAdmin`). The round-3 "502 until a store fix lands" hedge is removed everywhere.
 
-In the normal publish sequence this should not fire (step 4 `createFlow` persists `N` immediately
-before step 5 validates `N`), so it is a NIT, not a gate. But a race (version pruned, wrong `N`
-written back, retry against a stale entry) would surface a 404 the client treats as an unexpected
-error.
+Design closure: §5.5 `createFlow` row maps a 409 collision to a non-misleading author-fixable message
+("route `<method> <path>` is already owned by another flow — change the route or edit the existing
+flow"), explicitly **not** a "retry, engine unavailable" copy; it also notes that a `502` from
+`createFlow` now means a genuine store-upstream fault. §5.6 adds a client-side route-uniqueness
+pre-check against existing active Flow entries before `createFlow`. §6.3 adds a "Create route
+collision 409" test. UX copy is non-misleading.
 
-Concrete fix: add a `validateFlow → 404 (version not found)` row to §5.5 — not recoverable by retry,
-surface "created version not found; re-create and retry", `lastPublishStatus=failed`. One line.
+### Finding 5 (NIT, round 4) — `GET /admin/connections` key casing — CLOSED ✓ (and the casing claim is exactly right)
 
-### 4. NIT — §5.5 treats all create 4xx as a fixable author error, but a route collision currently returns 502
+This is the finding most prone to a wrong fix, so it was verified byte-for-byte against source:
 
-§5.5 maps `createFlow` failures as either "4xx (bad payload / 400 unknown field / dsn in settings) →
-not recoverable, author must fix" or "5xx/transport → recoverable, retry". Per `slice-f` §2.3/§2.9 a
-`(method, path)` **route collision** (a different `flowId` claiming an owned route) currently surfaces
-as **`502`** (the `409` mapping is contingent on an unlanded `internal/config` fix). So a genuinely
-permanent, author-fixable error (two flows claiming one route) is reported by the engine today as a
-transient-looking `502`, and the design's error table would tell the author "engine unavailable,
-retry" forever.
+- `internal/connect/connect.go`: **`ConnectionDef` has NO JSON tags** (`Key, Type string; Settings
+  map[string]any; SecretRef string; Resilience ResiliencePolicy`), and **`ResiliencePolicy` has NO
+  JSON tags** (`Timeout time.Duration; Retry struct{ MaxAttempts int; BaseBackoff, MaxBackoff
+  time.Duration }; Breaker struct{ FailureThreshold uint32; FailureRatio float64; OpenTimeout
+  time.Duration }`). A raw marshal of `ConnectionDef` would therefore produce **Go-cased** top-level
+  keys `Key/Type/Settings/SecretRef/Resilience`.
+- **But the handler does not raw-marshal the struct.** `listConnections` (`admin_handlers.go`)
+  builds an **explicit `map[string]any`** per def with camelCase top-level keys
+  `{"key","type","settings","secretRef","resilience"}`. So the top-level casing the CMS reads back is
+  **camelCase** — matching the §2.8 prose and the design's §5.1 methods table / §5.4 reconcile.
+- **The nested `resilience` value is the tag-less struct emitted raw** (`"resilience": d.Resilience`),
+  so it serializes **Go-cased**: `Timeout` as a `time.Duration` **nanosecond integer**,
+  `Retry.MaxAttempts`, `Retry.BaseBackoff`/`MaxBackoff`, and `Breaker.{FailureThreshold,FailureRatio,
+  OpenTimeout}`.
 
-Concrete fix: add a note to the §5.5 `createFlow` rows that a `502` from `POST /admin/flows` **may**
-be a route `(method,path)` collision rather than an outage until the `slice-f` §2.3 store fix lands,
-and that the CMS should pre-validate route uniqueness client-side (it already validates the `path`
-pattern in §5.6 — extend to a uniqueness check against existing flows, or at least surface "route may
-already be owned by another flow" on a 502 from create). Low priority because it depends on an engine
-fix the CMS cannot make, but worth stating so the UX copy is not actively misleading.
+The design captures this split **exactly**:
+- §3.3.2 pins both the create-request and GET-response `resilience` to the tag-less Go-cased ns shape
+  `{ Timeout:<ns>, Retry:{ MaxAttempts, … }, Breaker:{…} }`, and has the transform convert authored
+  `timeoutMs`(ms) ↔ `Timeout`(ns).
+- §5.1 methods table `listConnections` row: "**Top-level keys camelCase; `resilience` nested value is
+  Go-cased `{ Timeout:<ns>, Retry:{ MaxAttempts, … }, Breaker:{…} }`** (tag-less struct)".
+- §5.4 reconcile compares top-level camelCase `settings`/`secretRef`, reads `resilience.Timeout`(ns)
+  → ms and `resilience.Retry.MaxAttempts`.
+- §6.3 reconcile test pins the response top-level keys to camelCase `{key,type,settings,secretRef,
+  resilience}` and the nested `resilience` to Go-cased ns `{ Timeout: 2000000000, Retry:{ MaxAttempts:
+  2 } }`.
 
-### 5. NIT — `listConnections` response field name assumed `secretRef`; verify against the engine's JSON casing
-
-§5.1 methods table and §5.4 reconcile assume `GET /admin/connections` returns objects with a
-`secretRef` key (camelCase). `slice-f` §2.8's response example does use `secretRef`, so this is
-consistent with the spec prose — but the design elsewhere (§4.2, finding 10) correctly warns that Go
-structs serialized without JSON tags leak Go-cased keys (e.g. `Kind/Payload/Required`). The
-connection-list response is produced by the engine from `connect.ConnectionDef`; if that struct
-serializes without JSON tags, the real keys could be `Key/Type/Settings/SecretRef/Resilience`
-(Go-cased), not the camelCase the design's `settingsDiffer`/reconcile compares against.
-
-The design did not verify the actual JSON casing of the `GET /admin/connections` response against the
-`connect.ConnectionDef` struct tags (it was verified for the flow `tree`'s `operation` sub-object but
-not for the connection-list response). Concrete fix: confirm the serialized casing of
-`connect.ConnectionDef` (read the struct tags in `internal/connect`) and pin the reconcile
-comparison + the `audit()`/`listConnections` client types to the real keys, exactly as §4.2 does for
-the flow tree. If the keys are Go-cased, §5.4 and §6.3's reconcile test must compare `SecretRef`/
-`Settings`, not `secretRef`/`settings`.
+This is a precise, source-faithful close — notably it did **not** make the common mistake of
+assuming the whole response is Go-cased or the whole response is camelCase.
 
 ---
 
-## Verified Assumptions (checked against source, correct)
+## Round-4 contract correction (flat bodies) — verified, not a regression
 
-1. **Connection settings follow the real driver.** `internal/connect/drivers/postgres.go`:
-   `buildDSN` reads discrete `host/port/database/user/sslmode` (and a `dsn` wins if present);
-   `applyPoolSettings` reads nested `pool.maxConns`/`pool.minConns`; the password is injected from
-   the resolved secret, never from the DSN string. Design §3.3.1's discrete, credential-free,
-   `pool.{maxConns,minConns}` shape — and its deliberate omission of a flat `poolMax` and a `schema`
-   key — is accurate.
-2. **Seed connections embed credentials in `settings.dsn`.** `seed.json` `fmc-pg` is
-   `postgres://root:root@127.0.0.1:5432/fmc_utility...` and `orders-pg` carries a `dsn` too. Design
-   §3.3.1's "seed DSNs are a dev-only artifact the CMS does not reproduce; the CMS authors the
-   discrete credential-free shape" is correct, and the `dsn` blanket denylist reject matches both the
-   engine edge (`slice-f` §2.8) and the fact that the CMS never emits `dsn`.
-3. **Mixed operation key casing.** `seed.json` confirms `operation.{Kind,Payload,Required}` are
-   capitalized (Go-struct keys, no JSON tags) while `trueKey/falseKey`, `targetPath/from`,
-   `jdmId/input/saveAs`, `connection/saveAs` are camelCase. Design §4.2 finding 10 and the §6.2
-   casing test are accurate.
-4. **Resilience has three encodings.** `seed.json` uses flat `{timeoutMs, maxAttempts}`; `slice-f`
-   §2.8 request uses `{timeoutMs, retry:{maxAttempts}}`; the GET response marshals `timeout` in ns.
-   Design §3.3.2's "send request shape, read ns response, convert ns→ms on compare" is accurate.
-5. **Seed fixtures assert nothing.** `seed.json` fixtures are `{name, input}` only (no `mocks`/
-   `expect`). Design §3.1.1's nullable `mocks`/`expect` and the §6.3 "use a fixture that declares an
-   `expect`" for the blocking test are the right call.
-6. **Wrapped envelopes + `DisallowUnknownFields`.** `slice-f` §2 decodes bodies strictly. Design
-   §5.1/§5.2's `{env, flow}` / `{env, connection}` / `{env, jdmId, version:0, doc}` envelopes and the
-   "no stray fields" assertion are correct.
-7. **Payload `env` is `""`, cross-env by base URL.** `slice-f` §2.9: absent or `""` ok, any non-empty
-   `env` → 400; `seed.json` `env` is `""`. Design §3.4's `payloadEnv` default `""` + per-Environment
-   base URL selection is correct.
-8. **Operator auth is separate from the public JWT.** `slice-f` §3.1–3.3: distinct `OperatorGuard`,
-   `Authorization: Bearer <token>`, engine stores `sha256` hashes in `ADMIN_TOKENS`, deny-by-default/
-   mount-closed. Design §5.1's named `ADMIN_API_OPERATOR_TOKEN` (CMS plaintext) vs the engine's hash
-   list, never configured by the CMS, is accurate.
-9. **Create→validate(stored)→publish ordering.** `slice-f` §2.3 lands `validated=false`, §2.6
-   stored-mode marks validated by `{flowId, version}`, publish refuses un-validated. Design §5.4's
-   ordering is correct (and necessary).
-10. **JDM create == activate, `version:0` auto-assign.** `slice-f` §2.8: `PutJDMVersion` inserts and
-    activates in one txn; `version<=0` ⇒ auto-assign. Design §3.2/§5.2 (`version:0`, write-back from
-    the create response) is correct.
-11. **Audit route IS mounted.** `slice-f` §2.1 mount block registers `GET /admin/audit/{type}/{id}`
-    and §2.8 documents it. Design §5.1/§8 R3-C's correction (ship a typed `audit()` client, defer the
-    viewer) is accurate.
-12. **Response shapes.** `slice-f` §2.3 `createFlow → {flowId, version, validated:false}`; §2.8
-    `createJdm → {jdmId, version}`, `createConnection → {key, version}`. Design §6.3's pinned
-    write-back source keys (`createFlow().version`, `createJdm().version`,
-    `publishFlow().activeVersion`) are correct.
-13. **Persisted `FlowFixture` is thin.** `lld-contracts.md` + `slice-f` §4.2: persisted
-    `config.FlowFixture` is `{Name, Input, Want}`; the admin plane accepts a richer in-flight
-    `AdminFixture` with `Mocks`/structured `Expect`. Design §3.1.1's present-only mapping is
-    consistent (the CMS emits what the create/validate request accepts).
-14. **Worktree isolation.** `.worktrees/strapi-cms/go.mod` has no Node/Strapi/React references; the
-    `cms/` subtree does not yet exist (expected — this is a design). The design's isolation rules
-    (edit only `cms/**`, no Node in `go.mod`, no Node files in Go `internal/`/`cmd/`) are consistent
-    with the current state.
-15. **Exact pinning.** §7 pins all direct deps with no `^`/`~`, `save-exact=true`, committed
-    lockfile, `npm ci` in CI. Meets the task's pinning requirement. (npm registry version/peer claims
-    could not be re-verified from this environment — see note below — but they are internally
-    consistent and the pinning discipline itself is sound.)
+The revision also carried a load-bearing correction beyond the five findings: the admin create bodies
+are **flat objects with `env` as a top-level sibling**, not a `{env, flow:{…}}` / `{env,
+connection:{…}}` wrapper. Verified against source and consistent — this is a correctness improvement,
+not a break of a kept architectural call:
+- `createFlowRequest` = `{ Env, FlowID, Method, Path, Tree, Fixtures, Note, Version(ignored) }` — flat.
+- `setActiveRequest` = `{ Env, Version, Reason }` — flat.
+- `createJDMRequest` = `{ Env, JDMID, Doc, Version, Note }` — flat.
+- `createConnectionRequest` = `{ Env, Key, Type, Settings, SecretRef, Resilience, + rejectIfPresent
+  secret-value fields }` — flat.
+- `validateFlowRequest` = `{ Env, FlowID, Version, Flow *candidateFlowBody }` — candidate mode is the
+  **one** body carrying a `flow` sub-object; stored mode is flat `{env, flowId, version}`. The CMS
+  uses stored mode on the publish path.
+- `decodeJSON` (`admin.go`) uses `DisallowUnknownFields`, so a wrapper or stray field is a hard 400 —
+  which is exactly why the flat shape is load-bearing. The design's §5.1/§5.2/§6 all emit flat bodies
+  and assert "no wrapper, no stray fields".
+
+The round-4 review (`design-review.md` round 4) had, under its "Verified Assumptions", described the
+bodies as wrapped `{env, flow}` envelopes. The round-4 **revision** corrected that against the merged
+handler structs; the correction is right and the earlier assumption was the wrong one. Flagging only
+to note the lineage — the current design matches source.
+
+---
+
+## Internal consistency & kept architectural calls — intact
+
+Spot-checked that the revision did not break the previously-APPROVED calls:
+- **Env-by-base-URL, payload `env=""`** (§3.4): consistent; `checkEnv` + `slice-f` §2.9 ("non-empty
+  env ⇒ 400") confirm the single served env `""`.
+- **JDM create == activate, `version:0` auto-assign** (§3.2/§5.2/§5.4 step 2): consistent with
+  `slice-f` §2.8 and `createJDMRequest` (`version<=0 ⇒ auto-assign`); write-back from the create
+  response.
+- **create → validate(stored) → publish ordering** (§5.3/§5.4): consistent and necessary — create
+  lands `validated=false`, stored-mode validate flips `validated` by `{flowId,version}`, publish 422s
+  an un-validated version. The ordering rationale is correct.
+- **Credential-free discrete connection settings + `secretRef`-only** (§3.3/§3.3.1): consistent with
+  the postgres driver and the edge secret-reject (`hasSecretValueInSettings` + `rejectIfPresent`
+  fields in `createConnectionRequest`). CMS denylist is a documented strict superset (adds `pwd`,
+  blanket `dsn`).
+- **Status-code table** (§5.5): the enumerated 422/409/404/403/401/400/502/504 all match
+  `statusForAdmin` + `slice-f` §2.9.
+
+No conflicting statements were found between the round-4 revision note, the CONTRACT CORRECTION box,
+and §5. The three agree.
+
+---
+
+## Verified Assumptions (checked against as-built source, correct)
+
+1. `config.ErrUnvalidated → 422` and `config.ErrRouteConflict → 409` are distinct sentinels in
+   `statusForAdmin`, matched before generic `config.ErrValidation → 400` (`admin.go`;
+   `TestStatusForAdmin`).
+2. Publish of an un-validated version surfaces 422 via `setActive → a.fail → statusForAdmin`
+   (`admin_handlers.go`; `TestAdminPublishUnvalidated`, `admin_integration_test.go`).
+3. Route `(method,path)` collision 409 is **live** (not contingent/502) — AS-BUILT block + the 409
+   sentinel.
+4. Stored-mode validate 404 on a missing version via `GetFlowVersion → ErrNotFound → 404`
+   (`admin_validate.go`; `slice-f` §2.6).
+5. `GET /admin/connections` top-level keys are camelCase (explicit map in `listConnections`); nested
+   `resilience` is the tag-less `connect.ResiliencePolicy` ⇒ Go-cased with ns `Timeout`
+   (`admin_handlers.go` + `connect.go`).
+6. All admin create bodies are flat with `env` top-level; `decodeJSON` is `DisallowUnknownFields`, so
+   a wrapper/stray field is 400 (`admin_handlers.go`, `admin_validate.go`, `admin.go`).
+7. RBAC map requires `flow.read`+`flow.write`+`flow.publish` across the publish sequence (`slice-f`
+   §3.4).
+8. JDM `createJDMRequest` auto-assigns on `version<=0`; create == activate (`admin_handlers.go`,
+   `slice-f` §2.8).
+9. Secret-value rejection is enforced at the edge via `rejectIfPresent` fields +
+   `hasSecretValueInSettings` (`admin_handlers.go`, `admin_types.go`); the list response redacts
+   `settings` through the central `Redactor` while keeping the `secretRef` pointer
+   (`TestAdminListConnectionsRedacts`).
 
 ## Unverified / Wrong Assumptions
 
-- **WRONG — publish-blocking status is 409.** The real contract returns **422** for publishing an
-  un-validated version (`slice-f` §2.4/§2.9). `409` in `slice-f` is exclusively the create-time route
-  collision, itself contingent on an unlanded store fix. See finding 1.
-- **UNDERSTATED — "operator role only" is sufficient.** The engine RBAC map requires three distinct
-  roles across the publish sequence (`flow.read`, `flow.write`, `flow.publish`); a single-role token
-  403s mid-sequence. See finding 2.
-- **UNVERIFIED — `GET /admin/connections` JSON key casing.** The design assumes camelCase
-  `secretRef`/`settings` in the reconcile comparison but did not read `connect.ConnectionDef`'s struct
-  tags to confirm the serialized casing (it only verified the flow tree's casing). See finding 5.
+- **CORRECTED since round 4 — body shape.** The round-4 review's "Verified Assumptions" listed the
+  bodies as wrapped `{env, flow}`/`{env, connection}` envelopes. Source shows they are **flat**; the
+  round-4 revision corrected this and the current design is right. No open issue.
 - **UNVERIFIED (environmental, not a design fault) — npm registry versions/peer ranges.** The design
-  states all versions were verified via `npm view` on 2026-10-03 (Strapi 5.56.0, jdm-editor 1.52.0
-  bundling `reactflow@11.11.4`, React 18.3.1, etc.). This reviewer cannot reach the npm registry to
-  re-confirm those exact versions and peer ranges from this environment. The claims are internally
-  consistent and plausible against current practice (Strapi 5 on React 18, jdm-editor on reactflow
-  v11), and the single-React-Flow-runtime rationale is sound; flagged only as not independently
-  re-verified here, not as a defect.
+  states all npm versions were verified via `npm view` on 2026-10-03 (Strapi 5.56.0, jdm-editor
+  1.52.0 bundling `reactflow@11.11.4`, React 18.3.1, etc.). This reviewer cannot reach the npm
+  registry from this environment to re-confirm the exact versions/peer ranges. The claims are
+  internally consistent and the pinning discipline (§7, exact pins, committed lockfile, `npm ci`) is
+  sound. Flagged as not independently re-verified here, not as a defect. (Not a HIGH/MEDIUM — does
+  not affect the verdict.)
 
 ---
 
 ## Verdict
 
-HIGH findings: 0. MEDIUM findings: 2 (findings 1 and 2). NIT findings: 3 (findings 3, 4, 5).
+HIGH findings: **0**. MEDIUM findings: **0**. NIT findings: **0**.
 
-Because HIGH+MEDIUM > 0, the verdict is **CHANGES_REQUESTED**. Both MEDIUMs are concrete,
-source-verified contract mismatches that would make the §6 tests encode the wrong behavior (a 409
-interceptor that never matches the engine's 422; a single-role token that 403s on publish). They are
-small, mechanical fixes — a quick loop-back is cheaper than shipping a client wired to the wrong
-status code and role model.
+All five round-4 findings (2 MEDIUM + 3 NIT) are verified **closed and correct against the FROZEN,
+as-built admin contract and the real Go source** — including the two casing/status traps most likely
+to be fixed wrongly (the 422-vs-409 publish gate and the camelCase-top-level / Go-cased-nested
+`resilience` split in `GET /admin/connections`). The round-4 flat-body contract correction is also
+source-accurate, and the previously-APPROVED architectural calls remain internally consistent.
+
+Because HIGH+MEDIUM == 0, the verdict is **APPROVED**.

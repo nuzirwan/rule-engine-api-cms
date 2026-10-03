@@ -24,11 +24,11 @@ const deniedTypes = [
 ];
 
 const config = ({ env }: Core.Config.Shared.ConfigParams): Core.Config.Plugin => ({
-  // Local rule-engine control-plane plugin. The skeleton exists (FEAT-001) but
-  // has no entry files yet, so it stays disabled until FEAT-002+ add the
-  // admin/server code; flip `enabled` to true then.
+  // Local rule-engine control-plane plugin. FEAT-004 ships the admin UI (both
+  // custom fields + ValidationPanel) and its server entry registers the custom
+  // fields, so the plugin is now enabled.
   'rule-engine': {
-    enabled: false,
+    enabled: true,
     resolve: './src/plugins/rule-engine',
   },
   'users-permissions': {

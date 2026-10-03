@@ -1,0 +1,27 @@
+{
+  "name": "rule-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rule-engine control-plane plugin: visual flow-canvas + jdm-editor custom fields, validation surfacing, and the publish pipeline to the engine admin HTTP API.",
+  "strapi": {
+    "name": "rule-engine",
+    "displayName": "Rule Engine",
+    "description": "Author engine config (Flow/Jdm/Connection) and publish it via the admin HTTP API.",
+    "kind": "plugin"
+  },
+  "exports": {
+    "./strapi-admin": {
+      "types": "./admin/src/index.tsx",
+      "source": "./admin/src/index.tsx",
+      "import": "./admin/src/index.tsx",
+      "default": "./admin/src/index.tsx"
+    },
+    "./strapi-server": {
+      "types": "./server/src/index.ts",
+      "source": "./server/src/index.ts",
+      "import": "./server/src/index.ts",
+      "require": "./server/src/index.ts",
+      "default": "./server/src/index.ts"
+    }
+  }
+}

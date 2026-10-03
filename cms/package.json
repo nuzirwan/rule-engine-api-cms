@@ -4,7 +4,7 @@
   "private": true,
   "description": "Rule-engine CMS control-plane (Strapi 5) — authors engine config and publishes it via the admin HTTP API.",
   "scripts": {
-    "build": "strapi build",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 strapi build",
     "console": "strapi console",
     "deploy": "strapi deploy",
     "dev": "strapi develop",

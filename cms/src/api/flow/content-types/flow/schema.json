@@ -5,7 +5,7 @@
     "singularName": "flow",
     "pluralName": "flows",
     "displayName": "Flow",
-    "description": "A versioned flow (design §3.1), mirroring the engine's flows + flow_versions + flow_fixtures. `tree` is a plain json field for now; FEAT-004 repoints it to the rule-engine.flow-canvas custom field."
+    "description": "A versioned flow (design §3.1), mirroring the engine's flows + flow_versions + flow_fixtures. `tree` is authored on the rule-engine.flow-canvas custom field (base type json)."
   },
   "options": {
     "draftAndPublish": true
@@ -28,7 +28,8 @@
       "regex": "^/[A-Za-z0-9/_{}.-]+$"
     },
     "tree": {
-      "type": "json"
+      "type": "customField",
+      "customField": "plugin::rule-engine.flow-canvas"
     },
     "fixtures": {
       "type": "component",
