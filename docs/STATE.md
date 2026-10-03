@@ -3,7 +3,48 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-03 · mainline HEAD at handoff: `4fd28a2`
+Last updated: 2026-10-03 · mainline HEAD at handoff: `30061ad`
+
+## LATEST STATUS (read this first)
+The **v1 engine is complete and proven LIVE** against the user's real Postgres + Valkey. Config
+store runs in `matcha` DB under the dedicated `rule_engine` schema (the user's `public` tables are
+untouched); the data-source `fmc-pg` connection reads the user's real `fmc_utility` DB, schema
+`fmc_order`, table `order_status`. Three config-defined flows are active, two of them verified live:
+- `GET /order/{order_id}` and `GET /order/msisdn/{msisdn}` — read `fmc_order.order_status`, run a
+  ZEN rule (`payment_status=='PAID' => action="proceed_fulfillment"`, else `"await_payment"`),
+  return the row subset + decided `action`. CONFIRMED working live (ORD-TEST-TRK→proceed,
+  ORD-TEST-BAD→await, msisdn 628111015450→latest row). These endpoints exist purely from CONFIG
+  rows (zero-restart config-driven router), no business code.
+- `GET /orders/{id}` — legacy demo flow, ignore (its `orders` DB doesn't exist).
+
+### How to RUN THE ENGINE LIVE (what the user was doing)
+Config is driven by `.env` (gitignored). Keys the engine READS: `CONFIG_DSN` (config store, e.g.
+`postgres://root:root@127.0.0.1:5432/matcha?sslmode=disable`), `CONFIG_SCHEMA` (`rule_engine`),
+`VALKEY_ADDR` (`127.0.0.1:6379`), `ENGINE_ADDR` (`:8080`). The data-source DSN (`fmc_utility`) is
+baked in the seed's `fmc-pg` connection (NOT read from env). Build + run:
+```
+CGO_ENABLED=1 go build -o bin/engine ./cmd/engine && ./bin/engine
+# then: curl -s http://127.0.0.1:8080/order/ORD-TEST-TRK ; echo
+#       curl -s http://127.0.0.1:8080/order/ORD-TEST-BAD ; echo
+#       curl -s http://127.0.0.1:8080/order/msisdn/628111015450 ; echo
+```
+NOTE on `.env` cruft: `SHIP_REST_BASE_URL`/`RUN_REST_STUB`/`REST_STUB_PORT` are UNUSED leftovers
+(old shipping demo) — the engine ignores them; safe to delete.
+
+### TWO LIVE BUGS to fix (found during the live run)
+1. **`/readyz` returns 503 (false-negative)** — endpoints serve fine, but the readiness probe
+   fails; its registry/store health check is too strict. `/livez` is 200.
+2. **Idempotent seeding too coarse** — `SeedPgStore` is "if ANY active flow exists => skip ALL
+   seeding", so new flows added to the seed are silently NOT written against an already-seeded
+   store. Workaround used: `DROP SCHEMA rule_engine CASCADE` then restart to reseed. Real fix:
+   per-flow/per-object seeding (seed each missing object, not all-or-nothing).
+
+### Endpoint planes (clarified)
+- **Public (data plane):** config-defined business routes (the `/order/*` flows). Live, dynamic.
+- **Ops:** `/livez` `/readyz` `/metrics` — code-registered, live (but see /readyz bug).
+- **Admin (control plane):** NOT built as HTTP yet — see "Config-management admin API" below. Config
+  currently enters only via the seed JSON; the store Put* methods exist but aren't exposed over HTTP.
+
 
 ## What this project is
 A config-driven API engine (Go, data plane) + a planned Strapi CMS (control plane, separate
