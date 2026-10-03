@@ -1,0 +1,19 @@
+{
+  // Compiles the rule-engine plugin's server-side services (the publish
+  // transform, admin client, validation logic). Kept separate from the Strapi
+  // app tsconfig, which excludes src/plugins/** from the server compilation.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src/plugins/rule-engine/server",
+    "outDir": "dist/plugins/rule-engine/server",
+    "noEmit": true
+  },
+  "include": [
+    "src/plugins/rule-engine/server/**/*.ts",
+    "types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules/",
+    "**/*.test.ts"
+  ]
+}

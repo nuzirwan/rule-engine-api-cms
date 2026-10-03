@@ -1,0 +1,50 @@
+{
+  "name": "cms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rule-engine CMS control-plane (Strapi 5) — authors engine config and publishes it via the admin HTTP API.",
+  "scripts": {
+    "build": "strapi build",
+    "console": "strapi console",
+    "deploy": "strapi deploy",
+    "dev": "strapi develop",
+    "develop": "strapi develop",
+    "start": "strapi start",
+    "strapi": "strapi",
+    "test": "vitest run",
+    "upgrade": "npx @strapi/upgrade latest",
+    "upgrade:dry": "npx @strapi/upgrade latest --dry"
+  },
+  "dependencies": {
+    "@gorules/jdm-editor": "1.52.0",
+    "@strapi/database": "5.56.0",
+    "@strapi/design-system": "2.2.4",
+    "@strapi/icons": "2.2.4",
+    "@strapi/plugin-users-permissions": "5.56.0",
+    "@strapi/strapi": "5.56.0",
+    "pg": "8.13.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.3",
+    "reactflow": "11.11.4",
+    "styled-components": "6.1.13",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@strapi/sdk-plugin": "6.1.1",
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "nock": "13.5.6",
+    "typescript": "5.5.3",
+    "vitest": "2.1.8"
+  },
+  "engines": {
+    "node": "22.x",
+    "npm": ">=6.0.0"
+  },
+  "strapi": {
+    "uuid": "13a9a134-d097-45ec-8d07-15355f68dded",
+    "installId": "f5d42d5b50c9431eadb3981d7409d1009eb3ddfb1ceaebf8e2a836058fa3d0fa"
+  }
+}
