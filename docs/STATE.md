@@ -6,10 +6,13 @@ the `mainline` branch. Read this first, then the docs it points to.
 Last updated: 2026-10-03 · mainline HEAD at handoff: `df547be` (feat/admin-api fast-forwarded in)
 
 ## LATEST STATUS (read this first)
-The **v1 engine is complete and proven LIVE**, and the **config-management Admin API (control
-plane) is now BUILT, reviewed APPROVED, and merged** — see "Config-management admin API — DONE"
-below. **Both live-run bugs are fixed with tests** (`/readyz` false-negative; per-object idempotent
-seeding). What remains is the Strapi CMS and productionize (see NEXT).
+The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
+BUILT, reviewed APPROVED, and merged**, and the **Strapi CMS (the original ask) is now BUILT,
+reviewed APPROVED, and merged** — see "Strapi CMS — DONE" and "Config-management admin API — DONE"
+below. The CMS integrates with the engine **ONLY** via the admin HTTP API and runs on its **own
+isolated Postgres db + schema** (never `rule_engine`/`public`). **Both live-run bugs are fixed with
+tests** (`/readyz` false-negative; per-object idempotent seeding). What remains is productionize
+(see NEXT).
 
 The v1 engine is proven LIVE against the user's real Postgres + Valkey. Config
 store runs in `matcha` DB under the dedicated `rule_engine` schema (the user's `public` tables are
@@ -212,25 +215,66 @@ mode has no admin writes; single-env (`""`); dry-run reads can hit live sources 
 dry-run trace is suppressed-write + response, not a full per-node walk; validate resolves refs
 against the active set; seed is bootstrap-only; one cosmetic stale `Deps.Store` doc comment.
 
+### Strapi CMS (the authoring UI — the original ask) — DONE (reviewed APPROVED, merged)
+An isolated **Strapi 5** app under `cms/` now authors engine config with visual editors and
+publishes it to the engine. Full build/increment report: `docs/.increments/strapi-cms-report.md`.
+Key facts:
+- **Integrates ONLY via the admin HTTP API.** Every engine interaction routes through a typed
+  native-fetch `AdminClient` over the FROZEN `/admin/*` contract (`docs/lld/slice-f-admin-api.md`):
+  FLAT bodies with `env` as a top-level sibling (default `""`, no `flow`/`connection` wrapper to
+  satisfy `DisallowUnknownFields`), `Authorization: Bearer <token>` on EVERY call (token resolved at
+  call time from `ADMIN_API_OPERATOR_TOKEN` or the per-Environment `operatorTokenRef`, never
+  persisted/logged), base URL via `ADMIN_API_BASE_URL` / per-Environment `adminApiBaseUrl`. The CMS
+  NEVER reads or writes the engine's Postgres config store directly.
+- **Own, isolated Postgres db + schema.** `cms/config/database.ts` targets the CMS's OWN database
+  (`CMS_DB_NAME`, default `strapi_cms`) and OWN schema (`CMS_DB_SCHEMA`, default `strapi_cms`) via
+  `CMS_DB_*` env vars — explicitly forbidden from ever using `public` or the engine's `rule_engine`.
+  Physically separate from the engine store.
+- **Four content types:** Flow (flowId/method/path/`tree` on the reactflow canvas custom field/
+  fixtures/env/bookkeeping, draft&publish), Jdm (jdmId/`doc` on the GoRules jdm-editor custom field,
+  draft&publish), Connection (key/type/settings dynamic zone/`secretRef` only — NEVER a secret value
+  or DSN/resilience, draft&publish), Environment (name/adminApiBaseUrl/operatorTokenRef/payloadEnv,
+  no draft&publish).
+- **Two visual editors as custom fields** (both base `type:'json'`): a **reactflow** drag-and-drop
+  flow canvas and the **`@gorules/jdm-editor`** ZEN editor, plus a ValidationPanel and a raw-JSON
+  fallback. The flow canvas and the server transform share the single `serialize.ts` module (no
+  duplicate serializer); `spec` passes through verbatim so engine casing survives.
+- **Ordered, publish-blocking pipeline** (shared by the controller and the Draft&Publish
+  `beforePublish` lifecycle): listConnections → createConnection(only changed) → createJdm →
+  createFlow → validateFlow(STORED) → publishFlow. Three gates abort before publish: `ok:false`, an
+  unreachable validator (5xx/transport; a 404 also blocks), and a detected inline secret (aborts
+  before ANY admin HTTP call via the recursive denylist). HTTP status mapping per §5.5.
+- **Isolation holds:** the diff touches only `cms/` + `docs/`; `go.mod`/`go.sum`/`internal`/`cmd` are
+  byte-identical to mainline. Deps are exact-pinned (Strapi 5.56.0, jdm-editor 1.52.0, reactflow
+  11.11.4, pg 8.13.1, …).
+- **Verification (re-run at finalize, all GREEN):** `cms/` `npm ci` / `npm run build` / `npm run
+  test` (vitest + nock) exit 0; `CGO_ENABLED=1 go build ./...` exit 0; `git status --porcelain --
+  go.mod go.sum internal cmd` empty.
+- **Limitations (documented, non-blocking):** audit-viewer UI deferred (client has `audit()`, no UI);
+  `@xyflow/react` v12 migration deferred (on reactflow 11); one cosmetic dead `.writeBack` read in
+  the controller catch (no gate/bookkeeping impact).
+
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
 non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
 `Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
 
-## NEXT — v1 engine + admin control plane are done; what remains is the broader system (see arc below)
-The config-management admin API is now BUILT (see "Config-management admin API — DONE") and both
-live-run bugs are fixed. Pick the next milestone (product-priority call):
-- Build the **Strapi CMS** (the authoring UI — the original ask), integrating against the now-built
-  `/admin/*` control plane (as-built contract in `docs/lld/slice-f-admin-api.md`), OR
-- **Productionize** the engine (deploy with hand-seeded/admin-API/Strapi-written config), OR
+## NEXT — v1 engine + admin control plane + Strapi CMS are done; what remains is the broader system (see arc below)
+The admin API is BUILT (see "Config-management admin API — DONE"), the Strapi CMS is BUILT (see
+"Strapi CMS — DONE"), and both live-run bugs are fixed. Pick the next milestone (product-priority
+call):
+- **Productionize** the engine + CMS (deploy; wire the CMS's own Postgres + the admin-API bearer;
+  config written hand-seeded / via admin API / via Strapi), OR
 - Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
   JSON-source rule-match — both specced as next-phase below; full per-node dry-run trace;
-  idempotency/rate-limit/saga).
+  idempotency/rate-limit/saga), OR
+- Pull a **deferred CMS item** forward if needed (audit-viewer UI; `@xyflow/react` v12 migration).
 
 ## AFTER v1 engine — remaining project arc
 
-- **Strapi control-plane module (the CMS)** — separate Node/React build: content types,
-  `@gorules/jdm-editor` + React Flow drag-and-drop canvas, validation hooks, draft/publish,
-  promotion, the publish transform into the engine config store. (This is the original ask.)
+- **Strapi control-plane module (the CMS)** — DONE (see "Strapi CMS — DONE" above): separate Strapi 5
+  build under `cms/`, four content types, `@gorules/jdm-editor` + reactflow canvas, validation +
+  draft/publish pipeline, publish transform pushed to the engine via the `/admin/*` HTTP API (NOT
+  the config store directly), on its own isolated Postgres db + schema.
 - **Deferred engine items as needed**: idempotency for required writes (R4), rate limiting (R6),
   cross-source saga/compensation (R3).
 - **De-demo-ify `internal/httpapi/adapters.go` (platform-genericness, from a business-noun audit).**
