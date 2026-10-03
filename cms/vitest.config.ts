@@ -8,6 +8,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/plugins/rule-engine/server/tests/**/*.{test,spec}.ts'],
+    include: [
+      'src/plugins/rule-engine/server/tests/**/*.{test,spec}.ts',
+      // The pure flow-canvas serializer test lives alongside serialize.ts on
+      // the admin side (§6.2); include it so one `npm run test` run covers both.
+      'src/plugins/rule-engine/admin/src/**/*.{test,spec}.ts',
+    ],
   },
 });
