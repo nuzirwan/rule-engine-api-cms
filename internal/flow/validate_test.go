@@ -66,9 +66,7 @@ func TestValidateTree(t *testing.T) {
 			wantCode: "control_no_children",
 		},
 		{
-			// A linear chain through a Set is now VALID: Set carries its "next"
-			// child, matching the interpreter (seed flow / TestOrdersEndToEnd).
-			name: "linear chain through set is valid",
+			name: "leaf with children",
 			tree: func(t *testing.T) Node {
 				return Node{ID: "root", Type: TypeTrigger, Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
 					Children: []Node{{
@@ -76,34 +74,7 @@ func TestValidateTree(t *testing.T) {
 						Children: []Node{resp(t, "r")},
 					}}}
 			},
-			wantCode: "",
-		},
-		{
-			// response stays strictly terminal — a child under it is illegal.
-			name: "response with children",
-			tree: func(t *testing.T) Node {
-				return Node{ID: "root", Type: TypeTrigger, Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
-					Children: []Node{{
-						ID: "r", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200}),
-						Children: []Node{resp(t, "r2")},
-					}}}
-			},
 			wantCode: "leaf_has_children",
-		},
-		{
-			// Deep linear chain action→set→response validates (the seed shape).
-			name: "deep linear chain is valid",
-			tree: func(t *testing.T) Node {
-				return Node{ID: "root", Type: TypeTrigger, Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
-					Children: []Node{{
-						ID: "a", Type: TypeAction, Spec: raw(t, ActionSpec{ConnRef: ConnRef{Connection: "pg"}, Operation: op("query"), SaveAs: "x"}),
-						Children: []Node{{
-							ID: "s", Type: TypeSet, Spec: raw(t, SetSpec{TargetPath: "a", Value: 1}),
-							Children: []Node{resp(t, "r")},
-						}},
-					}}}
-			},
-			wantCode: "",
 		},
 		{
 			name: "forEach maxItems must be > 0",

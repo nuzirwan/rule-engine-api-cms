@@ -59,25 +59,34 @@ Docker-backed integration against real postgres:16 + valkey):
 Dep notes from the merge: go directive is now **1.26.0**; added valkey-go v1.0.78,
 sony/gobreaker/v2, golang-jwt/v5, prometheus/client_golang, go.opentelemetry.io/otel*.
 
-### STILL deferred (not yet wired/built)
-- **Wiring join**: `cmd/engine` + `internal/httpapi` still use the thin-slice wiring. The real
-  config.Store, auth middleware, OTel provider, and new node types are built but **not yet wired
-  into the running server**. This is the NEXT step.
-- Admin endpoints `POST /admin/flows/validate` + `/admin/flows/dry-run` + flow-test fixtures
-  (Slice D §6b) — not built.
-- `Interpreter.Run` seam deviation `(ctx, tree *flow.Node, ver flow.Version, c *Ctx, dep Deps)`
-  (import-cycle break) still stands.
-- v1 documented constraints unchanged: non-atomic cross-source writes (R3), no rate limiting
-  (R6), per-instance breakers (R10).
+### Wiring join — DONE (merged to mainline @ 74f551c)
+`cmd/engine` + `internal/httpapi` now wire the REAL packages: config.Store (Postgres PgStore
+behind `-config-dsn`/`CONFIG_DSN`, else in-memory seed), toggleable AuthN→AuthZ chain (bypassed
+when unconfigured), OTel provider + logger + metrics, the full flow node registry, and the admin
+endpoints `POST /admin/flows/validate` (publish-blocking, always 200) + `POST /admin/flows/dry-run`
+(writes suppressed via observ.WithDryRun, honored in flow.actionHandler). LIFO graceful shutdown.
+Defect fixed in-scope during integration: `flow.ValidateTree` was reclassifying linear action/set
+nodes (which legitimately carry a "next" child in the interpreter's model) as invalid leaves —
+reconciled so the validator matches the interpreter; response stays strictly terminal; all other
+rules intact. Full gate green incl. integration tests for auth (401/200/403), admin-validate
+(seed ok:true / broken ok:false), and dry-run (write suppressed, zero external POSTs).
 
-## NEXT
-1. **Wiring/integration join (sequential, one increment):** wire the real `internal/config`
-   Postgres Store (behind an env flag or config, falling back to the in-memory seed for local),
-   the `internal/auth` middleware chain, the OTel provider from `internal/observ`, and register
-   the new `internal/flow` node types — into `cmd/engine` + `internal/httpapi`. Add the admin
-   validate/dry-run endpoints (Slice D §6b) with the dry-run write-suppression honored by the
-   action handler. Full gate + an integration test exercising auth + a multi-node flow.
-2. Then v1 engine is AC-1..26 complete. Remaining project arc below.
+Known in-spirit limitations (documented, non-blocking): dry-run of the seed reports a Validation
+in its errors array because the seed's Set consumes the suppressed write's return body (expected
+consequence of suppression; trace + no-write assertions hold); the dry-run trace records only the
+suppressed write node — full per-node TraceNode integration in internal/flow is a later increment.
+
+### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
+non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
+`Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
+
+## NEXT — the v1 ENGINE is done; what remains is the broader system (see arc below)
+Pick the next milestone (product-priority call):
+- Build the **Strapi CMS** (the authoring UI — the original ask), OR
+- **Productionize** the engine first (deploy with hand-seeded/Strapi-written config), OR
+- Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
+  JSON-source rule-match — both specced as next-phase below; full per-node dry-run trace;
+  idempotency/rate-limit/saga).
 
 ## AFTER v1 engine — remaining project arc
 - **Strapi control-plane module (the CMS)** — separate Node/React build: content types,

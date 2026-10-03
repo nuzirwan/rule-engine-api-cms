@@ -27,13 +27,11 @@ type RefResolver interface {
 type nopRefs struct{}
 
 func (nopRefs) HasConnection(string) bool { return true }
-func (nopRefs) HasJDM(string) bool        { return true }
+func (nopRefs) HasJDM(string) bool         { return true }
 
-// controlTypes are the true branching/container node types that MUST own at
-// least one child: condition/switch select among their children; sequence/
-// parallel/forEach own and run their child set. (Trigger also requires a child
-// but is a linear parent — see linearTypes — so it is handled there.)
+// controlTypes are node types that MUST own at least one child.
 var controlTypes = map[NodeType]bool{
+	TypeTrigger:   true,
 	TypeCondition: true,
 	TypeSwitch:    true,
 	TypeSequence:  true,
@@ -41,21 +39,14 @@ var controlTypes = map[NodeType]bool{
 	TypeForEach:   true,
 }
 
-// Linear node types (trigger/action/set/decision/logger) carry the flow's linear
-// "next" step(s): the interpreter runs their children IN SEQUENCE via
-// walkChildren (do the node's own work, then walk each child in order until a
-// Response stops the path). They therefore impose NO child-count ceiling — a
-// chain of one next, or a short in-order sequence ending in a Response, are both
-// legal and are exactly what the interpreter executes.
-//
-// This replaces the earlier (incorrect) "action/set/decision/logger are strict
-// leaves that must not have children" rule, which contradicted the interpreter's
-// own proven execution model: the seed flow chains action→condition→…→set→
-// response and TestOrdersEndToEnd passes on exactly that shape. Reconciled during
-// the wiring join as an in-scope defect fix. The exactly-one-terminal-Response
-// rule (validateResponsePaths) remains the guard against a node running after a
-// Response on a path, so dropping the leaf ceiling does not weaken correctness.
-// Only `response` stays strictly terminal (0 children); see Rule 4 below.
+// leafTypes are node types that MUST NOT own children.
+var leafTypes = map[NodeType]bool{
+	TypeAction:   true,
+	TypeDecision: true,
+	TypeSet:      true,
+	TypeLogger:   true,
+	TypeResponse: true,
+}
 
 // ValidateTree checks a flow tree's structure without I/O and returns every
 // issue found (collect-all, not fail-fast) so an author sees all problems at
@@ -112,21 +103,12 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 			add(n.ID, "bad_spec", fmt.Sprintf("spec invalid: %v", err))
 		}
 
-		// Rule 4: child-count rules by node role.
-		//   - control (condition/switch/sequence/parallel/forEach): >= 1 child.
-		//   - trigger: >= 1 child (the linear body it walks in sequence).
-		//   - linear (action/set/decision/logger): any number of in-order children
-		//     (no ceiling — the interpreter runs them as a sequence).
-		//   - response: strictly terminal — no children (it sets Directive.Stop so
-		//     nothing runs after it on a path).
+		// Rule 4: control nodes have children; leaves do not.
 		if controlTypes[n.Type] && len(n.Children) == 0 {
 			add(n.ID, "control_no_children", fmt.Sprintf("%s node must have at least one child", n.Type))
 		}
-		if n.Type == TypeTrigger && len(n.Children) == 0 {
-			add(n.ID, "control_no_children", "trigger node must have at least one child")
-		}
-		if n.Type == TypeResponse && len(n.Children) > 0 {
-			add(n.ID, "leaf_has_children", "response node must not have children")
+		if leafTypes[n.Type] && len(n.Children) > 0 {
+			add(n.ID, "leaf_has_children", fmt.Sprintf("%s node must not have children", n.Type))
 		}
 
 		// Per-type structural rules.

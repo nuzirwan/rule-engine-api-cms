@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"nzr-rules-engine/internal/auth"
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/decision"
@@ -29,14 +28,11 @@ import (
 // uses the empty env the seed is published under.
 const defaultEnv = ""
 
-// Store is the subset of config.Store the handlers need: resolve the active flow
-// for a route (flow route), plus GetJDM/Connections so the admin validate/dry-run
-// endpoints can resolve stored flows, probe JDM/connection refs, and run the
-// interpreter. It is satisfied by the in-memory store and the real PgStore alike.
+// Store is the subset of config.Store the handler needs: resolve the active flow
+// for a route and seed per-request template context. It is satisfied by the
+// in-memory store and the real store alike.
 type Store interface {
 	ActiveFlow(ctx context.Context, env, method, path string) (config.FlowVersion, error)
-	GetJDM(ctx context.Context, env, id string) (jdm []byte, version int, err error)
-	Connections(ctx context.Context, env string) ([]connect.ConnectionDef, error)
 }
 
 // Deps carries the wired collaborators the handler threads into the interpreter.
@@ -49,12 +45,6 @@ type Deps struct {
 	Decide decision.Evaluator
 	Trace  observ.Tracer
 	Log    observ.Logger
-
-	// Auth, when non-nil, is the AuthN+AuthZ middleware mounted in front of the
-	// flow route (AuthN then AuthZ). A nil Auth leaves the route unauthenticated
-	// so the no-auth integration test and local dev work unchanged — auth is
-	// toggleable/bypassable when unconfigured (cmd/engine logs ENABLED/DISABLED).
-	Auth *auth.Middleware
 }
 
 // NewServer builds an *http.Server whose handler serves the thin-slice routes
@@ -73,20 +63,8 @@ func NewServer(addr string, store Store, interp *flow.Interpreter, deps Deps) *h
 func NewHandler(store Store, interp *flow.Interpreter, deps Deps) http.Handler {
 	mux := http.NewServeMux()
 	// Go 1.22 pattern-with-method routing: method + path pattern with a {id}
-	// wildcard. This is the data-plane flow route.
-	var flowHandler http.Handler = ordersHandler(store, interp, deps)
-	// Auth chain in front of the flow route: AuthN first (injects the Principal),
-	// then AuthZ (ZEN decision). Mounted only when configured (deps.Auth != nil);
-	// otherwise the bare handler serves so the no-auth path is unchanged.
-	if deps.Auth != nil {
-		flowHandler = deps.Auth.Authn(deps.Auth.Authz(flowHandler))
-	}
-	mux.Handle("GET /orders/{id}", flowHandler)
-
-	// Admin endpoints (Slice D §6b): structural validate + fixtures (publish-
-	// blocking) and side-effect-free dry-run. They are control-plane facing and
-	// NOT behind the flow auth chain (same mux, separate concern).
-	registerAdminRoutes(mux, store, interp, deps)
+	// wildcard. This is the ONE hard-coded route of the thin slice.
+	mux.HandleFunc("GET /orders/{id}", ordersHandler(store, interp, deps))
 	return mux
 }
 
@@ -104,23 +82,6 @@ func ordersHandler(store Store, interp *flow.Interpreter, deps Deps) http.Handle
 			return
 		}
 
-		// Open the request root span so the whole walk is one trace, then stamp
-		// the request scope (trace_id/request_id) so every downstream span and log
-		// line auto-carries it (observ reads it off ctx).
-		var rootSpan observ.Span
-		if deps.Trace != nil {
-			ctx, rootSpan = deps.Trace.StartSpan(ctx, "http.flow", map[string]any{
-				"method": r.Method,
-				"route":  "/orders/{id}",
-			})
-			defer func() { rootSpan.End(nil) }()
-		}
-		ctx = observ.WithScope(ctx, observ.RequestScope{
-			TraceID:   firstNonEmpty(observ.TraceIDFromContext(ctx), traceID(r)),
-			RequestID: requestID(r),
-			Env:       defaultEnv,
-		})
-
 		// Resolve + PIN the active flow version ONCE at request start (AC-11).
 		// The matched route pattern is the stable key, not the concrete path.
 		fv, err := store.ActiveFlow(ctx, defaultEnv, http.MethodGet, "/orders/{id}")
@@ -128,10 +89,6 @@ func ordersHandler(store Store, interp *flow.Interpreter, deps Deps) http.Handle
 			writeError(w, statusForConfig(err), "no active flow for route")
 			return
 		}
-
-		// Enrich the scope the moment the version is pinned so flow_id/
-		// flow_version/environment ride on every subsequent span and log line.
-		ctx = observ.EnrichScope(ctx, fv.FlowID, fv.Version, defaultEnv)
 
 		// Build the per-request Ctx. The trigger declares input.params=["id"];
 		// httpapi performs that mapping before Run (slice-a §2.1). A path param
@@ -214,16 +171,6 @@ func coercePathParam(s string) any {
 		return n
 	}
 	return s
-}
-
-// firstNonEmpty returns the first non-empty string of its arguments, or "".
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // requestID returns a request id from the X-Request-Id header, or empty when

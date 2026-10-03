@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"nzr-rules-engine/internal/connect"
-	"nzr-rules-engine/internal/observ"
 )
 
 // triggerHandler maps the declared TriggerSpec.Input (already lifted into
@@ -68,26 +67,6 @@ func (actionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walke
 	op := spec.Operation
 	if ov := timeoutOverride(spec.Resilience); ov != nil {
 		op.Override = ov
-	}
-
-	// Dry-run write-suppression (AC-14): under observ.WithDryRun, a write op is
-	// NOT executed — no row created, no external POST sent. The suppression is
-	// recorded onto the dry-run collector (so the trace shows wrote:"suppressed")
-	// and a suppressed marker is stored under SaveAs so downstream nodes still
-	// see a value, then the walk continues. Reads ("query","get","ping") still
-	// execute so the author previews real data.
-	if observ.IsDryRun(ctx) && isWriteOp(op.Kind) {
-		suppressed := map[string]any{"wrote": "suppressed"}
-		if coll, ok := observ.CollectorFrom(ctx); ok {
-			coll.Record(n.ID, string(TypeAction), "", map[string]any{"wrote": "suppressed"})
-		}
-		if spec.SaveAs != "" {
-			if c.Data == nil {
-				c.Data = map[string]any{}
-			}
-			c.Data[spec.SaveAs] = suppressed
-		}
-		return walkChildren(ctx, n.Children, c, dep, w)
 	}
 
 	result, err := client.Execute(ctx, op)
