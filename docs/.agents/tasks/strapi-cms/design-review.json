@@ -1,0 +1,46 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "MEDIUM",
+      "title": "Publish-blocking status code is 422, not 409",
+      "where": "design.md §5.1 (publishFlow row), §5.3 step 5, §5.4 step 6, §5.5 error table, §6.3 'Publish 409' test",
+      "problem": "The design states throughout that publishing an un-validated flow version returns 409. The real contract (slice-f §2.4 and §2.9) returns 422 Unprocessable Entity for a publish on an un-validated version (store Validation 'cannot publish un-validated'). The only 409 in slice-f is the create-time route (method,path) collision on POST /admin/flows, and that is contingent on an unlanded internal/config store fix (reports 502 until then). The §6.3 nock test keyed to 409 would never match the engine's 422, encoding the wrong contract.",
+      "fix": "Replace every '409 (un-validated / not validated)' occurrence on the publish path with 422: §5.1 publishFlow row, §5.3 step 5 and closing line, §5.4 step 6, §5.5 error row, and the §6.3 test name + interceptor ('Publish 422 (un-validated)'). Keep 409 only if modeling the create-time route collision, and note it currently surfaces as 502 until the slice-f §2.3 fix lands."
+    },
+    {
+      "id": 2,
+      "severity": "MEDIUM",
+      "title": "Operator RBAC roles understated; single-role token 403s mid-sequence",
+      "where": "design.md §5.1 (operator credential), §5.4, §5.6, §5.5 error table",
+      "problem": "The design treats the operator credential as one token with a single 'operator role'. slice-f §3.3/§3.4 define a route->role RBAC map requiring distinct roles the token subject must carry: flow.write (creates), flow.publish (publish/rollback), flow.read (validate, listConnections, audit). The full publish sequence touches all three. A token with only one role 403s mid-sequence, and §5.5 handles only the 401 (missing/invalid bearer), not a 403 (authenticated but under-privileged).",
+      "fix": "State in §5.1/§3.4/§5.6 that the CMS operator token's engine-side subject must be granted flow.read + flow.write + flow.publish (configured in the engine's ADMIN_TOKENS, per slice-f §3.3/§3.4). Add a §5.5 row for 403 (role not granted): not retry-recoverable, surface 'operator token lacks required role'. Optionally assert the three roles in the §6.3 happy-path setup."
+    },
+    {
+      "id": 3,
+      "severity": "NIT",
+      "title": "Stored-mode validate 404 (version not found) unhandled",
+      "where": "design.md §5.3, §5.5 (validateFlow rows)",
+      "problem": "slice-f §2.6 says stored-mode validate returns 404 when the version resolves to no stored version (the one non-200 validate case). §5.3/§5.5 handle only transport/5xx and 200 ok:false, leaving a 404 unclassified. Should not fire in the normal sequence (createFlow persists N before validate N) but a race/stale-entry retry could surface it.",
+      "fix": "Add a §5.5 row: validateFlow -> 404 (version not found) | not recoverable by retry | 'created version not found; re-create and retry' | lastPublishStatus=failed."
+    },
+    {
+      "id": 4,
+      "severity": "NIT",
+      "title": "Route-collision on create reports 502, not an author-fixable 4xx",
+      "where": "design.md §5.5 (createFlow rows), §5.6",
+      "problem": "§5.5 maps createFlow failures as 4xx (author must fix) or 5xx (retry). Per slice-f §2.3/§2.9 a (method,path) route collision currently surfaces as 502 (the 409 mapping is contingent on an unlanded store fix), so a permanent, author-fixable error would be shown as 'engine unavailable, retry' forever.",
+      "fix": "Note in §5.5 that a 502 from POST /admin/flows may be a route collision until the slice-f §2.3 fix lands, and extend §5.6 to pre-check route (method,path) uniqueness client-side (or surface 'route may already be owned by another flow' on a create 502) so the UX copy is not misleading."
+    },
+    {
+      "id": 5,
+      "severity": "NIT",
+      "title": "GET /admin/connections JSON key casing not verified against connect.ConnectionDef",
+      "where": "design.md §5.1 (methods table), §5.4 (reconcile), §6.3 (reconcile test)",
+      "problem": "The reconcile compares against camelCase secretRef/settings. slice-f §2.8 prose uses camelCase, but the design elsewhere (§4.2) correctly warns that Go structs serialized without JSON tags leak Go-cased keys (Kind/Payload/Required). The connection-list response comes from connect.ConnectionDef; its struct tags were not read, so the real response keys could be Go-cased (Key/Type/Settings/SecretRef/Resilience).",
+      "fix": "Read connect.ConnectionDef's struct tags in internal/connect, confirm the serialized casing of the GET /admin/connections response, and pin the §5.4 reconcile comparison and the client types to the real keys (as §4.2 already does for the flow tree)."
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/docs/.agents/tasks/strapi-cms/design-review.md"
+}
