@@ -1,13 +1,22 @@
 // Package config holds the configuration store seam (Slice D, lld-contracts.md):
 // the resolver, admin, and connection registry read flow versions, JDM bytes,
-// and connection defs through config.Store. The thin slice ships an in-memory
-// Store seeded from a JSON file; the real Valkey/Postgres-backed store drops in
-// later behind the same interface.
+// and connection defs through config.Store.
+//
+// Two implementations satisfy the frozen Store seam:
+//   - memStore (store.go / seed.go): the in-memory store seeded from a JSON file,
+//     used by the thin slice and by unit tests that need no database.
+//   - PgStore (pgstore.go): the real Postgres-backed store with the immutable
+//     versioning model, active-pointer publish/rollback, audit log, and an
+//     optional Valkey Cache (cache.go) with pub/sub invalidation.
+//
+// Both are selected at wiring time (a later step); this package builds and tests
+// standalone. config imports flow (one-directional); flow never imports config.
 package config
 
 import (
 	"context"
 	"sync"
+	"time"
 
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/flow"
@@ -43,6 +52,18 @@ type Store interface {
 	PutFlowVersion(ctx context.Context, env string, f FlowVersion) (version int, err error)
 	SetActive(ctx context.Context, env, flowID string, version int) error
 	Ping(ctx context.Context) error
+}
+
+// Cache is the hot-config cache seam (lld-contracts.md). The Valkey-backed
+// implementation (cache.go) also publishes a change event on Invalidate so every
+// instance drops its matching keys; that publish is internal behavior of the
+// implementation, not an extra seam method. A nil Cache is valid: the real store
+// then reads Postgres directly (cache is an optimization, never the source of
+// truth — [[caching-strategy]]).
+type Cache interface {
+	Get(ctx context.Context, key string) ([]byte, bool, error)
+	Set(ctx context.Context, key string, v []byte, ttl time.Duration) error
+	Invalidate(ctx context.Context, keyPattern string) error // publishes change event
 }
 
 // jdmEntry is a JDM's bytes plus its version, keyed by (env,id).
