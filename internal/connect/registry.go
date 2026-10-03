@@ -54,7 +54,31 @@ func New(connectors []Connector, defs []ConnectionDef, secrets SecretProvider, t
 		r.clients[def.Key] = client
 		r.defs[def.Key] = def
 	}
+	r.wireDedup()
 	return r, nil
+}
+
+// wireDedup selects a dedup-capable inner client (a valkey connection that
+// satisfies DedupStore) and shares it with every resilient client so an opted-in
+// non-idempotent write (Operation.IdempotencyKey) can take an atomic SET-NX lock
+// across the process (R4, §6.2). If no dedup-capable connection exists, the key
+// still marks an op retryable but no cross-process lock is taken. The caller must
+// hold r.mu for write (New runs before publishing r; Reload holds the lock).
+func (r *registry) wireDedup() {
+	var store DedupStore
+	for _, c := range r.clients {
+		if ds, ok := c.inner.(DedupStore); ok {
+			store = ds
+			break
+		}
+	}
+	var guard *dedupGuard
+	if store != nil {
+		guard = newDedupGuard(store, 0)
+	}
+	for _, c := range r.clients {
+		c.dedup = guard
+	}
 }
 
 // open resolves the connector + secret for a def and builds the wrapped client.
@@ -137,6 +161,10 @@ func (r *registry) Reload(ctx context.Context, defs []ConnectionDef) error {
 		delete(r.clients, key)
 		delete(r.defs, key)
 	}
+
+	// Re-select the dedup store: a reload may have added or removed the valkey
+	// connection that backs the idempotency lock.
+	r.wireDedup()
 
 	for _, c := range toClose {
 		_ = c.Close()
