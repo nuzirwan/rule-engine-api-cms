@@ -14,8 +14,13 @@ const (
 	Internal ErrClass = iota
 	// NotFound is a missing flow version, JDM, or route.
 	NotFound
-	// Validation is a malformed seed or bad admin input.
+	// Validation is a malformed seed/config row or bad admin input.
 	Validation
+	// Timeout is a config-store query that exceeded its deadline (transient).
+	Timeout
+	// Upstream is a config dependency being unreachable: Postgres (degrade/
+	// readiness not-ready) or Valkey (degrade to store, keep serving). (§7)
+	Upstream
 )
 
 // String renders the class for logs and spans.
@@ -25,6 +30,10 @@ func (c ErrClass) String() string {
 		return "not_found"
 	case Validation:
 		return "validation"
+	case Timeout:
+		return "timeout"
+	case Upstream:
+		return "upstream"
 	default:
 		return "internal"
 	}
@@ -38,6 +47,10 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrValidation is the sentinel for a validation failure.
 	ErrValidation = errors.New("validation error")
+	// ErrTimeout is the sentinel for a config-store deadline exceeded.
+	ErrTimeout = errors.New("timeout")
+	// ErrUpstream is the sentinel for an unreachable config dependency.
+	ErrUpstream = errors.New("upstream error")
 )
 
 // sentinelFor returns the sentinel error for a class.
@@ -47,6 +60,10 @@ func sentinelFor(c ErrClass) error {
 		return ErrNotFound
 	case Validation:
 		return ErrValidation
+	case Timeout:
+		return ErrTimeout
+	case Upstream:
+		return ErrUpstream
 	default:
 		return ErrInternal
 	}
