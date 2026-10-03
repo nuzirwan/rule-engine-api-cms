@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"nzr-rules-engine/internal/connect"
 )
@@ -15,12 +14,14 @@ import (
 // SetActive refuses an un-validated version, so an active flow is MarkValidated
 // between the two (memStore's SetActive has no such gate).
 //
-// Idempotency: before writing anything, the first flow's active route is
-// resolved via ActiveFlow. If it resolves (nil error), the store is already
-// seeded and SeedPgStore returns (false, nil) without touching the DB. A
-// NotFound means "absent" and seeding proceeds. This top-level skip is the
-// primary re-run guard; the write methods are individually safe too (identity
-// upserts + version bump under a FOR UPDATE lock).
+// Idempotency is PER-OBJECT, not all-or-nothing (slice-f-admin-api.md §6): each
+// flow / JDM / connection is written ONLY if its identity does not already exist
+// (FlowExists / JDMExists / ConnectionExists). An existing object is skipped and
+// never version-churned — the seed is a bootstrap, not a migration tool
+// (decision D3): editing an existing object is an admin-API/Strapi operation, not
+// a re-seed. This fixes the live bug where adding ONE new flow to seed.json was
+// silently skipped on restart because the first flow was already active. Return
+// seeded = (anything was written).
 func SeedPgStore(ctx context.Context, s *PgStore, raw []byte) (seeded bool, err error) {
 	var sf seedFile
 	if err := json.Unmarshal(raw, &sf); err != nil {
@@ -28,19 +29,16 @@ func SeedPgStore(ctx context.Context, s *PgStore, raw []byte) (seeded bool, err 
 	}
 	env := sf.Env
 
-	// Idempotency gate: if the first flow's route is already active, skip.
-	if len(sf.Flows) > 0 {
-		first := sf.Flows[0]
-		_, aerr := s.ActiveFlow(ctx, env, first.Method, first.Path)
-		if aerr == nil {
-			return false, nil // already seeded
-		}
-		if !errors.Is(aerr, ErrNotFound) {
-			return false, aerr // a real failure (e.g. Postgres down) — surface it
-		}
-	}
+	wrote := false
 
 	for _, f := range sf.Flows {
+		exists, err := s.FlowExists(ctx, env, f.FlowID)
+		if err != nil {
+			return false, err // a real failure (e.g. Postgres down) — surface it
+		}
+		if exists {
+			continue // bootstrap-only: an existing flow is never re-created
+		}
 		fv := FlowVersion{
 			FlowID:   f.FlowID,
 			Version:  f.Version,
@@ -53,6 +51,7 @@ func SeedPgStore(ctx context.Context, s *PgStore, raw []byte) (seeded bool, err 
 		if err != nil {
 			return false, err
 		}
+		wrote = true
 		if f.Active {
 			// PgStore blocks publishing an un-validated version; validate first.
 			if err := s.MarkValidated(ctx, env, f.FlowID, version); err != nil {
@@ -68,14 +67,29 @@ func SeedPgStore(ctx context.Context, s *PgStore, raw []byte) (seeded bool, err 
 		if len(j.Doc) == 0 {
 			return false, newErr(Validation, "seed jdm "+j.ID+" has empty doc")
 		}
+		exists, err := s.JDMExists(ctx, env, j.ID)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			continue
+		}
 		if _, err := s.PutJDMVersion(ctx, env, j.ID, append([]byte(nil), j.Doc...), j.Version); err != nil {
 			return false, err
 		}
+		wrote = true
 	}
 
 	for _, c := range sf.Connections {
 		if c.Key == "" || c.Type == "" {
 			return false, newErr(Validation, "seed connection missing key or type")
+		}
+		exists, err := s.ConnectionExists(ctx, env, c.Key)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			continue
 		}
 		def := connect.ConnectionDef{
 			Key:        c.Key,
@@ -87,7 +101,8 @@ func SeedPgStore(ctx context.Context, s *PgStore, raw []byte) (seeded bool, err 
 		if _, err := s.PutConnectionVersion(ctx, env, def); err != nil {
 			return false, err
 		}
+		wrote = true
 	}
 
-	return true, nil
+	return wrote, nil
 }

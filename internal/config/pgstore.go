@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
 
@@ -381,6 +382,7 @@ func (s *PgStore) PutFlowVersion(ctx context.Context, env string, f FlowVersion)
 		return 0, wrapErr(Validation, "encode flow tree", err)
 	}
 
+	actor := s.actorFor(ctx)
 	var version int
 	err = withTx(ctx, pool, func(tx pgx.Tx) error {
 		// Ensure the parent identity exists and lock it so the version counter is
@@ -388,7 +390,7 @@ func (s *PgStore) PutFlowVersion(ctx context.Context, env string, f FlowVersion)
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO flows (id, method, path, created_by)
 			 VALUES ($1,$2,$3,$4)
-			 ON CONFLICT (id) DO NOTHING`, f.FlowID, f.Method, f.Path, s.actor); err != nil {
+			 ON CONFLICT (id) DO NOTHING`, f.FlowID, f.Method, f.Path, actor); err != nil {
 			return classifyPg("ensure flow identity", err)
 		}
 		if _, err := tx.Exec(ctx,
@@ -409,7 +411,7 @@ func (s *PgStore) PutFlowVersion(ctx context.Context, env string, f FlowVersion)
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO flow_versions (flow_id, version, tree, checksum, validated, created_by)
 			 VALUES ($1,$2,$3,$4,false,$5)`,
-			f.FlowID, version, treeRaw, checksum(treeRaw), s.actor); err != nil {
+			f.FlowID, version, treeRaw, checksum(treeRaw), actor); err != nil {
 			return classifyPg("insert flow version", err)
 		}
 
@@ -428,7 +430,7 @@ func (s *PgStore) PutFlowVersion(ctx context.Context, env string, f FlowVersion)
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
 			 VALUES ($1,$2,$3,$4,$5)`,
-			s.actor, actCreateVersion, objFlow, f.FlowID, version); err != nil {
+			actor, actCreateVersion, objFlow, f.FlowID, version); err != nil {
 			return classifyPg("audit create version", err)
 		}
 		return nil
@@ -451,6 +453,7 @@ func (s *PgStore) SetActive(ctx context.Context, env, flowID string, version int
 		return err
 	}
 
+	actor := s.actorFor(ctx)
 	var action string
 	err = withTx(ctx, pool, func(tx pgx.Tx) error {
 		var validated bool
@@ -464,7 +467,7 @@ func (s *PgStore) SetActive(ctx context.Context, env, flowID string, version int
 			return classifyPg("read version validated", err)
 		}
 		if !validated {
-			return newErr(Validation, "cannot publish un-validated flow version (publish blocked)")
+			return wrapErr(Validation, "cannot publish un-validated flow version (publish blocked)", ErrUnvalidated)
 		}
 
 		var from *int
@@ -484,14 +487,14 @@ func (s *PgStore) SetActive(ctx context.Context, env, flowID string, version int
 			 VALUES ($1,$2,$3,$4)
 			 ON CONFLICT (object_type, object_id)
 			 DO UPDATE SET version=EXCLUDED.version, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-			objFlow, flowID, version, s.actor); err != nil {
+			objFlow, flowID, version, actor); err != nil {
 			return classifyPg("move active pointer", err)
 		}
 
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, from_version, to_version)
 			 VALUES ($1,$2,$3,$4,$5,$6)`,
-			s.actor, action, objFlow, flowID, from, version); err != nil {
+			actor, action, objFlow, flowID, from, version); err != nil {
 			return classifyPg("audit set active", err)
 		}
 		return nil
@@ -528,11 +531,12 @@ func (s *PgStore) PutJDMVersion(ctx context.Context, env, jdmID string, doc []by
 		return 0, err
 	}
 
+	actor := s.actorFor(ctx)
 	var assigned int
 	err = withTx(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO jdms (id, created_by) VALUES ($1,$2)
-			 ON CONFLICT (id) DO NOTHING`, jdmID, s.actor); err != nil {
+			 ON CONFLICT (id) DO NOTHING`, jdmID, actor); err != nil {
 			return classifyPg("ensure jdm identity", err)
 		}
 		if _, err := tx.Exec(ctx,
@@ -557,7 +561,7 @@ func (s *PgStore) PutJDMVersion(ctx context.Context, env, jdmID string, doc []by
 			`INSERT INTO jdm_versions (jdm_id, version, jdm, checksum, created_by)
 			 VALUES ($1,$2,$3,$4,$5)
 			 ON CONFLICT (jdm_id, version) DO NOTHING`,
-			jdmID, assigned, doc, checksum(doc), s.actor); err != nil {
+			jdmID, assigned, doc, checksum(doc), actor); err != nil {
 			return classifyPg("insert jdm version", err)
 		}
 
@@ -566,20 +570,20 @@ func (s *PgStore) PutJDMVersion(ctx context.Context, env, jdmID string, doc []by
 			 VALUES ($1,$2,$3,$4)
 			 ON CONFLICT (object_type, object_id)
 			 DO UPDATE SET version=EXCLUDED.version, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-			objJDM, jdmID, assigned, s.actor); err != nil {
+			objJDM, jdmID, assigned, actor); err != nil {
 			return classifyPg("move jdm pointer", err)
 		}
 
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
 			 VALUES ($1,$2,$3,$4,$5)`,
-			s.actor, actCreateVersion, objJDM, jdmID, assigned); err != nil {
+			actor, actCreateVersion, objJDM, jdmID, assigned); err != nil {
 			return classifyPg("audit create jdm version", err)
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
 			 VALUES ($1,$2,$3,$4,$5)`,
-			s.actor, actPublish, objJDM, jdmID, assigned); err != nil {
+			actor, actPublish, objJDM, jdmID, assigned); err != nil {
 			return classifyPg("audit publish jdm version", err)
 		}
 		return nil
@@ -625,11 +629,12 @@ func (s *PgStore) PutConnectionVersion(ctx context.Context, env string, def conn
 		secretRef = &sr
 	}
 
+	actor := s.actorFor(ctx)
 	var assigned int
 	err = withTx(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO connections (key, type, created_by) VALUES ($1,$2,$3)
-			 ON CONFLICT (key) DO NOTHING`, def.Key, def.Type, s.actor); err != nil {
+			 ON CONFLICT (key) DO NOTHING`, def.Key, def.Type, actor); err != nil {
 			return classifyPg("ensure connection identity", err)
 		}
 		if _, err := tx.Exec(ctx,
@@ -651,7 +656,7 @@ func (s *PgStore) PutConnectionVersion(ctx context.Context, env string, def conn
 			`INSERT INTO connection_versions
 			   (conn_key, version, settings, secret_ref, resilience, checksum, created_by)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			def.Key, assigned, settingsRaw, secretRef, resilienceRaw, checksum(settingsRaw), s.actor); err != nil {
+			def.Key, assigned, settingsRaw, secretRef, resilienceRaw, checksum(settingsRaw), actor); err != nil {
 			return classifyPg("insert connection version", err)
 		}
 
@@ -660,20 +665,20 @@ func (s *PgStore) PutConnectionVersion(ctx context.Context, env string, def conn
 			 VALUES ($1,$2,$3,$4)
 			 ON CONFLICT (object_type, object_id)
 			 DO UPDATE SET version=EXCLUDED.version, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-			objConnection, def.Key, assigned, s.actor); err != nil {
+			objConnection, def.Key, assigned, actor); err != nil {
 			return classifyPg("move connection pointer", err)
 		}
 
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
 			 VALUES ($1,$2,$3,$4,$5)`,
-			s.actor, actCreateVersion, objConnection, def.Key, assigned); err != nil {
+			actor, actCreateVersion, objConnection, def.Key, assigned); err != nil {
 			return classifyPg("audit create connection version", err)
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
 			 VALUES ($1,$2,$3,$4,$5)`,
-			s.actor, actPublish, objConnection, def.Key, assigned); err != nil {
+			actor, actPublish, objConnection, def.Key, assigned); err != nil {
 			return classifyPg("audit publish connection version", err)
 		}
 		return nil
@@ -865,10 +870,18 @@ func withTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) erro
 	return nil
 }
 
+// flowRouteConstraint is the UNIQUE(method,path) constraint name on the flows
+// table (slice-d schema). A 23505 violation on it means a DIFFERENT flow already
+// owns the (method,path) route — a deterministic conflict the admin edge maps to
+// 409, not a generic store outage (slice-f-admin-api.md §2.3).
+const flowRouteConstraint = "flows_method_path_key"
+
 // classifyPg maps a pgx/driver error to the config taxonomy (§7). A deadline is
-// Timeout; everything else from the driver is Upstream (Postgres unreachable or
-// failing) unless already a classified *ConfigError. A ConfigError passes
-// through unchanged so an inner Validation/NotFound keeps its class.
+// Timeout; a UNIQUE violation on the flow route constraint is a route-conflict
+// Validation (so the admin edge maps it to 409); everything else from the driver
+// is Upstream (Postgres unreachable or failing) unless already a classified
+// *ConfigError. A ConfigError passes through unchanged so an inner
+// Validation/NotFound keeps its class.
 func classifyPg(op string, err error) error {
 	var ce *ConfigError
 	if errors.As(err, &ce) {
@@ -876,6 +889,13 @@ func classifyPg(op string, err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return wrapErr(Timeout, op, err)
+	}
+	// A (method,path) unique-violation on the flows table is a route conflict,
+	// not an outage: surface it as a typed Validation carrying ErrRouteConflict
+	// so the admin edge can deterministically return 409 instead of 502.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == flowRouteConstraint {
+		return wrapErr(Validation, op+": route already owned by another flow", ErrRouteConflict)
 	}
 	return wrapErr(Upstream, op, err)
 }

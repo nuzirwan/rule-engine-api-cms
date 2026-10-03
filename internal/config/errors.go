@@ -51,6 +51,18 @@ var (
 	ErrTimeout = errors.New("timeout")
 	// ErrUpstream is the sentinel for an unreachable config dependency.
 	ErrUpstream = errors.New("upstream error")
+	// ErrUnvalidated is the sentinel for a publish attempt on a flow version that
+	// has not passed validate (publish-blocking, AC-13). It is classified
+	// Validation but carries this dedicated marker so the admin edge can map it to
+	// 422 (not a generic 400) via errors.Is, without matching message text.
+	ErrUnvalidated = errors.New("flow version not validated")
+	// ErrRouteConflict is the sentinel for a flow (method,path) collision: a
+	// different flow already owns the route (Postgres UNIQUE violation on
+	// flows_method_path_key, SQLSTATE 23505). It is classified Validation so it
+	// crosses the seam as a 4xx, and the dedicated sentinel lets the admin edge
+	// map it to 409 (route already owned) rather than a misleading 502
+	// (slice-f-admin-api.md §2.3). errors.Is(err, ErrRouteConflict) matches it.
+	ErrRouteConflict = errors.New("route already owned by another flow")
 )
 
 // sentinelFor returns the sentinel error for a class.

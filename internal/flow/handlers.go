@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"nzr-rules-engine/internal/connect"
+	"nzr-rules-engine/internal/observ"
 )
 
 // triggerHandler maps the declared TriggerSpec.Input (already lifted into
@@ -67,6 +68,20 @@ func (actionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walke
 	op := spec.Operation
 	if ov := timeoutOverride(spec.Resilience); ov != nil {
 		op.Override = ov
+	}
+
+	// Dry-run write-suppression (AC-14): under a dry-run context a write op
+	// performs NO I/O. The suppressed write is recorded into the trace collector
+	// (if one is attached) as wrote:"suppressed", then the walk continues linearly
+	// through the children. Reads (query/get/ping) are NOT suppressed — a dry-run
+	// still reflects real reads so the author sees a faithful preview. The
+	// dry-run flag and the collector both ride on the context (observ seam);
+	// observ does not import flow, so there is no import cycle.
+	if observ.IsDryRun(ctx) && isWriteOp(op.Kind) {
+		if tc, ok := observ.CollectorFrom(ctx); ok {
+			tc.Record(n.ID, string(n.Type), "", map[string]any{"wrote": "suppressed"})
+		}
+		return walkChildren(ctx, n.Children, c, dep, w)
 	}
 
 	result, err := client.Execute(ctx, op)

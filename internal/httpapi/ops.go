@@ -8,7 +8,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/observ"
 )
 
@@ -24,18 +23,25 @@ type pinger interface {
 }
 
 // Ops holds the collaborators the operational endpoints gate on. It reuses the
-// handler's wired seams (the connection registry for upstream health, the config
-// store for its own reachability) and scrapes the metrics gatherer. reg, store
-// and gatherer are each nil-safe so the endpoints mount in every run mode.
+// handler's wired config store for its own reachability probe and scrapes the
+// metrics gatherer. store and gatherer are each nil-safe so the endpoints mount
+// in every run mode.
+//
+// Readiness gates on the config store ONLY: the engine resolves every route out
+// of its own config store, so an unreachable config store is genuinely "not
+// ready". Data-source connection health is deliberately NOT a readiness gate — a
+// down data source is config the engine uses per request, not a liveness
+// dependency of the resolve path ([[config-driven-boundaries]]); it surfaces as a
+// per-request 502/504 and via /metrics, never by taking the whole instance out of
+// rotation (slice-f-admin-api.md §5).
 type Ops struct {
-	reg      connect.Registry
 	store    pinger
 	gatherer prometheus.Gatherer
 	log      observ.Logger
 }
 
-// newOps builds the ops endpoints from the handler's Deps, reusing Conns for the
-// registry health gate and Store for the config-store reachability gate.
+// newOps builds the ops endpoints from the handler's Deps, reusing Store for the
+// config-store reachability gate.
 func newOps(deps Deps) *Ops {
 	var store pinger
 	if deps.Store != nil {
@@ -48,7 +54,6 @@ func newOps(deps Deps) *Ops {
 		gatherer = prometheus.NewRegistry()
 	}
 	return &Ops{
-		reg:      deps.Conns,
 		store:    store,
 		gatherer: gatherer,
 		log:      deps.Log,
@@ -69,20 +74,16 @@ func (o *Ops) livez(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-// readyz is a readiness probe gating on the connection registry health AND the
-// config store reachability. A failing dependency returns 503 and names the
-// unready dep; both healthy returns 200. The probes run under a short bounded
-// timeout so a hung dependency does not wedge the endpoint.
+// readyz is a readiness probe gating on the config-store reachability ONLY. An
+// unreachable config store returns 503 {"notReady":"config_store"}; a reachable
+// store (or no store wired, in-memory mode) returns 200. Data-source connection
+// health is intentionally not gated here (see Ops doc): a down data source must
+// fail only the request that needs it, not the whole instance. The probe runs
+// under a short bounded timeout so a hung store does not wedge the endpoint.
 func (o *Ops) readyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), readyzTimeout)
 	defer cancel()
 
-	if o.reg != nil {
-		if err := o.reg.HealthCheck(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"notReady": "registry"})
-			return
-		}
-	}
 	if o.store != nil {
 		if err := o.store.Ping(ctx); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"notReady": "config_store"})

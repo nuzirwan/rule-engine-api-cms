@@ -25,11 +25,13 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +39,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/valkey-io/valkey-go"
 
+	"nzr-rules-engine/internal/auth"
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/connect/drivers"
@@ -93,12 +96,23 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 	obsLog := observ.NewLogger(logger)
 
 	// --- config store: Postgres config-store mode when CONFIG_DSN is set, else
-	// the original in-memory seed path (no DB touched). ---
-	store, cleanupStore, err := buildStore(ctx, seedPath, logger)
+	// the original in-memory seed path (no DB touched). adminStore is the SAME
+	// *config.PgStore in config-store mode (satisfies httpapi.AdminStore) and nil
+	// in in-memory mode (admin writes then return "requires config-store mode"). ---
+	store, adminStore, cleanupStore, err := buildStore(ctx, seedPath, logger)
 	if err != nil {
 		return err
 	}
 	defer cleanupStore()
+
+	// --- operator-auth for the /admin control plane (deny-by-default). When
+	// ADMIN_ENABLED=true, construct the static-token authenticator from
+	// ADMIN_TOKENS; a malformed / empty allow-list is a FATAL boot error. When
+	// disabled/unset, operAuth stays nil and the admin plane mounts CLOSED. ---
+	operAuth, err := buildOperatorAuth()
+	if err != nil {
+		return err
+	}
 
 	// --- connection registry over the seeded defs ---
 	defs, err := store.Connections(ctx, "")
@@ -138,12 +152,14 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 	// --- interpreter + HTTP edge (config-driven router + ops endpoints) ---
 	interp := flow.New()
 	srv, err := httpapi.NewServer(addr, store, interp, httpapi.Deps{
-		Conns:   registry,
-		Decide:  engine,
-		Trace:   tracer,
-		Log:     obsLog,
-		Store:   store,
-		Metrics: metricsReg,
+		Conns:    registry,
+		Decide:   engine,
+		Trace:    tracer,
+		Log:      obsLog,
+		Store:    store,
+		Metrics:  metricsReg,
+		Admin:    adminStore,
+		OperAuth: operAuth,
 	})
 	if err != nil {
 		return err
@@ -185,16 +201,18 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 // as before. The returned cleanup closes any resources opened for config-store
 // mode in LIFO order (cache subscriber, valkey client, pool); it is a no-op in
 // in-memory mode.
-func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (config.Store, func(), error) {
+func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (config.Store, httpapi.AdminStore, func(), error) {
 	dsn := os.Getenv("CONFIG_DSN")
 	if dsn == "" {
-		// --- in-memory mode: the EXACT original path. No DB touched. ---
+		// --- in-memory mode: the EXACT original path. No DB touched. The admin
+		// store is NIL here (the memStore lacks the admin method-set): admin writes
+		// return the "requires config-store mode" error; the data plane serves. ---
 		store, err := config.LoadSeed(seedPath)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		logger.Info("config seed loaded (in-memory mode)", slog.String("seed", seedPath))
-		return store, func() {}, nil
+		return store, nil, func() {}, nil
 	}
 
 	// --- config-store mode ---
@@ -203,13 +221,13 @@ func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (conf
 		schema = defaultConfigSchema
 	}
 	if err := config.ValidateSchemaName(schema); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Open a pool pinned to the dedicated schema and ensure the schema exists.
 	pool, err := config.OpenSchemaPool(ctx, dsn, schema)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Track resources for LIFO cleanup; close them if a later step fails.
 	var cleanups []func()
@@ -226,12 +244,12 @@ func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (conf
 	hasTables, err := config.SchemaHasConfigTables(ctx, pool, schema)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !hasTables {
 		if err := migrations.Apply(ctx, pool); err != nil {
 			cleanup()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -241,7 +259,7 @@ func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (conf
 		client, cerr := valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}, DisableCache: true})
 		if cerr != nil {
 			cleanup()
-			return nil, nil, cerr
+			return nil, nil, nil, cerr
 		}
 		cleanups = append(cleanups, client.Close)
 		vc := config.NewValkeyCache(client)
@@ -258,19 +276,19 @@ func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (conf
 	store, err := config.NewPgStore(map[string]*pgxpool.Pool{"": pool}, opts...)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Seed seed.json INTO the PgStore idempotently (only if not already seeded).
 	raw, err := os.ReadFile(seedPath)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	seeded, err := config.SeedPgStore(ctx, store, raw)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	logger.Info("config store connected (config-store mode)",
@@ -280,7 +298,26 @@ func buildStore(ctx context.Context, seedPath string, logger *slog.Logger) (conf
 		slog.Bool("seeded", seeded),
 		slog.String("seed", seedPath),
 	)
-	return store, cleanup, nil
+	// Same *config.PgStore instance serves BOTH the hot-path config.Store and the
+	// admin method-set (httpapi.AdminStore) — slice-f-admin-api.md §2.1a.
+	return store, store, cleanup, nil
+}
+
+// buildOperatorAuth constructs the operator-plane authenticator from the
+// operator-only config keys (never the public JWT keys). ADMIN_ENABLED=true
+// builds a StaticTokenOperatorAuth from ADMIN_TOKENS and treats a malformed /
+// empty allow-list as a FATAL boot error. When disabled/unset it returns a nil
+// authenticator so the admin plane mounts CLOSED (deny-by-default).
+func buildOperatorAuth() (auth.OperatorAuthenticator, error) {
+	if strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_ENABLED"))) != "true" {
+		return nil, nil // plane disabled => mount-closed
+	}
+	tokens := os.Getenv("ADMIN_TOKENS")
+	oa, err := auth.NewStaticTokenOperatorAuth(tokens)
+	if err != nil {
+		return nil, fmt.Errorf("admin operator auth: %w", err)
+	}
+	return oa, nil
 }
 
 // redactDSN parses a Postgres DSN and blanks the password so a connection log

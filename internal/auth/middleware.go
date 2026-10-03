@@ -57,7 +57,7 @@ func NewMiddleware(authn Authenticator, authz Authorizer, ra ResourceActionFunc,
 // and does NOT call next — deny by default (security-and-authz).
 func (m *Middleware) Authn(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bearer, ok := bearerToken(r)
+		bearer, ok := BearerToken(r)
 		if !ok {
 			m.deny401(w, r, validationErr("authn", ErrNoBearer), "")
 			return
@@ -143,9 +143,11 @@ func (m *Middleware) audit(r *http.Request, level, label string, fields map[stri
 	m.log.Emit(r.Context(), level, label, fields)
 }
 
-// bearerToken extracts the token from an "Authorization: Bearer <jwt>" header.
-// The match is case-insensitive on the scheme per RFC 7235.
-func bearerToken(r *http.Request) (string, bool) {
+// BearerToken extracts the token from an "Authorization: Bearer <token>" header.
+// The match is case-insensitive on the scheme per RFC 7235. It is exported so
+// the operator-auth guard reuses this single parser rather than duplicating one
+// (slice-f-admin-api.md §3.3).
+func BearerToken(r *http.Request) (string, bool) {
 	h := r.Header.Get("Authorization")
 	if h == "" {
 		return "", false

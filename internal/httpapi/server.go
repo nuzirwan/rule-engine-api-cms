@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 
+	"nzr-rules-engine/internal/auth"
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/decision"
@@ -68,6 +69,18 @@ type Deps struct {
 		Ping(ctx context.Context) error
 	}
 	Metrics prometheus.Gatherer
+
+	// Admin is the control-plane method-set the /admin/* handlers depend on
+	// (slice-f-admin-api.md §2.2). It is satisfied structurally by *config.PgStore;
+	// cmd/engine passes the SAME store instance as both the hot-path `store`
+	// argument and here. A nil Admin means admin writes return a classified
+	// "requires config-store mode" error (in-memory mode), while the data plane
+	// still serves.
+	Admin AdminStore
+	// OperAuth is the operator-plane authenticator (slice-f-admin-api.md §3). A nil
+	// OperAuth mounts the operator plane CLOSED: every /admin/* request is 503
+	// (deny-by-default), never mounted open.
+	OperAuth auth.OperatorAuthenticator
 }
 
 // NewServer builds an *http.Server whose handler serves the config-driven routes
@@ -101,6 +114,14 @@ func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler,
 	// precedence, so /livez etc. never reach the flow resolver.
 	ops := newOps(deps)
 	ops.mount(mux)
+
+	// Control plane: code-registered /admin/* routes, each guarded by the
+	// operator-auth chain (deny-by-default). Mounted BEFORE the "/" catch-all for
+	// readability — ServeMux precedence is by specificity, so the more-specific
+	// /admin/* patterns win over "/" regardless of registration order
+	// (slice-f-admin-api.md §2.1).
+	admin := newAdmin(interp, deps)
+	admin.mount(mux)
 
 	// The single catch-all: every other request re-resolves against LIVE config.
 	mux.HandleFunc("/", genericFlowHandler(store, interp, deps))
