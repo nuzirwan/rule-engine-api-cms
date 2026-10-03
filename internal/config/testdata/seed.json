@@ -166,6 +166,49 @@
           { "id": "e2", "type": "edge", "sourceId": "dt", "targetId": "out" }
         ]
       }
+    },
+    {
+      "id": "authz",
+      "version": 1,
+      "doc": {
+        "nodes": [
+          {
+            "id": "azin",
+            "type": "inputNode",
+            "name": "AuthzInput",
+            "position": { "x": 100, "y": 100 }
+          },
+          {
+            "id": "azdt",
+            "type": "decisionTableNode",
+            "name": "Allow",
+            "position": { "x": 350, "y": 100 },
+            "content": {
+              "hitPolicy": "first",
+              "inputs": [
+                { "id": "ai1", "name": "User", "field": "user", "type": "expression" }
+              ],
+              "outputs": [
+                { "id": "ao1", "name": "Allow", "field": "allow", "type": "expression" }
+              ],
+              "rules": [
+                { "_id": "ar1", "ai1": "== 'denied'", "ao1": "false" },
+                { "_id": "ar2", "ai1": "", "ao1": "true" }
+              ]
+            }
+          },
+          {
+            "id": "azout",
+            "type": "outputNode",
+            "name": "Decision",
+            "position": { "x": 600, "y": 100 }
+          }
+        ],
+        "edges": [
+          { "id": "ae1", "type": "edge", "sourceId": "azin", "targetId": "azdt" },
+          { "id": "ae2", "type": "edge", "sourceId": "azdt", "targetId": "azout" }
+        ]
+      }
     }
   ],
   "connections": [

@@ -24,6 +24,16 @@ func (s fakeStore) ActiveFlow(ctx context.Context, env, method, path string) (co
 	return s.fv, s.err
 }
 
+// GetJDM/Connections satisfy the widened Store seam (admin endpoints). The
+// routing/edge tests do not exercise them, so they return empty/no-error.
+func (s fakeStore) GetJDM(ctx context.Context, env, id string) ([]byte, int, error) {
+	return nil, 0, config.ErrNotFound
+}
+
+func (s fakeStore) Connections(ctx context.Context, env string) ([]connect.ConnectionDef, error) {
+	return nil, nil
+}
+
 // TestHandlerRouting proves the one hard-coded route is reachable and that a
 // non-matching method/path is rejected by the stdlib ServeMux (not the handler).
 func TestHandlerRouting(t *testing.T) {
