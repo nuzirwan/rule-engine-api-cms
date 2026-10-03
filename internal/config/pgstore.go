@@ -472,6 +472,182 @@ func (s *PgStore) SetActive(ctx context.Context, env, flowID string, version int
 	return nil
 }
 
+// PutJDMVersion inserts a NEW immutable JDM version and points the active JDM
+// pointer at it, mirroring PutFlowVersion's transactional shape: ensure the jdms
+// identity row, lock it FOR UPDATE, compute max(version)+1 (or honor a positive
+// explicit version), insert the version body with its checksum + actor, then
+// move the active_pointers row for objJDM and append create_version + publish
+// audit rows. If version<=0 the next version is auto-assigned. Re-running with a
+// doc already present simply lands a new version and re-points; the top-level
+// seed-skip gate (SeedPgStore) is the primary idempotency guard.
+func (s *PgStore) PutJDMVersion(ctx context.Context, env, jdmID string, doc []byte, version int) (int, error) {
+	if jdmID == "" {
+		return 0, newErr(Validation, "jdm version missing jdmId")
+	}
+	if len(doc) == 0 {
+		return 0, newErr(Validation, "jdm version missing doc")
+	}
+	pool, err := s.pool(env)
+	if err != nil {
+		return 0, err
+	}
+
+	var assigned int
+	err = withTx(ctx, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jdms (id, created_by) VALUES ($1,$2)
+			 ON CONFLICT (id) DO NOTHING`, jdmID, s.actor); err != nil {
+			return classifyPg("ensure jdm identity", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`SELECT id FROM jdms WHERE id=$1 FOR UPDATE`, jdmID); err != nil {
+			return classifyPg("lock jdm identity", err)
+		}
+
+		assigned = version
+		if assigned <= 0 {
+			var maxV *int
+			if err := tx.QueryRow(ctx,
+				`SELECT max(version) FROM jdm_versions WHERE jdm_id=$1`, jdmID).Scan(&maxV); err != nil {
+				return classifyPg("read max jdm version", err)
+			}
+			assigned = 1
+			if maxV != nil {
+				assigned = *maxV + 1
+			}
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jdm_versions (jdm_id, version, jdm, checksum, created_by)
+			 VALUES ($1,$2,$3,$4,$5)
+			 ON CONFLICT (jdm_id, version) DO NOTHING`,
+			jdmID, assigned, doc, checksum(doc), s.actor); err != nil {
+			return classifyPg("insert jdm version", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO active_pointers (object_type, object_id, version, updated_by)
+			 VALUES ($1,$2,$3,$4)
+			 ON CONFLICT (object_type, object_id)
+			 DO UPDATE SET version=EXCLUDED.version, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+			objJDM, jdmID, assigned, s.actor); err != nil {
+			return classifyPg("move jdm pointer", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
+			 VALUES ($1,$2,$3,$4,$5)`,
+			s.actor, actCreateVersion, objJDM, jdmID, assigned); err != nil {
+			return classifyPg("audit create jdm version", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
+			 VALUES ($1,$2,$3,$4,$5)`,
+			s.actor, actPublish, objJDM, jdmID, assigned); err != nil {
+			return classifyPg("audit publish jdm version", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return assigned, nil
+}
+
+// PutConnectionVersion inserts a NEW immutable connection version and points the
+// active connection pointer at it, mirroring PutFlowVersion's transactional
+// shape. It stores def.Settings and def.Resilience as jsonb and def.SecretRef as
+// the ONLY secret surface (connection_versions has no column for a secret value —
+// a value is never written here, [[config-and-secrets]]). version is always
+// auto-assigned (max+1). Returns the assigned version.
+func (s *PgStore) PutConnectionVersion(ctx context.Context, env string, def connect.ConnectionDef) (int, error) {
+	if def.Key == "" || def.Type == "" {
+		return 0, newErr(Validation, "connection version missing key or type")
+	}
+	pool, err := s.pool(env)
+	if err != nil {
+		return 0, err
+	}
+
+	settingsRaw, err := json.Marshal(def.Settings)
+	if err != nil {
+		return 0, wrapErr(Validation, "encode connection settings", err)
+	}
+	if len(settingsRaw) == 0 || string(settingsRaw) == "null" {
+		settingsRaw = []byte("{}")
+	}
+	resilienceRaw, err := json.Marshal(def.Resilience)
+	if err != nil {
+		return 0, wrapErr(Validation, "encode connection resilience", err)
+	}
+
+	// A connection stores secret_ref ONLY; the empty string maps to SQL NULL so
+	// the column stays a clean "no secret pointer" rather than an empty string.
+	var secretRef *string
+	if def.SecretRef != "" {
+		sr := def.SecretRef
+		secretRef = &sr
+	}
+
+	var assigned int
+	err = withTx(ctx, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO connections (key, type, created_by) VALUES ($1,$2,$3)
+			 ON CONFLICT (key) DO NOTHING`, def.Key, def.Type, s.actor); err != nil {
+			return classifyPg("ensure connection identity", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`SELECT key FROM connections WHERE key=$1 FOR UPDATE`, def.Key); err != nil {
+			return classifyPg("lock connection identity", err)
+		}
+
+		var maxV *int
+		if err := tx.QueryRow(ctx,
+			`SELECT max(version) FROM connection_versions WHERE conn_key=$1`, def.Key).Scan(&maxV); err != nil {
+			return classifyPg("read max connection version", err)
+		}
+		assigned = 1
+		if maxV != nil {
+			assigned = *maxV + 1
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO connection_versions
+			   (conn_key, version, settings, secret_ref, resilience, checksum, created_by)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			def.Key, assigned, settingsRaw, secretRef, resilienceRaw, checksum(settingsRaw), s.actor); err != nil {
+			return classifyPg("insert connection version", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO active_pointers (object_type, object_id, version, updated_by)
+			 VALUES ($1,$2,$3,$4)
+			 ON CONFLICT (object_type, object_id)
+			 DO UPDATE SET version=EXCLUDED.version, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+			objConnection, def.Key, assigned, s.actor); err != nil {
+			return classifyPg("move connection pointer", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
+			 VALUES ($1,$2,$3,$4,$5)`,
+			s.actor, actCreateVersion, objConnection, def.Key, assigned); err != nil {
+			return classifyPg("audit create connection version", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO audit_log (actor, action, object_type, object_id, to_version)
+			 VALUES ($1,$2,$3,$4,$5)`,
+			s.actor, actPublish, objConnection, def.Key, assigned); err != nil {
+			return classifyPg("audit publish connection version", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return assigned, nil
+}
+
 // Ping reports store reachability for /readyz (seam addition, Slice E). It pings
 // every env pool; the first unreachable pool is an Upstream error.
 func (s *PgStore) Ping(ctx context.Context) error {

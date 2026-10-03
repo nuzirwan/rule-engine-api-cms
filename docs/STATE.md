@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-02 · mainline HEAD at handoff: `4fd28a2`
+Last updated: 2026-10-03 · mainline HEAD at handoff: `4fd28a2`
 
 ## What this project is
 A config-driven API engine (Go, data plane) + a planned Strapi CMS (control plane, separate
@@ -60,9 +60,9 @@ Dep notes from the merge: go directive is now **1.26.0**; added valkey-go v1.0.7
 sony/gobreaker/v2, golang-jwt/v5, prometheus/client_golang, go.opentelemetry.io/otel*.
 
 ### Wiring join — DONE (merged to mainline @ 74f551c)
-`cmd/engine` + `internal/httpapi` now wire the REAL packages: config.Store (Postgres PgStore
-behind `-config-dsn`/`CONFIG_DSN`, else in-memory seed), toggleable AuthN→AuthZ chain (bypassed
-when unconfigured), OTel provider + logger + metrics, the full flow node registry, and the admin
+`cmd/engine` + `internal/httpapi` now wire the REAL packages: config.Store, toggleable
+AuthN→AuthZ chain (bypassed when unconfigured), OTel provider + logger + metrics, the full flow
+node registry, and the admin
 endpoints `POST /admin/flows/validate` (publish-blocking, always 200) + `POST /admin/flows/dry-run`
 (writes suppressed via observ.WithDryRun, honored in flow.actionHandler). LIFO graceful shutdown.
 Defect fixed in-scope during integration: `flow.ValidateTree` was reclassifying linear action/set
@@ -75,6 +75,39 @@ Known in-spirit limitations (documented, non-blocking): dry-run of the seed repo
 in its errors array because the seed's Set consumes the suppressed write's return body (expected
 consequence of suppression; trace + no-write assertions hold); the dry-run trace records only the
 suppressed write node — full per-node TraceNode integration in internal/flow is a later increment.
+
+CORRECTION (config-store run mode increment): the paragraph above previously claimed the Wiring
+join made `cmd/engine` select a Postgres PgStore vs the in-memory seed behind `CONFIG_DSN`. That
+was overstated — `cmd/engine` at that point only ran `config.LoadSeed(seedPath)` into a memStore;
+no DSN, migrations, or cache were wired into the runnable binary. The PgStore/ValkeyCache were
+built + unit/integration-tested but NOT reachable from the binary. The config-store run mode is
+actually wired by the increment below.
+
+### Config-store run mode — DONE
+`cmd/engine` now selects its run mode after loading an optional `.env`:
+- **CONFIG_DSN set → config-store mode.** Opens a pgxpool pinned to a dedicated Postgres schema
+  (`CONFIG_SCHEMA`, default **`rule_engine`**, validated as a safe identifier) via a pool
+  `AfterConnect` running `SET search_path TO <schema>`, runs `CREATE SCHEMA IF NOT EXISTS` then
+  applies `migrations.Apply` so every (unqualified) `CREATE TABLE` lands in `<schema>.*` and
+  `public` is left untouched. Builds a `ValkeyCache` + invalidation consumer when `VALKEY_ADDR` is
+  set (else runs cache-down), a `PgStore` over `{"": pool}`, and seeds `seed.json` INTO Postgres
+  idempotently THROUGH the store (new `PgStore.PutJDMVersion` / `PutConnectionVersion` write
+  methods + `PutFlowVersion`→`MarkValidated`→`SetActive`; connection versions store `secret_ref`
+  only, never a secret value). `migrations.Apply` is gated on a `flows`-table existence check so a
+  second process start against an already-migrated schema does not re-run the bare DDL. The
+  connected host/db/schema is logged with the password REDACTED. LIFO cleanup closes cache
+  subscriber → valkey client → pool.
+- **CONFIG_DSN unset → in-memory mode.** The EXACT original `config.LoadSeed(seedPath)` path; no
+  database is touched.
+- New `internal/envfile` loader (dependency-free `KEY=VALUE`, process env wins, missing file is
+  fine). New `.env.example` documents `CONFIG_DSN / CONFIG_SCHEMA / VALKEY_ADDR / ENGINE_ADDR /
+  ORDERS_PG_DSN / SHIP_REST_BASE_URL / RUN_REST_STUB / REST_STUB_PORT`.
+- New build-tagged integration test `internal/config/configrun_integration_test.go` (ephemeral
+  postgres:16 ×2 + valkey, NEVER an external DB) asserts: (a) config tables in `rule_engine`, not
+  `public`; (b) seed flow/JDM/connections written + flow active; (c) a second seed is idempotent
+  (no error, no duplicate version); (d) `GET /orders/{id}` served end-to-end reading config from
+  the PgStore. Full gate green: build, vet, unit (incl. envfile + schema validator), the
+  CGO_ENABLED=0 decision-stub build, and the config + httpapi integration suites.
 
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
 non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
