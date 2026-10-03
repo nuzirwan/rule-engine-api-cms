@@ -33,6 +33,21 @@ func NewCtx(reqID, traceID, env string, input map[string]any) *Ctx {
 	}
 }
 
+// cloneWritable returns a shallow clone of c sharing the read-only Input and
+// Data but with a fresh Response map, for use by parallel/forEach children that
+// need a scratch writable view. After the child finishes, its Response is merged
+// back into the shared Ctx by the parent handler under a lock.
+func (c *Ctx) cloneWritable() *Ctx {
+	return &Ctx{
+		RequestID: c.RequestID,
+		TraceID:   c.TraceID,
+		Env:       c.Env,
+		Input:     c.Input,
+		Data:      c.Data,
+		Response:  map[string]any{},
+	}
+}
+
 // GetPath reads a dotted path from the merged view with precedence
 // Response -> Data -> Input (most-derived wins). Dotted segments descend
 // map[string]any; numeric segments index []any. It returns (value, true) on the
