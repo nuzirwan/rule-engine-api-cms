@@ -1,0 +1,32 @@
+{
+  "iteration": 1,
+  "mode": "cross-feat-integration-verification",
+  "result": "green",
+  "verification": {
+    "cgo1_build": "PASS (CGO_ENABLED=1 go build ./... exit 0)",
+    "cgo1_vet": "PASS (CGO_ENABLED=1 go vet ./... clean)",
+    "cgo1_unit_test": "PASS (CGO_ENABLED=1 go test ./... all pass)",
+    "cgo0_decision_build": "PASS (CGO_ENABLED=0 go build ./internal/decision exit 0, ZEN stub)",
+    "cgo1_httpapi_integration": "PASS (CGO_ENABLED=1 go test -tags 'integration cgo' ./internal/httpapi, 23.8s, ephemeral postgres:16 via Docker)",
+    "cgo1_config_integration": "PASS (CGO_ENABLED=1 go test -tags 'integration cgo' ./internal/config, 137.6s, ephemeral postgres:16 + valkey)"
+  },
+  "integration_seams": "No cross-FEAT breakage found. FEAT-001 (zero-restart config-driven router + ActiveRoutes seam + ops endpoints) and FEAT-002 (FMC demo flows as config rows + typed SQL params) converge cleanly. FEAT-001's coercePathParam was removed by FEAT-002 and replaced with config-declared typed params (flow/param.go); no dangling references. Both FMC branches, the zero-restart proof, ops endpoints, and typed-param tests all green.",
+  "platform_genericness_assessment": {
+    "requested_by": "parent (business-noun audit, config-driven-boundaries principle)",
+    "status": "DEFERRED (non-trivial; would cross frozen seams and risk the green gate)",
+    "concern_1_normalizeResult": {
+      "location": "internal/httpapi/adapters.go normalizeResult (called in templatingClient.Execute)",
+      "demo_tie": "Unwraps a single-row []map[string]any postgres result to that row's map, a shape assumption baked from the orders/{id} GET-one-resource read. A flow wanting the array form of a one-row result is surprised.",
+      "why_deferred": "normalizeResult runs in the connect.Registry wrapper (templatingClient), which sees only connect.Operation \u2014 it has NO access to the action node spec. Letting the action node declare 'one row vs many' requires threading a shape declaration from ActionSpec through the frozen connect.Operation seam (or a new out-of-band channel) into the edge wrapper, plus validation and seed changes. Both FMC flows and orders-expedite currently rely on single-row unwrap; changing the default is user-visible. Not 'small given the httpapi rewrite' \u2014 the rewrite changed the ROUTER, not this edge adapter.",
+      "suggested_follow_up": "Add an optional shape declaration to ActionSpec (e.g. result: 'one' | 'many') and plumb it to the edge so normalizeResult is explicit, not guessed. Default must preserve today's single-row-unwrap behavior to avoid breaking existing flows."
+    },
+    "concern_2_soleStringValue_branchingEvaluator": {
+      "location": "internal/httpapi/adapters.go branchingEvaluator / soleStringValue (wraps decision.Evaluator; consumed by flow conditionHandler.chooseBranch and switchHandler.switchBranch via out[\"branch\"])",
+      "demo_tie": "Promotes a decision output that is a single string value to the 'branch' field regardless of field name \u2014 tuned to the order JDM emitting {\"shipping\":\"<branch>\"}.",
+      "why_deferred": "The promotion happens in a decision.Evaluator wrapper whose signature is Evaluate(ctx, jdmID, input) \u2014 it has NO access to the node spec, so it cannot know which output field the node intends as the branch. Making it config-declared means either changing the frozen decision.Evaluator seam to carry a branch-field, OR moving branch resolution into the frozen flow core (conditionHandler/switchHandler) with a new BranchField on ConditionSpec/SwitchSpec plus validate.go rules. Existing tests pin the current convention (TestBranchingEvaluator, chooseBranch truthy/falsey, interpreter_test.go). Crosses two frozen seams; non-trivial.",
+      "note": "The two NEW FMC flows do NOT exercise this heuristic: they use a decision node (saveAs=dec) + set node reading dec.action explicitly \u2014 already config-declared, no guessing. soleStringValue is only reached by the legacy orders-expedite condition path.",
+      "suggested_follow_up": "Add an optional branchField to ConditionSpec/SwitchSpec so the node names which decision output field is the branch, read it in conditionHandler/switchHandler, and retire soleStringValue. Keep the current 'branch'/'result' convention as the fallback default so orders-expedite keeps working."
+    },
+    "scope_decision_rationale": "Per parent guidance: do it now only if SMALL and low-risk; otherwise record as a known follow-up and leave current behavior working. Both items cross frozen seams (connect.Operation / decision.Evaluator / flow core specs) and have pinned tests \u2014 NON-TRIVIAL and a green-gate risk. Correctness of the shipped increment (zero-restart proof, both FMC branches, ops endpoints, typed-param tests) takes precedence, so both are DEFERRED and documented here for review.json."
+  }
+}
