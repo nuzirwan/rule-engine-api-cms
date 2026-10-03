@@ -127,6 +127,18 @@ Pick the next milestone (product-priority call):
   promotion, the publish transform into the engine config store. (This is the original ask.)
 - **Deferred engine items as needed**: idempotency for required writes (R4), rate limiting (R6),
   cross-source saga/compensation (R3).
+- **De-demo-ify `internal/httpapi/adapters.go` (platform-genericness, from a business-noun audit).**
+  Two demo-tuned heuristics live in the httpapi edge and should become CONFIG-DECLARED, not
+  assumed from the orders demo's data shape (per `concepts/config-driven-boundaries`): (1)
+  `normalizeResult` unwraps a single-row Postgres result to a map "because orders/{id} yields one
+  row" — a shape assumption; the action node should declare one-row-vs-many instead of the engine
+  guessing. (2) `soleStringValue`/`branchingEvaluator` treats a single-string decision output as
+  "the branch" regardless of field name — tuned to the order JDM's `{"shipping":"<branch>"}`; the
+  condition node should declare which decision output field is the branch. The core engine
+  (`internal/flow`, `connect`, `decision`, `config`, `observ`) is clean of business logic — these
+  two are the only demo-ties left after the config-driven-routing fix removes the hardcoded route.
+  (The in-flight config-driven-routing increment may address these opportunistically; if not,
+  they're a small follow-up increment.)
 - **Collection logic over result sets (NEXT PHASE — not MVP).** The engine can return multi-row
   arrays, index into them, and iterate (`forEach`) with per-row ZEN decisions. It does NOT yet
   have first-class **`filter` / `find` / `map` / `reduce`/aggregate** nodes to select or compute a
