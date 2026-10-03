@@ -12,12 +12,13 @@ import (
 	"testing"
 )
 
-// loadOrderJDM reads the committed order JDM bytes used across the slice tests
-// (same decision table as internal/zenspike/testdata/order.jdm.json). The config
-// seed carries the same table; this test reads the zenspike copy directly.
+// loadOrderJDM reads the committed order JDM bytes used across the decision tests.
+// The fixture lives in this package's own testdata (recovered from the former
+// zenspike copy when the throwaway spike packages were removed); the config seed
+// carries the same decision table.
 func loadOrderJDM(t *testing.T) []byte {
 	t.Helper()
-	path := filepath.Join("..", "zenspike", "testdata", "order.jdm.json")
+	path := filepath.Join("testdata", "order.jdm.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read order jdm: %v", err)
