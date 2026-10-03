@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-03 · mainline HEAD at handoff: `df547be` (feat/admin-api fast-forwarded in)
+Last updated: 2026-10-03 · mainline HEAD at handoff: `df1a748` (feat/strapi-cms fast-forwarded in)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
