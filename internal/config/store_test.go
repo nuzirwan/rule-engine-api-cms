@@ -83,6 +83,64 @@ func TestSeedResolvesFlow(t *testing.T) {
 	}
 }
 
+// TestActiveRoutes proves ActiveRoutes enumerates the seeded active route(s)
+// with the right {FlowID,Method,Path}, and that a put-but-not-activated version
+// is NOT returned (only active pointers are enumerated).
+func TestActiveRoutes(t *testing.T) {
+	ctx := context.Background()
+	store, err := LoadSeed("testdata/seed.json")
+	if err != nil {
+		t.Fatalf("LoadSeed: %v", err)
+	}
+
+	routes, err := store.ActiveRoutes(ctx, "")
+	if err != nil {
+		t.Fatalf("ActiveRoutes: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("active routes = %d; want 1 (%+v)", len(routes), routes)
+	}
+	got := routes[0]
+	if got.FlowID != "orders-expedite" || got.Method != "GET" || got.Path != "/orders/{id}" {
+		t.Fatalf("route = %+v; want {orders-expedite GET /orders/{id}}", got)
+	}
+
+	// A new flow version that is PUT but never SetActive must not appear.
+	inactive := FlowVersion{
+		FlowID: "widgets-list",
+		Method: "GET",
+		Path:   "/widgets",
+		Tree:   flow.Node{ID: "t", Type: flow.TypeTrigger},
+	}
+	if _, err := store.PutFlowVersion(ctx, "", inactive); err != nil {
+		t.Fatalf("PutFlowVersion: %v", err)
+	}
+	routes, err = store.ActiveRoutes(ctx, "")
+	if err != nil {
+		t.Fatalf("ActiveRoutes after put: %v", err)
+	}
+	for _, r := range routes {
+		if r.FlowID == "widgets-list" {
+			t.Fatalf("inactive flow version returned by ActiveRoutes: %+v", r)
+		}
+	}
+	if len(routes) != 1 {
+		t.Fatalf("active routes after inactive put = %d; want 1", len(routes))
+	}
+
+	// An env with no active routes returns a non-nil empty slice.
+	empty, err := store.ActiveRoutes(ctx, "no-such-env")
+	if err != nil {
+		t.Fatalf("ActiveRoutes empty env: %v", err)
+	}
+	if empty == nil {
+		t.Fatal("ActiveRoutes returned a nil slice for an empty env; want non-nil empty")
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty env routes = %d; want 0", len(empty))
+	}
+}
+
 // TestActiveFlowUnknownRoute proves an unknown route is a NotFound error.
 func TestActiveFlowUnknownRoute(t *testing.T) {
 	store, err := LoadSeed("testdata/seed.json")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"nzr-rules-engine/internal/config"
@@ -14,14 +15,24 @@ import (
 	"nzr-rules-engine/internal/flow"
 )
 
-// fakeStore returns a canned ActiveFlow result (or error) for the one route.
+// fakeStore returns a canned ActiveFlow result (or error) for the one route, and
+// advertises that same route via ActiveRoutes so the dynamic router registers it.
 type fakeStore struct {
-	fv  config.FlowVersion
-	err error
+	fv     config.FlowVersion
+	err    error
+	routes []config.RouteInfo // routes to register; defaults to fv's method/path
 }
 
 func (s fakeStore) ActiveFlow(ctx context.Context, env, method, path string) (config.FlowVersion, error) {
 	return s.fv, s.err
+}
+
+func (s fakeStore) ActiveRoutes(ctx context.Context, env string) ([]config.RouteInfo, error) {
+	if s.routes != nil {
+		return s.routes, nil
+	}
+	// Default: register the single route the canned FlowVersion describes.
+	return []config.RouteInfo{{FlowID: s.fv.FlowID, Method: s.fv.Method, Path: s.fv.Path}}, nil
 }
 
 // TestHandlerRouting proves the one hard-coded route is reachable and that a
@@ -33,7 +44,10 @@ func TestHandlerRouting(t *testing.T) {
 	trig := flow.Node{ID: "t", Type: flow.TypeTrigger, Spec: json.RawMessage(`{"method":"GET","path":"/orders/{id}","input":{"params":["id"]}}`), Children: []flow.Node{resp}}
 	store := fakeStore{fv: config.FlowVersion{FlowID: "f", Version: 1, Method: "GET", Path: "/orders/{id}", Tree: trig}}
 
-	h := NewHandler(store, flow.New(), Deps{})
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
 
 	tests := []struct {
 		name       string
@@ -42,7 +56,10 @@ func TestHandlerRouting(t *testing.T) {
 		wantStatus int
 	}{
 		{"matched route", http.MethodGet, "/orders/42", http.StatusOK},
-		{"wrong method", http.MethodPost, "/orders/42", http.StatusMethodNotAllowed},
+		// The catch-all receives every method; the live resolver finds no route
+		// for the wrong method and returns 404 (there is no per-method ServeMux
+		// registration to produce a 405).
+		{"wrong method", http.MethodPost, "/orders/42", http.StatusNotFound},
 		{"unknown path", http.MethodGet, "/widgets/42", http.StatusNotFound},
 	}
 	for _, tc := range tests {
@@ -56,14 +73,212 @@ func TestHandlerRouting(t *testing.T) {
 	}
 }
 
-// TestHandlerConfigError maps a store NotFound to a 404 at the edge.
+// TestHandlerConfigError maps a store NotFound at request time (ActiveFlow) to a
+// 404 at the edge, even though the route is registered from ActiveRoutes.
 func TestHandlerConfigError(t *testing.T) {
-	store := fakeStore{err: config.ErrNotFound}
-	h := NewHandler(store, flow.New(), Deps{})
+	store := fakeStore{
+		err:    config.ErrNotFound,
+		routes: []config.RouteInfo{{FlowID: "f", Method: "GET", Path: "/orders/{id}"}},
+	}
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orders/1", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d want 404", rec.Code)
+	}
+}
+
+// TestGenericHandlerMultiWildcard proves the catch-all resolver lifts EVERY
+// {name} path segment in the matched pattern into Ctx.Input by name. The flow is
+// a trigger->response pair, so a 200 only results if the request matched the
+// multi-wildcard pattern and ran the pinned flow.
+func TestGenericHandlerMultiWildcard(t *testing.T) {
+	resp := flow.Node{ID: "resp", Type: flow.TypeResponse, Spec: json.RawMessage(`{"status":200}`)}
+	trig := flow.Node{
+		ID:       "t",
+		Type:     flow.TypeTrigger,
+		Spec:     json.RawMessage(`{"method":"GET","path":"/order/msisdn/{msisdn}/{seq}","input":{"params":["msisdn","seq"]}}`),
+		Children: []flow.Node{resp},
+	}
+	store := fakeStore{
+		fv:     config.FlowVersion{FlowID: "f", Version: 1, Method: "GET", Path: "/order/msisdn/{msisdn}/{seq}", Tree: trig},
+		routes: []config.RouteInfo{{FlowID: "f", Method: "GET", Path: "/order/msisdn/{msisdn}/{seq}"}},
+	}
+
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/order/msisdn/628123/9", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDynamicRouteAbsent proves a path with no active route is a 404 — the
+// catch-all resolver matched nothing in the live route table.
+func TestDynamicRouteAbsent(t *testing.T) {
+	store := fakeStore{routes: []config.RouteInfo{}}
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orders/42", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d want 404 for an unregistered route", rec.Code)
+	}
+}
+
+// mutableStore is a Store whose active-route table can be swapped AT RUNTIME,
+// standing in for a config publish/deactivate against the SAME running handler.
+// ActiveFlow echoes the single canned flow for any resolve of a currently-active
+// route pattern; an unknown pattern is a NotFound.
+type mutableStore struct {
+	mu     sync.RWMutex
+	fv     config.FlowVersion
+	routes []config.RouteInfo
+}
+
+func (s *mutableStore) setRoutes(routes []config.RouteInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routes = routes
+}
+
+func (s *mutableStore) ActiveRoutes(ctx context.Context, env string) ([]config.RouteInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]config.RouteInfo, len(s.routes))
+	copy(out, s.routes)
+	return out, nil
+}
+
+func (s *mutableStore) ActiveFlow(ctx context.Context, env, method, path string) (config.FlowVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, rt := range s.routes {
+		if rt.Method == method && rt.Path == path {
+			return s.fv, nil
+		}
+	}
+	return config.FlowVersion{}, config.ErrNotFound
+}
+
+var _ Store = (*mutableStore)(nil)
+
+// TestZeroRestartRouting proves the router is zero-restart: a path 404s, then a
+// flow row for that path is activated IN THE SAME RUNNING HANDLER (no rebuild,
+// no restart), and the very next request is served — because every request
+// re-resolves against the live store. Deactivating the route 404s again.
+func TestZeroRestartRouting(t *testing.T) {
+	resp := flow.Node{ID: "resp", Type: flow.TypeResponse, Spec: json.RawMessage(`{"status":200}`)}
+	trig := flow.Node{
+		ID:       "t",
+		Type:     flow.TypeTrigger,
+		Spec:     json.RawMessage(`{"method":"GET","path":"/order/{order_id}","input":{"params":["order_id"]}}`),
+		Children: []flow.Node{resp},
+	}
+	store := &mutableStore{
+		fv:     config.FlowVersion{FlowID: "f", Version: 1, Method: "GET", Path: "/order/{order_id}", Tree: trig},
+		routes: nil, // start with NO active routes
+	}
+
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	// 1. No route yet -> 404.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/order/42", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("pre-publish status = %d want 404", rec.Code)
+	}
+
+	// 2. Publish the flow row into the SAME running handler (no restart).
+	store.setRoutes([]config.RouteInfo{{FlowID: "f", Method: "GET", Path: "/order/{order_id}"}})
+
+	// 3. Next request is served immediately.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/order/42", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post-publish status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// 4. Deactivate -> 404 again on the next request.
+	store.setRoutes(nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/order/42", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("post-deactivate status = %d want 404", rec.Code)
+	}
+}
+
+// TestOpsRoutesPrecedeCatchAll proves the code-registered ops routes win over the
+// "/" catch-all even when a config flow is also active (ServeMux longest-pattern
+// precedence). /livez returns the ops body, never the flow 404/200.
+func TestOpsRoutesPrecedeCatchAll(t *testing.T) {
+	store := fakeStore{routes: []config.RouteInfo{{FlowID: "f", Method: "GET", Path: "/livez"}}}
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/livez status = %d want 200", rec.Code)
+	}
+	if rec.Body.String() != "ok" {
+		t.Fatalf("/livez body = %q want ops %q (catch-all intercepted the ops route)", rec.Body.String(), "ok")
+	}
+}
+
+// TestMatchRoute covers the pattern matcher directly: literal match, single and
+// multi wildcard capture, segment-count mismatch, method mismatch, and
+// most-specific-wins when two patterns could match the same path.
+func TestMatchRoute(t *testing.T) {
+	routes := []config.RouteInfo{
+		{FlowID: "a", Method: "GET", Path: "/order/{order_id}"},
+		{FlowID: "b", Method: "GET", Path: "/order/msisdn/{msisdn}"},
+		{FlowID: "c", Method: "GET", Path: "/order/latest"}, // more specific than /order/{order_id}
+		{FlowID: "p", Method: "POST", Path: "/order/{order_id}"},
+	}
+
+	m, params, ok := matchRoute(routes, "GET", "/order/42")
+	if !ok || m.FlowID != "a" || params["order_id"] != "42" {
+		t.Fatalf("GET /order/42 -> %+v %v %v; want flow a order_id=42", m, params, ok)
+	}
+
+	m, params, ok = matchRoute(routes, "GET", "/order/msisdn/628123")
+	if !ok || m.FlowID != "b" || params["msisdn"] != "628123" {
+		t.Fatalf("GET /order/msisdn/628123 -> %+v %v %v; want flow b msisdn=628123", m, params, ok)
+	}
+
+	// Most-specific wins: /order/latest (literal) beats /order/{order_id}.
+	m, _, ok = matchRoute(routes, "GET", "/order/latest")
+	if !ok || m.FlowID != "c" {
+		t.Fatalf("GET /order/latest -> %+v %v; want flow c (literal beats wildcard)", m, ok)
+	}
+
+	// Method mismatch for a path that only has a GET route of that shape.
+	if _, _, ok := matchRoute(routes, "DELETE", "/order/42"); ok {
+		t.Fatal("DELETE /order/42 matched; want no match")
+	}
+
+	// Segment-count mismatch.
+	if _, _, ok := matchRoute(routes, "GET", "/order/42/extra"); ok {
+		t.Fatal("GET /order/42/extra matched; want no match")
+	}
+
+	// Correct method selects the POST route.
+	m, _, ok = matchRoute(routes, "POST", "/order/42")
+	if !ok || m.FlowID != "p" {
+		t.Fatalf("POST /order/42 -> %+v %v; want flow p", m, ok)
 	}
 }
 

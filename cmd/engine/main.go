@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/valkey-io/valkey-go"
 
 	"nzr-rules-engine/internal/config"
@@ -128,14 +129,25 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 		}
 	}()
 
-	// --- interpreter + HTTP edge ---
+	// --- metrics: a dedicated registry fronts /metrics; observ.NewMetrics
+	// registers the RED collectors on it. The same registry is the Gatherer the
+	// ops endpoint scrapes. ---
+	metricsReg := prometheus.NewRegistry()
+	_ = observ.NewMetrics(metricsReg)
+
+	// --- interpreter + HTTP edge (config-driven router + ops endpoints) ---
 	interp := flow.New()
-	srv := httpapi.NewServer(addr, store, interp, httpapi.Deps{
-		Conns:  registry,
-		Decide: engine,
-		Trace:  tracer,
-		Log:    obsLog,
+	srv, err := httpapi.NewServer(addr, store, interp, httpapi.Deps{
+		Conns:   registry,
+		Decide:  engine,
+		Trace:   tracer,
+		Log:     obsLog,
+		Store:   store,
+		Metrics: metricsReg,
 	})
+	if err != nil {
+		return err
+	}
 
 	// Serve in the background; a non-graceful listen failure aborts the process.
 	serveErr := make(chan error, 1)

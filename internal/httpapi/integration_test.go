@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
@@ -103,12 +104,17 @@ func TestOrdersEndToEnd(t *testing.T) {
 	defer engine.Close()
 
 	// --- the REAL httpapi handler over the real seams ---
-	handler := httpapi.NewHandler(store, flow.New(), httpapi.Deps{
-		Conns:  registry,
-		Decide: engine,
-		Trace:  tracer,
-		Log:    logger,
+	handler, err := httpapi.NewHandler(store, flow.New(), httpapi.Deps{
+		Conns:   registry,
+		Decide:  engine,
+		Trace:   tracer,
+		Log:     logger,
+		Store:   store,
+		Metrics: prometheus.NewRegistry(),
 	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
 
 	cases := []struct {
 		name         string

@@ -4,9 +4,18 @@
 // the per-request flow.Ctx from the request, runs the interpreter, and encodes
 // the stitched response. It uses stdlib net/http only — no chi/gin.
 //
-// The thin slice exposes exactly one hard-coded route, GET /orders/{id}, and no
-// auth middleware. The handler maps a classified engine error to an HTTP status
-// (Validation->400, NotFound->404, Timeout->504, Upstream->502, Internal->500).
+// The router is CONFIG-DRIVEN and ZERO-RESTART: NewHandler registers a SINGLE
+// catch-all handler on "/" that, on EVERY request, re-resolves the route against
+// the LIVE config store (store.ActiveRoutes -> hits the Valkey cache then
+// Postgres), matches the request method+path against each active flow's stored
+// path pattern, lifts {name} segments into Ctx.Input, and runs the interpreter.
+// Publishing a flow row makes its endpoint served on the very next request with
+// NO restart or redeploy; deactivating one yields a 404 next request ("adding an
+// API = adding config, no code deploy", docs/hld.md). The engine's own ops/control
+// routes (/livez, /readyz, /metrics) are code-registered on the SAME mux and take
+// precedence over the catch-all via ServeMux longest-pattern matching. The
+// handler maps a classified engine error to an HTTP status (Validation->400,
+// NotFound->404, Timeout->504, Upstream->502, Internal->500).
 package httpapi
 
 import (
@@ -15,12 +24,15 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/decision"
 	"nzr-rules-engine/internal/flow"
 	"nzr-rules-engine/internal/observ"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // defaultEnv is the environment the thin slice resolves flows and JDM under.
@@ -28,75 +40,116 @@ import (
 // uses the empty env the seed is published under.
 const defaultEnv = ""
 
-// Store is the subset of config.Store the handler needs: resolve the active flow
-// for a route and seed per-request template context. It is satisfied by the
-// in-memory store and the real store alike.
+// Store is the subset of config.Store the handler needs on the hot path: list
+// the CURRENT active routes to match a request against (re-read every request so
+// a newly published flow is served with no restart), and resolve+pin the active
+// flow version for the matched route pattern. It is satisfied by the in-memory
+// store and the real store alike.
 type Store interface {
 	ActiveFlow(ctx context.Context, env, method, path string) (config.FlowVersion, error)
+	ActiveRoutes(ctx context.Context, env string) ([]config.RouteInfo, error)
 }
 
-// Deps carries the wired collaborators the handler threads into the interpreter.
-// Conns and Decide are the frozen seams; Trace and Log are observability. The
-// handler wraps Conns and Decide per request so flow templates resolve against
-// the live Ctx and the decision output bridges to a condition branch key — both
-// without touching the pure flow core.
+// Deps carries the wired collaborators the handler threads into the interpreter
+// and the ops endpoints. Conns and Decide are the frozen seams; Trace and Log are
+// observability. The handler wraps Conns and Decide per request so flow templates
+// resolve against the live Ctx and the decision output bridges to a condition
+// branch key — both without touching the pure flow core.
+//
+// The ops endpoints reuse these collaborators: /readyz gates on Conns.HealthCheck
+// AND Store.Ping, and /metrics scrapes Metrics. Store and Metrics are nil-safe —
+// a nil Store skips the config-store readiness gate and a nil Metrics mounts
+// /metrics over an empty registry.
 type Deps struct {
 	Conns  connect.Registry
 	Decide decision.Evaluator
 	Trace  observ.Tracer
 	Log    observ.Logger
+	Store  interface {
+		Ping(ctx context.Context) error
+	}
+	Metrics prometheus.Gatherer
 }
 
-// NewServer builds an *http.Server whose handler serves the thin-slice routes
-// over the given store, interpreter and deps. The caller owns ListenAndServe and
-// Shutdown; addr is the listen address (e.g. ":8080").
-func NewServer(addr string, store Store, interp *flow.Interpreter, deps Deps) *http.Server {
+// NewServer builds an *http.Server whose handler serves the config-driven routes
+// plus the ops endpoints over the given store, interpreter and deps. It returns
+// the NewHandler error (an unreadable route table fails fast at startup). The
+// caller owns ListenAndServe and Shutdown; addr is the listen address (e.g. ":8080").
+func NewServer(addr string, store Store, interp *flow.Interpreter, deps Deps) (*http.Server, error) {
+	handler, err := NewHandler(store, interp, deps)
+	if err != nil {
+		return nil, err
+	}
 	return &http.Server{
 		Addr:    addr,
-		Handler: NewHandler(store, interp, deps),
-	}
+		Handler: handler,
+	}, nil
 }
 
-// NewHandler builds the stdlib ServeMux with the thin-slice routes registered.
-// It is exported so the integration test can exercise the real routing + Ctx
-// construction without binding a socket.
-func NewHandler(store Store, interp *flow.Interpreter, deps Deps) http.Handler {
+// NewHandler builds the stdlib ServeMux with a SINGLE catch-all flow handler on
+// "/" plus the code-registered ops endpoints (/livez, /readyz, /metrics). It
+// never pre-registers business routes, so a flow published after startup is
+// served on its next request with NO restart (zero-restart, docs/hld.md). It no
+// longer reads the route table at construction, so it cannot fail on a store
+// error here; the signature returns an error for forward-compatibility and so
+// callers need not change again. It is exported so tests can exercise the real
+// routing + Ctx construction without binding a socket.
+func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler, error) {
 	mux := http.NewServeMux()
-	// Go 1.22 pattern-with-method routing: method + path pattern with a {id}
-	// wildcard. This is the ONE hard-coded route of the thin slice.
-	mux.HandleFunc("GET /orders/{id}", ordersHandler(store, interp, deps))
-	return mux
+
+	// Ops/control endpoints first — code-registered, NOT config-defined. Their
+	// specific patterns win over the "/" catch-all by ServeMux longest-pattern
+	// precedence, so /livez etc. never reach the flow resolver.
+	ops := newOps(deps)
+	ops.mount(mux)
+
+	// The single catch-all: every other request re-resolves against LIVE config.
+	mux.HandleFunc("/", genericFlowHandler(store, interp, deps))
+
+	return mux, nil
 }
 
-// ordersHandler returns the GET /orders/{id} handler. It resolves+pins the flow
-// version once, builds Ctx from the request, wraps the deps per request, runs
-// the interpreter, and encodes the stitched Response with the Response node's
-// status.
-func ordersHandler(store Store, interp *flow.Interpreter, deps Deps) http.HandlerFunc {
+// genericFlowHandler returns the single catch-all handler. On EVERY request it
+// re-reads the CURRENT active routes from the store (hitting the Valkey cache
+// then Postgres on miss), matches the request method+path against the stored
+// path patterns (most-specific wins), resolves+PINS the matched flow version,
+// lifts each {name} path segment into Ctx.Input, wraps the deps per request, runs
+// the interpreter, and encodes the stitched Response. A path that matches no
+// active route is a 404. Because the route table is read per request, publishing
+// or deactivating a flow takes effect on the very next request — no restart.
+func genericFlowHandler(store Store, interp *flow.Interpreter, deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		id := r.PathValue("id")
-		if id == "" {
-			writeError(w, http.StatusBadRequest, "missing order id")
+		// Re-read the LIVE active routes and match this request against them. This
+		// per-request read is what makes the router zero-restart.
+		routes, err := store.ActiveRoutes(ctx, defaultEnv)
+		if err != nil {
+			writeError(w, statusForConfig(err), "cannot resolve routes")
+			return
+		}
+		match, params, ok := matchRoute(routes, r.Method, r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusNotFound, "no active flow for route")
 			return
 		}
 
-		// Resolve + PIN the active flow version ONCE at request start (AC-11).
-		// The matched route pattern is the stable key, not the concrete path.
-		fv, err := store.ActiveFlow(ctx, defaultEnv, http.MethodGet, "/orders/{id}")
+		// Resolve + PIN the active flow version ONCE at request start (AC-11),
+		// keyed by the matched route PATTERN (the stable key), not the concrete path.
+		fv, err := store.ActiveFlow(ctx, defaultEnv, match.Method, match.Path)
 		if err != nil {
 			writeError(w, statusForConfig(err), "no active flow for route")
 			return
 		}
 
-		// Build the per-request Ctx. The trigger declares input.params=["id"];
-		// httpapi performs that mapping before Run (slice-a §2.1). A path param
-		// arrives as a string; map a purely-numeric id to an integer so it binds
-		// to the orders INT primary key as a positional SQL param (pgx rejects a
-		// text value against an int4 column under the extended protocol). A
-		// non-numeric id is left as a string.
-		input := map[string]any{"id": coercePathParam(id)}
+		// Build the per-request Ctx from the captured path params. A param arrives
+		// as a string; a purely-numeric value is coerced to an int so it binds to an
+		// integer SQL parameter (pgx rejects a text value against an int4 column
+		// under the extended protocol); any other value stays a string.
+		input := make(map[string]any, len(params))
+		for name, val := range params {
+			input[name] = coercePathParam(val)
+		}
 		c := flow.NewCtx(requestID(r), traceID(r), defaultEnv, input)
 
 		// Stamp env on ctx for per-env JDM resolution (ADR-006).
@@ -120,6 +173,77 @@ func ordersHandler(store Store, interp *flow.Interpreter, deps Deps) http.Handle
 
 		writeJSON(w, http.StatusOK, c.Response)
 	}
+}
+
+// matchRoute finds the active route whose method matches and whose stored path
+// pattern matches reqPath, returning the matched route, the captured {name}->value
+// params, and ok. Matching is segment-wise: a literal pattern segment must equal
+// the request segment; a "{name}" segment captures the request segment. Segment
+// counts must be equal. When several patterns match, the MOST SPECIFIC wins —
+// the one with the most literal (non-wildcard) segments; ties break on the lexically
+// smaller pattern for determinism (routes already arrive Path-then-Method sorted).
+func matchRoute(routes []config.RouteInfo, method, reqPath string) (config.RouteInfo, map[string]string, bool) {
+	reqSegs := splitPath(reqPath)
+
+	var (
+		best       config.RouteInfo
+		bestParams map[string]string
+		bestLits   = -1
+		found      bool
+	)
+	for _, rt := range routes {
+		if rt.Method != method {
+			continue
+		}
+		params, lits, ok := matchPattern(rt.Path, reqSegs)
+		if !ok {
+			continue
+		}
+		if !found || lits > bestLits || (lits == bestLits && rt.Path < best.Path) {
+			best, bestParams, bestLits, found = rt, params, lits, true
+		}
+	}
+	return best, bestParams, found
+}
+
+// matchPattern matches a single stored path pattern against the already-split
+// request segments, returning the captured params, the count of literal segments
+// (specificity), and whether it matched.
+func matchPattern(pattern string, reqSegs []string) (map[string]string, int, bool) {
+	patSegs := splitPath(pattern)
+	if len(patSegs) != len(reqSegs) {
+		return nil, 0, false
+	}
+	params := map[string]string{}
+	lits := 0
+	for i, ps := range patSegs {
+		if len(ps) >= 2 && ps[0] == '{' && ps[len(ps)-1] == '}' {
+			name := strings.TrimSuffix(ps[1:len(ps)-1], "...")
+			if name != "" {
+				params[name] = reqSegs[i]
+			}
+			continue
+		}
+		if ps != reqSegs[i] {
+			return nil, 0, false
+		}
+		lits++
+	}
+	return params, lits, true
+}
+
+// splitPath splits a URL/pattern path into its non-empty segments so a leading
+// or trailing slash does not produce empty segments (e.g. "/orders/42" ->
+// ["orders","42"]).
+func splitPath(p string) []string {
+	parts := strings.Split(p, "/")
+	segs := parts[:0]
+	for _, s := range parts {
+		if s != "" {
+			segs = append(segs, s)
+		}
+	}
+	return segs
 }
 
 // writeJSON encodes v as a JSON response with the given status.

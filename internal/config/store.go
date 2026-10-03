@@ -15,6 +15,7 @@ package config
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -42,11 +43,22 @@ type FlowVersion struct {
 	Fixtures []FlowFixture `json:"fixtures,omitempty"`
 }
 
+// RouteInfo describes one active route: the flow it resolves to and the stable
+// method+path pattern it is registered under. The HTTP edge enumerates these at
+// startup to build its router from config instead of hardcoded registrations.
+type RouteInfo struct {
+	FlowID string
+	Method string
+	Path   string
+}
+
 // Store is the config seam consumed by the resolver, admin, and registry. The
 // method set matches lld-contracts.md exactly so the real store substitutes
-// without a caller change.
+// without a caller change. ActiveRoutes is a deliberate seam addition (Slice E)
+// so the HTTP edge builds its router from the active config.
 type Store interface {
 	ActiveFlow(ctx context.Context, env, method, path string) (FlowVersion, error)
+	ActiveRoutes(ctx context.Context, env string) ([]RouteInfo, error)
 	GetJDM(ctx context.Context, env, id string) (jdm []byte, version int, err error)
 	Connections(ctx context.Context, env string) ([]connect.ConnectionDef, error)
 	PutFlowVersion(ctx context.Context, env string, f FlowVersion) (version int, err error)
@@ -125,6 +137,31 @@ func (s *memStore) ActiveFlow(ctx context.Context, env, method, path string) (Fl
 		return FlowVersion{}, newErr(NotFound, "active flow version missing for "+ref.FlowID)
 	}
 	return fv, nil
+}
+
+// ActiveRoutes enumerates the active routes for env, resolving each active
+// pointer to its flow version so the HTTP edge can register one handler per
+// route. The result is sorted by Path then Method for a deterministic registration
+// order. An env with no active routes returns an empty (non-nil) slice, nil error.
+func (s *memStore) ActiveRoutes(ctx context.Context, env string) ([]RouteInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]RouteInfo, 0, len(s.active[env]))
+	for _, ref := range s.active[env] {
+		fv, ok := s.flows[env][ref.FlowID][ref.Version]
+		if !ok {
+			continue // active pointer with no matching version body: skip
+		}
+		out = append(out, RouteInfo{FlowID: ref.FlowID, Method: fv.Method, Path: fv.Path})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out, nil
 }
 
 // GetJDM returns the JDM bytes + version for (env, id). A missing JDM is NotFound.

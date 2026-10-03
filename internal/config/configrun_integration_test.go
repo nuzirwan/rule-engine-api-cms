@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/connect"
@@ -203,12 +204,17 @@ func serveEndToEndFromPgStore(t *testing.T, ctx context.Context, store config.St
 	engine := decision.New(cfgJDMLoader{store: store})
 	defer engine.Close()
 
-	handler := httpapi.NewHandler(store, flow.New(), httpapi.Deps{
-		Conns:  registry,
-		Decide: engine,
-		Trace:  tracer,
-		Log:    logger,
+	handler, err := httpapi.NewHandler(store, flow.New(), httpapi.Deps{
+		Conns:   registry,
+		Decide:  engine,
+		Trace:   tracer,
+		Log:     logger,
+		Store:   store,
+		Metrics: prometheus.NewRegistry(),
 	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
 
 	cases := []struct {
 		id, wantShipping, wantPath string

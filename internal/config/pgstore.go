@@ -114,6 +114,42 @@ func (s *PgStore) ActiveFlow(ctx context.Context, env, method, path string) (Flo
 	return fv, nil
 }
 
+// ActiveRoutes enumerates the active flow routes for env, joining the active
+// pointers to their flow identities so the HTTP edge builds its router from
+// config. Routes are read once at startup, so this bypasses the cache and reads
+// Postgres directly. Rows are ordered by path then method for a deterministic
+// registration order; an env with no active routes returns an empty slice.
+func (s *PgStore) ActiveRoutes(ctx context.Context, env string) ([]RouteInfo, error) {
+	pool, err := s.pool(env)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT ap.object_id, f.method, f.path
+		   FROM active_pointers ap
+		   JOIN flows f ON f.id = ap.object_id
+		  WHERE ap.object_type=$1
+		  ORDER BY f.path, f.method`, objFlow)
+	if err != nil {
+		return nil, classifyPg("list active routes", err)
+	}
+	defer rows.Close()
+
+	out := make([]RouteInfo, 0)
+	for rows.Next() {
+		var ri RouteInfo
+		if err := rows.Scan(&ri.FlowID, &ri.Method, &ri.Path); err != nil {
+			return nil, classifyPg("scan active route", err)
+		}
+		out = append(out, ri)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, classifyPg("iterate active routes", err)
+	}
+	return out, nil
+}
+
 // resolveFlowFromDB runs the indexed resolve chain: route -> pointer -> version
 // body -> fixtures. It is the cache-miss path.
 func (s *PgStore) resolveFlowFromDB(ctx context.Context, env, method, path string) (FlowVersion, error) {
