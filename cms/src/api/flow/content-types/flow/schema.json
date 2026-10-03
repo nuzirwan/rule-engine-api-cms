@@ -1,0 +1,58 @@
+{
+  "kind": "collectionType",
+  "collectionName": "flows",
+  "info": {
+    "singularName": "flow",
+    "pluralName": "flows",
+    "displayName": "Flow",
+    "description": "A versioned flow (design §3.1), mirroring the engine's flows + flow_versions + flow_fixtures. `tree` is a plain json field for now; FEAT-004 repoints it to the rule-engine.flow-canvas custom field."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "flowId": {
+      "type": "uid",
+      "required": true
+    },
+    "method": {
+      "type": "enumeration",
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+      "required": true
+    },
+    "path": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "regex": "^/[A-Za-z0-9/_{}.-]+$"
+    },
+    "tree": {
+      "type": "json"
+    },
+    "fixtures": {
+      "type": "component",
+      "repeatable": true,
+      "component": "flow.flow-fixture"
+    },
+    "environment": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::environment.environment"
+    },
+    "note": {
+      "type": "text"
+    },
+    "engineVersion": {
+      "type": "integer"
+    },
+    "lastPublishStatus": {
+      "type": "enumeration",
+      "enum": ["none", "validated", "published", "failed"],
+      "default": "none"
+    },
+    "lastValidation": {
+      "type": "json"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "collectionName": "components_connection_retry_policies",
+  "info": {
+    "displayName": "retry-policy",
+    "description": "Author-facing retry settings in human units (design §3.3.2). Transformed to Go-cased `Retry.MaxAttempts` in FEAT-003."
+  },
+  "options": {},
+  "attributes": {
+    "maxAttempts": {
+      "type": "integer",
+      "min": 1
+    }
+  }
+}

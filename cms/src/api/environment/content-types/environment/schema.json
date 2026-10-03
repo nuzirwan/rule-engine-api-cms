@@ -1,0 +1,30 @@
+{
+  "kind": "collectionType",
+  "collectionName": "environments",
+  "info": {
+    "singularName": "environment",
+    "pluralName": "environments",
+    "displayName": "Environment",
+    "description": "CMS metadata selecting which engine admin API deployment a publish targets (design §3.4). The `name` is NOT the payload env; `payloadEnv` is the value sent in the admin body's `env` field (default empty string)."
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "uid",
+      "required": true
+    },
+    "adminApiBaseUrl": {
+      "type": "string"
+    },
+    "operatorTokenRef": {
+      "type": "string"
+    },
+    "payloadEnv": {
+      "type": "string",
+      "default": ""
+    }
+  }
+}

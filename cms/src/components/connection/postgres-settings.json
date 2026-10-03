@@ -1,0 +1,33 @@
+{
+  "collectionName": "components_connection_postgres_settings",
+  "info": {
+    "displayName": "postgres-settings",
+    "description": "Credential-free postgres driver settings matching buildDSN's discrete path (design §3.3.1). Password comes from the Connection `secretRef`. NO dsn."
+  },
+  "options": {},
+  "attributes": {
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "default": 5432
+    },
+    "database": {
+      "type": "string"
+    },
+    "user": {
+      "type": "string"
+    },
+    "sslmode": {
+      "type": "enumeration",
+      "enum": ["disable", "require", "verify-full"],
+      "default": "disable"
+    },
+    "pool": {
+      "type": "component",
+      "repeatable": false,
+      "component": "connection.pool"
+    }
+  }
+}

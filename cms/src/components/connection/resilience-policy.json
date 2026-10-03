@@ -1,0 +1,19 @@
+{
+  "collectionName": "components_connection_resilience_policies",
+  "info": {
+    "displayName": "resilience-policy",
+    "description": "Author-facing resilience policy in human units (design §3.3.2). The transform (FEAT-003) converts timeoutMs -> Go-cased ns `Timeout` and retry.maxAttempts -> `Retry.MaxAttempts`."
+  },
+  "options": {},
+  "attributes": {
+    "timeoutMs": {
+      "type": "integer",
+      "min": 0
+    },
+    "retry": {
+      "type": "component",
+      "repeatable": false,
+      "component": "connection.retry-policy"
+    }
+  }
+}

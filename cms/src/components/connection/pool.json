@@ -1,0 +1,16 @@
+{
+  "collectionName": "components_connection_pools",
+  "info": {
+    "displayName": "pool",
+    "description": "Connection pool bounds mirroring the driver's nested pool.{maxConns,minConns} (design §3.3.1)."
+  },
+  "options": {},
+  "attributes": {
+    "maxConns": {
+      "type": "integer"
+    },
+    "minConns": {
+      "type": "integer"
+    }
+  }
+}

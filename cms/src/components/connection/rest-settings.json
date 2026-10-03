@@ -1,0 +1,16 @@
+{
+  "collectionName": "components_connection_rest_settings",
+  "info": {
+    "displayName": "rest-settings",
+    "description": "Credential-free REST connection settings (design §3.3.1). Non-secret headers only; auth tokens ride in the Connection `secretRef`, never inline."
+  },
+  "options": {},
+  "attributes": {
+    "baseURL": {
+      "type": "string"
+    },
+    "headers": {
+      "type": "json"
+    }
+  }
+}

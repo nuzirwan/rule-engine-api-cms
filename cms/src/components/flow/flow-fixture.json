@@ -1,0 +1,26 @@
+{
+  "collectionName": "components_flow_flow_fixtures",
+  "info": {
+    "displayName": "flow-fixture",
+    "description": "A flow test fixture (design §3.1.1 / slice-d §5). `mocks` and `expect` are optional — a fixture asserts whichever it declares."
+  },
+  "options": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "input": {
+      "type": "json",
+      "required": true
+    },
+    "mocks": {
+      "type": "json",
+      "required": false
+    },
+    "expect": {
+      "type": "json",
+      "required": false
+    }
+  }
+}

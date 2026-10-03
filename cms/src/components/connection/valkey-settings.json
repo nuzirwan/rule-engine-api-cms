@@ -1,0 +1,22 @@
+{
+  "collectionName": "components_connection_valkey_settings",
+  "info": {
+    "displayName": "valkey-settings",
+    "description": "Credential-free valkey connection settings (design §3.3.1). Password comes from the Connection `secretRef`."
+  },
+  "options": {},
+  "attributes": {
+    "addr": {
+      "type": "string"
+    },
+    "db": {
+      "type": "integer",
+      "default": 0
+    },
+    "pool": {
+      "type": "component",
+      "repeatable": false,
+      "component": "connection.pool"
+    }
+  }
+}

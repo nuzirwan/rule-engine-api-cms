@@ -1,0 +1,50 @@
+{
+  "kind": "collectionType",
+  "collectionName": "connections",
+  "info": {
+    "singularName": "connection",
+    "pluralName": "connections",
+    "displayName": "Connection",
+    "description": "A typed pointer at a DB/REST source (design §3.3), mirroring the engine's connections + connection_versions. Holds a `secretRef` (a reference, never a secret value); `settings` is the credential-free discrete driver shape by type. NEVER a dsn."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "key": {
+      "type": "uid",
+      "required": true
+    },
+    "type": {
+      "type": "enumeration",
+      "enum": ["postgres", "valkey", "rest"],
+      "required": true
+    },
+    "settings": {
+      "type": "dynamiczone",
+      "components": [
+        "connection.postgres-settings",
+        "connection.rest-settings",
+        "connection.valkey-settings"
+      ]
+    },
+    "secretRef": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "resilience": {
+      "type": "component",
+      "repeatable": false,
+      "component": "connection.resilience-policy"
+    },
+    "environment": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::environment.environment"
+    },
+    "engineVersion": {
+      "type": "integer"
+    }
+  }
+}
