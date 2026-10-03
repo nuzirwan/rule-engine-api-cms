@@ -186,9 +186,9 @@ func TestInterpreter_DeferredNodeIsValidation(t *testing.T) {
 		Type: TypeTrigger,
 		Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
 		Children: []Node{{
-			ID:   "fan",
-			Type: TypeParallel,
-			Spec: raw(t, ParallelSpec{}),
+			ID:   "seq",
+			Type: TypeSequence,
+			Spec: raw(t, SequenceSpec{}),
 		}},
 	}
 	c := NewCtx("req", "trace", "test", nil)
