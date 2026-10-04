@@ -1,0 +1,57 @@
+# ===========================================================================
+# Development Override — docker-compose.override.yml
+#
+# This file is automatically merged with docker-compose.yml when running
+# `docker-compose up` without specifying a file. It provides dev-friendly
+# defaults: exposed database ports, volume mounts for hot-reload, relaxed
+# health check timing.
+#
+# For production, use an explicit file:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ===========================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Engine — development overrides
+  # ---------------------------------------------------------------------------
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+      # Use build stage for dev if Dockerfile supports it
+      # target: builder
+    # Mount seed.json for hot-reloading config in dev
+    volumes:
+      - ./engine/internal/config/testdata/seed.json:/app/internal/config/testdata/seed.json:ro
+
+  # ---------------------------------------------------------------------------
+  # CMS — development overrides
+  # ---------------------------------------------------------------------------
+  cms:
+    environment:
+      NODE_ENV: development
+    # Mount source for hot-reload in dev
+    volumes:
+      - ./cms/src:/app/src:ro
+      - ./cms/config:/app/config:ro
+
+  # ---------------------------------------------------------------------------
+  # Postgres Engine — expose port for local tooling
+  # ---------------------------------------------------------------------------
+  postgres-engine:
+    ports:
+      - "${ENGINE_DB_PORT:-5433}:5432"
+
+  # ---------------------------------------------------------------------------
+  # Postgres CMS — expose port for local tooling
+  # ---------------------------------------------------------------------------
+  postgres-cms:
+    ports:
+      - "${CMS_DB_PORT:-5434}:5432"
+
+  # ---------------------------------------------------------------------------
+  # Valkey — expose port for local tooling
+  # ---------------------------------------------------------------------------
+  valkey:
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"

@@ -1,0 +1,186 @@
+# ===========================================================================
+# nzr-rules-engine Stack — Multi-Environment Docker Compose
+#
+# Services:
+#   - engine:        Go rules engine (port 8080)
+#   - cms:           Strapi 5 CMS (port 1337)
+#   - postgres-engine: Postgres for engine config store (schema: rule_engine)
+#   - postgres-cms:    Postgres for CMS data (schema: strapi_cms)
+#   - valkey:        Valkey cache for engine config store
+#
+# Usage:
+#   1. Copy .env.docker.example to .env.docker and fill in secrets
+#   2. docker-compose --env-file .env.docker up -d
+#
+# Per CI/CD & Delivery standards: config via env at runtime, no secrets baked.
+# ===========================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Engine — Go rules engine
+  # ---------------------------------------------------------------------------
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    image: nzr-rules-engine:${ENGINE_TAG:-latest}
+    container_name: nzr-engine
+    restart: unless-stopped
+    ports:
+      - "${ENGINE_PORT:-8080}:8080"
+    environment:
+      # Config store (engine's own backing store)
+      CONFIG_DSN: postgres://${ENGINE_DB_USER:-rule_engine}:${ENGINE_DB_PASSWORD:-rule_engine}@postgres-engine:5432/${ENGINE_DB_NAME:-rule_engine}?sslmode=disable
+      CONFIG_SCHEMA: ${ENGINE_CONFIG_SCHEMA:-rule_engine}
+      # Valkey cache
+      VALKEY_ADDR: valkey:6379
+      # HTTP server
+      ENGINE_ADDR: :8080
+      # Admin control plane
+      ADMIN_ENABLED: ${ADMIN_ENABLED:-true}
+      ADMIN_TOKENS: ${ADMIN_TOKENS:-}
+      # Data plane connections (flow endpoints)
+      ORDERS_PG_DSN: ${ORDERS_PG_DSN:-}
+      SHIP_REST_BASE_URL: ${SHIP_REST_BASE_URL:-}
+    depends_on:
+      postgres-engine:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - nzr-internal
+
+  # ---------------------------------------------------------------------------
+  # CMS — Strapi 5 (content management for rule authoring)
+  # ---------------------------------------------------------------------------
+  cms:
+    build:
+      context: ./cms
+      dockerfile: Dockerfile
+    image: nzr-strapi-cms:${CMS_TAG:-latest}
+    container_name: nzr-cms
+    restart: unless-stopped
+    ports:
+      - "${CMS_PORT:-1337}:1337"
+    environment:
+      # Strapi server
+      HOST: 0.0.0.0
+      PORT: 1337
+      NODE_ENV: production
+      # Strapi secrets (generate your own; do NOT reuse example placeholders)
+      APP_KEYS: ${CMS_APP_KEYS:-}
+      API_TOKEN_SALT: ${CMS_API_TOKEN_SALT:-}
+      ADMIN_JWT_SECRET: ${CMS_ADMIN_JWT_SECRET:-}
+      JWT_SECRET: ${CMS_JWT_SECRET:-}
+      TRANSFER_TOKEN_SALT: ${CMS_TRANSFER_TOKEN_SALT:-}
+      ENCRYPTION_KEY: ${CMS_ENCRYPTION_KEY:-}
+      # CMS database (separate from engine)
+      DATABASE_CLIENT: postgres
+      CMS_DB_HOST: postgres-cms
+      CMS_DB_PORT: 5432
+      CMS_DB_NAME: ${CMS_DB_NAME:-strapi_cms}
+      CMS_DB_USER: ${CMS_DB_USER:-strapi_cms}
+      CMS_DB_PASSWORD: ${CMS_DB_PASSWORD:-}
+      CMS_DB_SCHEMA: ${CMS_DB_SCHEMA:-strapi_cms}
+      CMS_DB_SSL: "false"
+      # Engine admin API connection
+      ADMIN_API_BASE_URL: http://engine:8080
+      ADMIN_API_OPERATOR_TOKEN: ${CMS_ADMIN_API_OPERATOR_TOKEN:-}
+      ADMIN_API_ENV: ${CMS_ADMIN_API_ENV:-}
+    depends_on:
+      postgres-cms:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:1337/_health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    networks:
+      - nzr-internal
+
+  # ---------------------------------------------------------------------------
+  # Postgres — Engine config store
+  # ---------------------------------------------------------------------------
+  postgres-engine:
+    image: postgres:16-bookworm
+    container_name: nzr-postgres-engine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ENGINE_DB_NAME:-rule_engine}
+      POSTGRES_USER: ${ENGINE_DB_USER:-rule_engine}
+      POSTGRES_PASSWORD: ${ENGINE_DB_PASSWORD:-rule_engine}
+    volumes:
+      - postgres-engine-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ENGINE_DB_USER:-rule_engine} -d ${ENGINE_DB_NAME:-rule_engine}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    networks:
+      - nzr-internal
+
+  # ---------------------------------------------------------------------------
+  # Postgres — CMS data store (separate from engine per design)
+  # ---------------------------------------------------------------------------
+  postgres-cms:
+    image: postgres:16-bookworm
+    container_name: nzr-postgres-cms
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CMS_DB_NAME:-strapi_cms}
+      POSTGRES_USER: ${CMS_DB_USER:-strapi_cms}
+      POSTGRES_PASSWORD: ${CMS_DB_PASSWORD:-strapi_cms}
+    volumes:
+      - postgres-cms-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CMS_DB_USER:-strapi_cms} -d ${CMS_DB_NAME:-strapi_cms}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    networks:
+      - nzr-internal
+
+  # ---------------------------------------------------------------------------
+  # Valkey — Config cache for engine (Redis-compatible)
+  # ---------------------------------------------------------------------------
+  valkey:
+    image: valkey/valkey:8-bookworm
+    container_name: nzr-valkey
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 5
+    networks:
+      - nzr-internal
+
+# =============================================================================
+# Networks — internal overlay for service-to-service communication
+# =============================================================================
+networks:
+  nzr-internal:
+    driver: bridge
+
+# =============================================================================
+# Volumes — named volumes for data persistence across restarts
+# =============================================================================
+volumes:
+  postgres-engine-data:
+  postgres-cms-data:
+  valkey-data:

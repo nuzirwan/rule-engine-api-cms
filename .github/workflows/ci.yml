@@ -1,0 +1,260 @@
+# CI Pipeline for nzr-rules-engine
+#
+# Triggers:
+#   - Push to main/mainline branches
+#   - Pull requests targeting main/mainline
+#
+# Jobs:
+#   - lint-engine: Go static analysis (go vet)
+#   - test-engine: Go unit tests (excludes integration)
+#   - build-engine: Go build verification
+#   - test-cms: Node.js/Strapi tests (vitest)
+#   - build-cms: Node.js/Strapi build
+#   - integration: Integration tests with Docker services (postgres, valkey)
+#   - docker-build: Build and push images to ghcr.io (main branch only)
+#
+# Standards applied:
+#   - ci-cd-and-delivery: CI on every push/PR, reproducible builds
+#   - testing-strategy: CI gates on tests, static analysis for common errors
+#   - simplicity-and-design: minimal workflow, no over-engineering
+
+name: CI
+
+on:
+  push:
+    branches: [main, mainline]
+  pull_request:
+    branches: [main, mainline]
+
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: "1"
+
+jobs:
+  # ============================================================================
+  # Engine Jobs (Go)
+  # ============================================================================
+
+  lint-engine:
+    name: Lint Engine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Go vet
+        run: go vet ./...
+        working-directory: engine
+        env:
+          CGO_ENABLED: "1"
+
+  test-engine:
+    name: Test Engine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Run unit tests
+        run: go test -race -coverprofile=coverage.out ./...
+        working-directory: engine
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-coverage
+          path: engine/coverage.out
+          retention-days: 7
+
+  build-engine:
+    name: Build Engine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Build
+        run: go build -o bin/engine ./cmd/engine
+        working-directory: engine
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-binary
+          path: engine/bin/engine
+          retention-days: 7
+
+  # ============================================================================
+  # CMS Jobs (Node.js/Strapi)
+  # ============================================================================
+
+  test-cms:
+    name: Test CMS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: cms/.nvmrc
+          cache: npm
+          cache-dependency-path: cms/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cms
+
+      - name: Run tests
+        run: npm run test
+        working-directory: cms
+
+  build-cms:
+    name: Build CMS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: cms/.nvmrc
+          cache: npm
+          cache-dependency-path: cms/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cms
+
+      - name: Build
+        run: npm run build
+        working-directory: cms
+
+  # ============================================================================
+  # Integration Tests (requires Docker services)
+  # ============================================================================
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [lint-engine, test-engine, build-engine]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      valkey:
+        image: valkey/valkey:7
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Run integration tests
+        run: go test -tags 'integration cgo' -race ./internal/httpapi ./internal/config ./internal/connect/drivers/...
+        working-directory: engine
+        env:
+          CGO_ENABLED: "1"
+          TEST_PG_DSN: postgres://test:test@localhost:5432/test?sslmode=disable
+          TEST_VALKEY_ADDR: localhost:6379
+
+  # ============================================================================
+  # Docker Build & Push (main branch only)
+  # ============================================================================
+
+  docker-build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [lint-engine, test-engine, build-engine, test-cms, build-cms, integration]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mainline')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Engine image
+      - name: Build and push engine
+        if: hashFiles('engine/Dockerfile') != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: engine
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/engine:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/engine:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # CMS image (only if Dockerfile exists)
+      - name: Build and push cms
+        if: hashFiles('cms/Dockerfile') != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: cms
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/cms:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/cms:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

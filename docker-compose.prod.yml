@@ -1,0 +1,88 @@
+# ===========================================================================
+# Production Override — docker-compose.prod.yml
+#
+# Use with:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.docker up -d
+#
+# Production hardening:
+#   - No exposed database ports (internal network only)
+#   - Resource limits
+#   - Stricter restart policies
+#   - No volume mounts for source
+# ===========================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Engine — production hardening
+  # ---------------------------------------------------------------------------
+  engine:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # CMS — production hardening
+  # ---------------------------------------------------------------------------
+  cms:
+    restart: always
+    environment:
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Postgres Engine — production hardening (no exposed ports)
+  # ---------------------------------------------------------------------------
+  postgres-engine:
+    restart: always
+    # No ports exposed — internal network only
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Postgres CMS — production hardening (no exposed ports)
+  # ---------------------------------------------------------------------------
+  postgres-cms:
+    restart: always
+    # No ports exposed — internal network only
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Valkey — production hardening (no exposed ports)
+  # ---------------------------------------------------------------------------
+  valkey:
+    restart: always
+    # No ports exposed — internal network only
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
