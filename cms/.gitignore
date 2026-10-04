@@ -142,6 +142,9 @@ dist/
 .tmp/
 *.log
 
+# Strapi auto-generated type declarations (regenerated on build/develop)
+types/generated/
+
 # .env stays ignored (repo-root rule), but the committed template must not —
 # re-include it (repo-root `.env.*` would otherwise swallow it).
 !.env.example
