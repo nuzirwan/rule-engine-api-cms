@@ -87,11 +87,48 @@ export function statusForBlocked(err: PublishBlockedError): number {
   return 422;
 }
 
+/**
+ * Strapi stores a `dynamiczone` attribute as an ARRAY of component instances,
+ * each tagged with `__component` ("connection.postgres-settings") and a numeric
+ * `id`; nested single components (e.g. `pool`) likewise carry an `id`. The engine
+ * admin API expects `settings` to be a plain OBJECT (`map[string]any`), so an
+ * array body is rejected (`invalid request body`, 400).
+ *
+ * normalizeDynamicZoneSettings unwraps the single authored component to a plain
+ * object and recursively strips Strapi's `__component`/`id` bookkeeping so only
+ * the author's discrete driver fields reach the engine. The Connection content
+ * type uses a non-repeatable intent (one settings component per connection), so
+ * only the first component is taken; a null/empty zone maps to `null`.
+ *
+ * This only reshapes HOW the already-stored dynamiczone is serialized onto the
+ * frozen engine contract — it changes neither the stored Strapi shape nor the
+ * engine admin-API contract.
+ */
+export function normalizeDynamicZoneSettings(settings: unknown): Record<string, unknown> | null {
+  const component = Array.isArray(settings) ? settings[0] : settings;
+  if (!component || typeof component !== 'object') return null;
+
+  const stripIds = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stripIds);
+    if (value !== null && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (k === '__component' || k === 'id') continue;
+        out[k] = stripIds(v);
+      }
+      return out;
+    }
+    return value;
+  };
+
+  return stripIds(component) as Record<string, unknown>;
+}
+
 export function toConnectionEntry(doc: any): ConnectionEntry {
   return {
     key: doc.key,
     type: doc.type,
-    settings: doc.settings ?? null,
+    settings: normalizeDynamicZoneSettings(doc.settings),
     secretRef: doc.secretRef ?? null,
     resilience: doc.resilience ?? null,
   };

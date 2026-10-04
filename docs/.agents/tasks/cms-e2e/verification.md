@@ -264,3 +264,100 @@ performed programmatically:
 - JdmEditorField still emits `DecisionGraphType` (`{nodes,edges}`).
 - Both use base `type: 'json'` custom fields with debounced onChange — no contract change.
 
+### [2026-10-04] ITERATION 1 — cross-FEAT live integration (FEAT-001 server + FEAT-002 UI) + connection dynamiczone serialization fix — LIVE VERIFIED
+
+**Scope.** First converge-loop iteration (no `review.json`). Ran the full cross-FEAT
+live verification: engine build, admin bundle build, both servers up, a Flow publish
+that references a Jdm AND a Connection, plus standalone Jdm and Connection publishes,
+clean admin boot, and the publish gate. Fixed the one seam that was still broken
+between FEAT-001 and FEAT-002: the Connection publish (flagged in the FEAT-001 block
+as a FEAT-003 transform gap) 400'd because the Strapi `settings` dynamiczone was sent
+to the engine as an ARRAY.
+
+**Seam fixed — Connection `settings` dynamiczone -> engine object.**
+- Root cause (as flagged): `connection.settings` is a Strapi **dynamiczone** (an array
+  of component instances, each tagged `__component` + numeric `id`; nested `pool`
+  component also carries an `id`). `toConnectionEntry` passed `doc.settings` straight
+  through, so `connectionToEnginePayload` emitted `settings` as an ARRAY. The engine's
+  `Settings map[string]any` decoder rejects an array -> HTTP 400 (`invalid request body`),
+  which the strict gate surfaced as a 500 publish failure.
+- Fix (CMS-only, no contract/shape change): added `normalizeDynamicZoneSettings()` in
+  `cms/src/plugins/rule-engine/server/src/controllers/publish.ts` and wired it into
+  `toConnectionEntry`. It unwraps the single authored component to a plain object and
+  recursively strips Strapi's `__component`/`id` bookkeeping, so only the author's
+  discrete driver fields reach the engine. This reshapes HOW the already-stored
+  dynamiczone serializes onto the FROZEN engine contract — it changes neither the stored
+  Strapi shape (still a dynamiczone) nor the engine admin-API contract (still an object).
+  Both publish paths (flow-referenced via `runPublishSequence`, standalone via
+  `runConnectionPublish`) go through `toConnectionEntry`, so one fix covers both.
+- Unit coverage: added 2 cases to `publish-controller.test.ts` (dynamiczone array ->
+  flat object with ids/`__component` stripped incl. nested `pool`; empty `[]`/`null` ->
+  `null`). `npx vitest run` -> **75 passed (6 files)** (was 73).
+
+**Environment.** Engine rebuilt from `engine/`
+(`CGO_ENABLED=1 go build -o bin/engine ./cmd/engine` -> exit 0), run
+`./bin/engine -env .env -seed internal/config/testdata/seed.json`, `/readyz` ->
+`{"status":"ready"}`, log `/tmp/engine.log`. CMS admin bundle built with
+`NODE_OPTIONS=--max-old-space-size=4096 npm run build` -> **exit 0**, "Building admin
+panel (213702ms)". CMS run with `NODE_OPTIONS=--max-old-space-size=4096 npm run develop`
+on `:1337`. (Stale engine + strapi from a prior session were stopped first so the ports
+were free and the code under test is the current worktree.)
+
+**Clean boot (bug #2 holds).** `grep -i "Could not find Custom Field" /tmp/cms.log` ->
+none. `info: Strapi started successfully`. `GET /admin/init` -> 200.
+
+**Connection standalone publish — NOW PASSES (was 500 before the fix).**
+- `POST .../api::connection.connection/lysbg059cmkpaa6b35lx2pis/actions/publish` ->
+  **HTTP 200** (previously HTTP 500 / engine 400 on the array body).
+- To force the reconcile to re-create (the engine already held a semantically-equal def
+  from a prior polluted push), the draft `postgres-settings.port` was changed 5433->5432,
+  then unpublish+publish. psql proves the engine received a CLEAN object:
+
+  ```
+  rule_engine.connection_versions (conn_key='connection')
+   conn_key   | version | settings
+  ------------+---------+-------------------------------------------------------------------------------------
+   connection |       1 | {}                                        <- early manual probe
+   connection |       2 | {"id":1,"__component":"connection.postgres-settings", host/port/... }  <- polluted (pre-fix push)
+   connection |       3 | {"host":"127.0.0.1","port":5432,"user":null,"sslmode":"disable","database":"matcha"}  <- CMS publish AFTER fix: clean object, no id/__component
+  ```
+  `GET /admin/connections` for key `connection` now returns the clean v3 settings object.
+
+**Standalone JDM publish — PASSES.**
+- `POST .../api::jdm.jdm/cywazgqg8wu8487le61xe524/actions/publish` -> **HTTP 200**.
+- psql: `rule_engine.jdm_versions` for `test-jdm` gained v2 (v1 was the prior session) —
+  the standalone JDM push via `runJdmPublish`.
+
+**Flow publish that references a Jdm AND a Connection — the primary acceptance case — PASSES.**
+- Authored a draft `tree` referencing BOTH refs: `trigger -> sequence[ action(connection="connection")
+  -> decision(jdmId="test-jdm") -> response ]`. (Engine taxonomy note: `action`/`decision`/
+  `set`/`response` are LEAF types — they must NOT own children; linear chaining uses a
+  `sequence` control node. An earlier flat trigger->action->decision->response tree was
+  correctly rejected by the engine with `leaf_has_children` for `action`/`decision`.)
+- `POST .../api::flow.flow/c8kxj0lyzou80qnbage3fyih/actions/publish` -> **HTTP 200**.
+- The full ordered sequence ran: reconcile connections -> create JDM -> createFlow (v4)
+  -> validateFlow (ok) -> publishFlow. psql:
+
+  ```
+  rule_engine.flow_versions (flow_id='flow'): v1 f (probe), v2 t, v3 f (direct probe), v4 t  <- CMS content-manager publish, validated
+  rule_engine.active_pointers (object_id='flow'): version = 4   <- CMS-published version is the ACTIVE/served one
+  ```
+
+**Publish gate (acceptance #5) — PROVEN.** Before authoring a valid tree, publishing the
+Flow with an engine-invalid tree produced CMS log `publish blocked (createFlow): admin
+request POST /admin/flows returned 400` and the content-manager publish returned **HTTP
+500** — i.e. a blocking engine error ABORTS the Strapi publish (the entry is not left
+published). This confirms the strict gate in the relocated app-level middleware.
+
+**FEAT-002 (admin UI) — BUILD VERIFIED; in-browser drag/render still requires a human.**
+The reactflow + jdm-editor container sizing fixes (explicit non-zero MEASURED width AND
+height; see the 2026-10-04 FEAT-002 block above) are in place and the production admin
+bundle builds clean (exit 0 this run). This environment has NO browser, so pointer-level
+drag/zoom and the jdm-editor render path cannot be exercised here — those acceptance
+criteria remain for in-context/human browser verification per the manual steps above.
+No regression was introduced: both custom fields still compile, bundle, and boot.
+
+**Scope note.** No `engine/` Go code was modified (build/run only). The only source
+change this iteration is the CMS connection serialization fix above. Fix committed
+locally on `fix/cms-e2e`; not pushed.
+

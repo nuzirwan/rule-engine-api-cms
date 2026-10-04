@@ -64,6 +64,40 @@ describe('toFlowEntry / toJdmEntry / toConnectionEntry mappers', () => {
       toConnectionEntry({ key: 'k', type: 'postgres', settings: { host: 'h' }, secretRef: 'r', resilience: null })
     ).toEqual({ key: 'k', type: 'postgres', settings: { host: 'h' }, secretRef: 'r', resilience: null });
   });
+
+  it('unwraps a Strapi dynamiczone settings array to a plain engine object', () => {
+    // Strapi stores a dynamiczone as an array of components tagged with
+    // __component + id; nested components (pool) also carry an id. The engine
+    // needs a flat object with only the authored driver fields.
+    const doc = {
+      key: 'pg',
+      type: 'postgres',
+      settings: [
+        {
+          __component: 'connection.postgres-settings',
+          id: 42,
+          host: 'db',
+          port: 5432,
+          database: 'matcha',
+          pool: { id: 7, maxOpen: 10 },
+        },
+      ],
+      secretRef: 'env:PG_PW',
+      resilience: null,
+    };
+    expect(toConnectionEntry(doc)).toEqual({
+      key: 'pg',
+      type: 'postgres',
+      settings: { host: 'db', port: 5432, database: 'matcha', pool: { maxOpen: 10 } },
+      secretRef: 'env:PG_PW',
+      resilience: null,
+    });
+  });
+
+  it('maps an empty/absent dynamiczone settings to null', () => {
+    expect(toConnectionEntry({ key: 'k', type: 'rest', settings: [], secretRef: null, resilience: null }).settings).toBeNull();
+    expect(toConnectionEntry({ key: 'k', type: 'rest', settings: null, secretRef: null, resilience: null }).settings).toBeNull();
+  });
 });
 
 describe('statusForBlocked (§5.5 mapping)', () => {
