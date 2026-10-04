@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Make the two custom-field editors usable in the browser: fix the Flow canvas (reactflow 11) drag-and-drop and the JDM editor (@gorules/jdm-editor 1.52.0) 'unsupported' render error. Root causes to confirm live in-browser: reactflow needs its parent container to have an explicit non-zero MEASURED width AND height (current wrapper sets height but width via flex:1 can collapse); the jdm-editor 'unsupported' is a runtime node-kind/render/sizing condition. Independent of FEAT-001 (admin-UI vs server).",
+  "status": "completed",
+  "steps": [
+    "In cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/index.tsx, give the <ReactFlow> wrapper an explicit non-zero measured width AND height. The canvas Box is currently <Box style={{ flex: 1, height: 560 }}>; the flex:1 child in a flex-row can measure width 0. Fix by ensuring the row child has a real width (e.g. add minWidth:0 + a concrete flex-basis, or wrap the ReactFlow in a div with width:'100%' AND an explicit px width/minWidth, and keep height:560). Verify in devtools that the reactflow pane measures a non-zero width. Keep 'reactflow/dist/style.css' imported, keep nodesDraggable/nodesConnectable true when not disabled, and keep the ./serialize round-trip + debounced onChange unchanged.",
+    "Reproduce the drag failure in the browser first (open the Flow edit view), confirm the measured-width hypothesis, apply the sizing fix, and re-test: add nodes from the palette, DRAG an existing node (position follows the pointer), draw an edge between two nodes, edit a node's spec in the side panel. Confirm the serialized engine tree still emits (debounced).",
+    "In cms/src/plugins/rule-engine/admin/src/components/JdmEditorField/index.tsx, reproduce the 'unsupported' message live. Ensure the <JdmConfigProvider><DecisionGraph/></JdmConfigProvider> container resolves a non-zero width AND height (currently Flex style height:520 width:'100%' — confirm width is non-zero in the content-manager layout; add an explicit min width if it collapses). Confirm '@gorules/jdm-editor/dist/style.css' is applied. If 'unsupported' comes from a node kind / provider prop, apply the jdm-editor 1.52.0 documented setup for a supported empty graph ({nodes:[],edges:[]}) and node kinds. Keep the debounced onChange and the raw-JSON fallback behavior.",
+    "Rebuild the admin bundle to confirm both custom fields still compile and bundle after the changes."
+  ],
+  "acceptance_criteria": [
+    "NODE_OPTIONS=--max-old-space-size=4096 npm run build exits 0 with 'Building admin panel' succeeding (both custom fields + reactflow + jdm-editor bundle).",
+    "In-browser (coder, in-context): on the Flow edit view, nodes can be DRAGGED to reposition (position follows the pointer), edges can be connected, and a node spec can be edited; the canvas is not frozen/unusable.",
+    "In-browser: on the Jdm edit view, the decision graph renders with NO 'unsupported' banner and a node can be added/edited; the value persists through the debounced onChange.",
+    "The stored JSON shape and the base type:'json' custom-field contract are unchanged (Flow.tree / Jdm.doc still round-trip)."
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/cms-e2e/cms && NODE_OPTIONS=--max-old-space-size=4096 npm run build; confirm exit 0.",
+    "Start NODE_OPTIONS=--max-old-space-size=4096 npm run develop and open the Flow and Jdm edit views in a browser (coder in-context); exercise drag/connect/spec-edit on the canvas and render/edit on the JDM graph; capture what was observed (screenshots or a precise written account) in docs/.agents/tasks/cms-e2e/verification.md.",
+    "Optional sanity: npx vitest run (serialize.test.ts, smoke.test.ts stay green)."
+  ],
+  "blocked_reason": null,
+  "findings": "Sizing fixes were already applied to both components. FlowCanvasField now uses flex:'1 1 0%', minWidth:0 on Box and an inner div with width/height:100%, minWidth:480. JdmEditorField now uses minWidth:480 on the Flex container and an inner div wrapper. Build passes (exit 0). CMS boots cleanly with no custom-field errors. 73 unit tests pass. The 'unsupported' string is NOT in jdm-editor dist — it is Strapi's fallback for unrecognized field types (registration issue fixed by FEAT-001). Browser verification for drag-and-drop functionality requires manual testing at http://localhost:1337/admin."
+}

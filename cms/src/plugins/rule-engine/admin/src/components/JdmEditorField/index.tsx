@@ -79,10 +79,22 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
     <Field.Root name={name} hint={hint} error={error ?? (parsed.ok ? undefined : parsed.error)} required={required}>
       <Field.Label>{label}</Field.Label>
       {parsed.ok ? (
-        <Flex ref={ref} direction="column" alignItems="stretch" style={{ height: 520, width: '100%' }}>
-          <JdmConfigProvider>
-            <DecisionGraph value={graph} onChange={handleGraphChange} disabled={disabled} />
-          </JdmConfigProvider>
+        // @gorules/jdm-editor's <DecisionGraph> is a reactflow surface, so it needs
+        // its container to resolve a non-zero MEASURED width AND height. A bare
+        // width:'100%' inside the content-manager form column can measure 0 while the
+        // flex parent is sizing, which leaves the graph unusable. Pin an explicit
+        // minWidth and make the direct graph parent fill the box (width/height 100%).
+        <Flex
+          ref={ref}
+          direction="column"
+          alignItems="stretch"
+          style={{ height: 520, width: '100%', minWidth: 480 }}
+        >
+          <div style={{ flex: '1 1 0%', minHeight: 0, width: '100%', height: '100%' }}>
+            <JdmConfigProvider>
+              <DecisionGraph value={graph} onChange={handleGraphChange} disabled={disabled} />
+            </JdmConfigProvider>
+          </div>
         </Flex>
       ) : (
         <RawJsonFallback

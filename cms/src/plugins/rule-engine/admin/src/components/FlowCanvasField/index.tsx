@@ -270,22 +270,35 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     <Field.Root name={name} hint={hint} error={error} required={required}>
       <Field.Label>{label}</Field.Label>
       <Flex ref={ref} direction="row" alignItems="stretch" gap={2} style={{ width: '100%' }}>
-        <Box style={{ flex: 1, height: 560 }} hasRadius borderColor="neutral200" borderWidth="1px">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={disabled ? undefined : onNodesChange}
-            onEdgesChange={disabled ? undefined : onEdgesChange}
-            onConnect={disabled ? undefined : onConnect}
-            onSelectionChange={onSelectionChange}
-            nodesDraggable={!disabled}
-            nodesConnectable={!disabled}
-            fitView
-          >
-            <Background />
-            <Controls />
-            <MiniMap />
-          </ReactFlow>
+        {/* reactflow 11 needs its parent to have an explicit, non-zero MEASURED
+            width AND height. In a flex row the default min-width is `auto`, so a
+            `flex:1` child can collapse to the intrinsic (near-zero) width of the
+            canvas and break the pointer/zoom math that drag relies on. `minWidth:0`
+            plus a concrete `flexBasis` give the child a real measured width, and the
+            inner div pins width/height to 100% so reactflow measures a non-zero box. */}
+        <Box
+          style={{ flex: '1 1 0%', minWidth: 0, height: 560 }}
+          hasRadius
+          borderColor="neutral200"
+          borderWidth="1px"
+        >
+          <div style={{ width: '100%', height: '100%', minWidth: 480 }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={disabled ? undefined : onNodesChange}
+              onEdgesChange={disabled ? undefined : onEdgesChange}
+              onConnect={disabled ? undefined : onConnect}
+              onSelectionChange={onSelectionChange}
+              nodesDraggable={!disabled}
+              nodesConnectable={!disabled}
+              fitView
+            >
+              <Background />
+              <Controls />
+              <MiniMap />
+            </ReactFlow>
+          </div>
         </Box>
         <Box style={{ width: 280 }} padding={2} background="neutral100" hasRadius>
           <Flex direction="column" alignItems="stretch" gap={2}>
