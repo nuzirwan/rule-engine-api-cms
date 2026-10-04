@@ -1,0 +1,29 @@
+# Build artifacts
+bin/
+*.exe
+*.test
+*.out
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in build)
+*.md
+docs/
+
+# Local test artifacts
+coverage.out
+coverage.html
