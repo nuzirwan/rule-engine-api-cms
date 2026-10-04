@@ -82,7 +82,7 @@ docker-compose logs -f engine
 docker-compose logs -f cms
 
 # Test engine health
-curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
 
 # Test CMS health
 curl http://localhost:1337/_health
@@ -194,7 +194,7 @@ External connections (dev) use localhost:5433/5434.
 
 ### Health check failing
 
-- Engine: `curl http://localhost:8080/healthz` (requires running server)
+- Engine: `curl http://localhost:8080/readyz` (requires running server)
 - CMS: Strapi needs ~60s startup time before `/_health` responds
 
 ## Security Notes
