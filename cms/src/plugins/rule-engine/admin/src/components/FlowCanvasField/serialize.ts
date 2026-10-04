@@ -118,17 +118,36 @@ export function canvasToTree(graph: CanvasGraph): SerializeResult {
 // engine tree -> canvas
 // ----------------------------------------------------------------------------
 
+/** Default auto-layout spacing (px) when a node has no stored sidecar position. */
+const LAYOUT_X_GAP = 320;
+const LAYOUT_Y_GAP = 140;
+
 /**
- * Flatten the engine Node tree back into a canvas {nodes,edges} graph, pulling
- * x/y from the sidecar layout map (defaulting to {0,0} for a node with no stored
- * position). spec passes through verbatim so a round-trip preserves mixed casing.
+ * Flatten the engine Node tree back into a canvas {nodes,edges} graph. x/y comes
+ * from the sidecar layout map when present; otherwise a node is given a sensible
+ * DEFAULT position derived from its depth (y) and its order within that depth (x)
+ * so the nodes do NOT all stack at the origin — a bare engine tree with no stored
+ * layout still renders as a readable, draggable graph (FEAT-002). spec passes
+ * through verbatim so a round-trip preserves mixed casing.
  */
 export function treeToCanvas(tree: EngineNode, layout: LayoutMap = {}): DeserializeResult {
   const nodes: CanvasNode[] = [];
   const edges: CanvasEdge[] = [];
 
-  const walk = (node: EngineNode) => {
-    const pos = layout[node.id] ?? { x: 0, y: 0 };
+  // Per-depth running index so auto-placed nodes fan out horizontally by sibling
+  // order and vertically by depth, instead of all landing on {0,0}.
+  const perDepthCount: Record<number, number> = {};
+
+  const walk = (node: EngineNode, depth: number) => {
+    const stored = layout[node.id];
+    let pos: { x: number; y: number };
+    if (stored) {
+      pos = stored;
+    } else {
+      const col = perDepthCount[depth] ?? 0;
+      perDepthCount[depth] = col + 1;
+      pos = { x: 40 + col * LAYOUT_X_GAP, y: 40 + depth * LAYOUT_Y_GAP };
+    }
     nodes.push({
       id: node.id,
       type: node.type,
@@ -137,10 +156,10 @@ export function treeToCanvas(tree: EngineNode, layout: LayoutMap = {}): Deserial
     });
     for (const child of node.children ?? []) {
       edges.push({ id: `${node.id}->${child.id}`, source: node.id, target: child.id });
-      walk(child);
+      walk(child, depth + 1);
     }
   };
-  walk(tree);
+  walk(tree, 0);
 
   return { graph: { nodes, edges }, layout };
 }

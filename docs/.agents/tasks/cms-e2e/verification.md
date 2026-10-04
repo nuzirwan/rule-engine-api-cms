@@ -361,3 +361,99 @@ No regression was introduced: both custom fields still compile, bundle, and boot
 change this iteration is the CMS connection serialization fix above. Fix committed
 locally on `fix/cms-e2e`; not pushed.
 
+### [2026-10-04] ITERATION 2 — review finding addressed: FEAT-002 bug #3 driven IN A REAL BROWSER, real drag defect found + fixed — LIVE VERIFIED
+
+**Review finding (review.json).** Verdict CHANGES_REQUESTED. Bugs #1 (publish reaches
+engine) and #2 (clean boot) were VERIFIED OK. The only open finding: FEAT-002 bug #3 had
+NO in-browser evidence — the sizing commit (cbc03d1) was a hypothesized root-cause patch,
+and the acceptance criteria require demonstrated behavior (drag/connect/spec-edit on the
+Flow canvas; JDM graph renders with no "unsupported" and a node can be added).
+
+**How the browser was obtained (no browser was installed on the host).** Installed
+Playwright + Chromium into an isolated `/tmp/cms-e2e-browser` (NOT added to `cms/`
+package.json — the pinned CMS deps are untouched). The host lacked the NSS runtime libs
+Chromium needs and sudo was unavailable, so `libnss3`/`libnspr4` were fetched as `.deb`s
+with `apt-get download` and extracted into a userspace dir pointed to by
+`LD_LIBRARY_PATH`; Chromium then launched headless (`PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1`).
+All interactions below are a real Chromium driving the live admin on `:1337` (engine on
+`:8080`), logging in through the real `/admin/auth/login` form as `abc@def.com`.
+
+**ROOT CAUSE the sizing patch missed (the real bug #3).** Driving the Flow edit view
+(`/admin/content-manager/collection-types/api::flow.flow/c8kxj0lyzou80qnbage3fyih`) in the
+browser showed the reactflow pane DID measure non-zero (**556 × 558 px** via
+`getBoundingClientRect`, so cbc03d1's sizing fix is correct and necessary) — but the canvas
+was still unusable for two reasons the build-only check could never surface:
+1. **All nodes stacked at the origin.** `treeToCanvas` defaulted every node with no stored
+   sidecar layout to `{x:0,y:0}`, and the engine tree carries no layout, so on load all 5
+   seed nodes rendered at `translate(0px,0px)` — one on top of the others.
+2. **Drag never stuck.** `FlowCanvasField`'s `useEffect([initialGraph])` rebuilt `nodes`
+   from the serialized value on EVERY change. A drag -> debounced `emit(tree)` ->
+   Strapi updates `value` -> `initialGraph` recomputes -> the effect reset `nodes` back to
+   the layout-free `treeToCanvas` output -> the node snapped back to `(0,0)`. Measured
+   live: dragging a node left its `transform` at `translate(0px,0px)` (dx=0, dy=0) after
+   the debounce.
+
+**Fix (CMS admin only; stored JSON shape and admin-API contract UNCHANGED).**
+- `admin/src/components/FlowCanvasField/serialize.ts` — `treeToCanvas` now assigns a
+  readable DEFAULT auto-layout (x by sibling order, y by depth: `LAYOUT_X_GAP=320`,
+  `LAYOUT_Y_GAP=140`) for any node lacking a stored sidecar position, so a bare engine
+  tree renders spread out instead of stacked. Stored sidecar positions still win. The
+  engine tree stays pure (layout remains a SIDECAR, never serialized) — the frozen
+  `Flow.tree` shape is unchanged; the 8 round-trip tests (now including the auto-layout
+  path) stay green.
+- `admin/src/components/FlowCanvasField/index.tsx` — stop the self-inflicted reset: the
+  value->nodes rebuild now runs ONLY on an EXTERNAL value change. A `lastEmittedRef`
+  records each tree the component emits; when the incoming `value` equals that echo the
+  rebuild is skipped, so an in-progress drag survives. The sidecar `layoutRef` is seeded
+  from the first build and fed back into `treeToCanvas`, so re-derivation preserves dragged
+  positions. No change to the debounce, the serialize round-trip, or the emitted value.
+
+**Flow canvas — IN-BROWSER, ALL FEAT-002 (a) CRITERIA MET (after fix).**
+- reactflow pane measures **556 × 558 px** (non-zero width AND height) — sizing fix holds.
+- Nodes now lay out distinctly: `trigger(40,40) -> seq(40,180) -> read(40,320),
+  decide(360,320), respond(680,320)` with visible connecting edges (screenshot
+  `flow-dragtest.png` / `flow-04-after-edge.png`), NOT stacked.
+- **Add from palette:** clicking `action` added a node (**5 -> 6**), the new node selected
+  and its spec editable (side panel showed `SPEC · ACTION-…` with editable JSON).
+- **DRAG repositions and STICKS:** dragging a node moved it **dx=140, dy=-220**; its
+  `transform` changed from `translate(240px,200px)` to `translate(458px,-143px)` and
+  REMAINED moved after the 1200 ms debounce+rerender (pre-fix this was 0,0).
+- **Edge connect:** drawing from one node's source handle to another's target handle
+  increased edges **4 -> 5**.
+- **Spec edit:** typing `{"Kind":"log","Payload":{"msg":"hi"}}` into the side-panel
+  textarea persisted in the field (`spec_edited=true`).
+
+**JDM editor — IN-BROWSER, ALL FEAT-002 (b) CRITERIA MET (no code change needed).**
+- The `doc` field renders the GoRules `DecisionGraph` (reactflow surface measured
+  **538 × 479 px**, 101 `grl-*` elements) with the request -> decisionTable1 -> response
+  graph and the "Components (Drag-and-drop)" palette (Request/Response/Decision table/
+  Expression/Function/Switch). Screenshot `jdm-final.png`.
+- **NO "unsupported" banner and NO "Unsupported field type" fallback** — both asserted
+  false in the DOM. IMPORTANT: a transient "Unsupported field type: plugin::rule-engine.*"
+  DOES appear for a few seconds on first load — that is Strapi's generic `InputRenderer`
+  fallback shown WHILE the custom-field Input is still lazy-loading (the gorules bundle is
+  large); once `useLazyComponents` resolves `components.Input()` the real editor replaces
+  it. Confirmed by polling: at t>=7 s the field is the rendered graph, not the fallback.
+  This is the "unsupported jdm editor" the original report (msg #4) referred to; it is a
+  load-timing artifact, not a persistent registration failure (`app.customFields.register`
+  builds uid `plugin::rule-engine.jdm-editor`, matching the schema).
+- **Add a node:** dragging `Function` from the Components palette onto the canvas added a
+  `function1` node (**3 -> 4**), visible on the graph (screenshot `jdm-add-node.png`). The
+  jdm-editor palette rows are HTML5-`draggable`, so the add is via native DnD.
+
+**Builds + units.** `NODE_OPTIONS=--max-old-space-size=4096 npm run build` -> **exit 0**
+("Building admin panel" succeeded) both before and after the index.tsx/serialize.ts edits.
+`npx vitest run` -> **75 passed (6 files)** including the 8 FlowCanvasField serialize
+round-trip tests (2 new assertions exercise the auto-layout + stored-layout paths).
+
+**Bugs #1 / #2 re-confirmed consistent this run.** `/readyz` ready; zero "Could not find
+Custom Field" lines and "Strapi started successfully" in `/tmp/cms.log`;
+`rule_engine.flow_versions` shows CMS-published `flow` v2 & v4 validated,
+`rule_engine.jdm_versions` shows `test-jdm` v1-4, `rule_engine.connections` has `connection`.
+
+**Scope note.** No `engine/` Go code modified (build/run only). CMS reaches the engine only
+via `/admin/*`. Stored JSON shapes (base `type:'json'` custom fields, pure engine
+`Flow.tree`) and the frozen admin-API contract are UNCHANGED — the fix only affects
+in-canvas layout/drag behavior, with layout kept in the documented sidecar. Fixes committed
+locally on `fix/cms-e2e`; not pushed.
+

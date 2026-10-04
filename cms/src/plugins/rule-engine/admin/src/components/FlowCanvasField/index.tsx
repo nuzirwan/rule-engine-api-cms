@@ -103,27 +103,61 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
 
   const parsed = React.useMemo(() => parseStoredJson<EngineNode>(value, EMPTY_TREE), [value]);
 
-  // Build the initial canvas from the engine tree via the FEAT-003 serializer.
-  const initialGraph = React.useMemo<CanvasGraph>(() => {
-    if (!parsed.ok || !parsed.value) return { nodes: [], edges: [] };
+  // Sidecar x/y layout, kept OUT of the engine tree. Positions a drag produces
+  // live here so re-deriving the canvas from the (layout-free) engine tree does
+  // NOT snap nodes back to their default auto-layout.
+  const layoutRef = React.useRef<LayoutMap>({});
+
+  // The last engine tree THIS component emitted. When the incoming `value`
+  // matches it, the change is our own round-trip echo — we must NOT rebuild the
+  // canvas from it (that would wipe an in-progress drag). We only rebuild when
+  // the value changes from OUTSIDE (initial load / external edit).
+  const lastEmittedRef = React.useRef<string | null>(null);
+
+  // Build the canvas from the engine tree via the FEAT-003 serializer, applying
+  // the sidecar layout so stored/dragged positions win over auto-layout.
+  const buildCanvas = React.useCallback((tree: EngineNode | undefined): CanvasGraph => {
+    if (!tree) return { nodes: [], edges: [] };
     try {
-      return treeToCanvas(parsed.value).graph;
+      return treeToCanvas(tree, layoutRef.current).graph;
     } catch {
       return { nodes: [], edges: [] };
     }
-  }, [parsed.ok, parsed.value]);
+  }, []);
 
-  const [nodes, setNodes] = React.useState<Node[]>(() => initialGraph.nodes.map(toFlowNode));
-  const [edges, setEdges] = React.useState<Edge[]>(() => initialGraph.edges.map(toFlowEdge));
+  const [nodes, setNodes] = React.useState<Node[]>(() =>
+    buildCanvas(parsed.ok ? parsed.value : undefined).nodes.map(toFlowNode)
+  );
+  const [edges, setEdges] = React.useState<Edge[]>(() =>
+    buildCanvas(parsed.ok ? parsed.value : undefined).edges.map(toFlowEdge)
+  );
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [specDraft, setSpecDraft] = React.useState<string>('');
   const [specError, setSpecError] = React.useState<string | null>(null);
-  const layoutRef = React.useRef<LayoutMap>({});
 
+  // Seed the sidecar layout once from the first canvas build so the default
+  // auto-layout positions are retained as the baseline for subsequent drags.
   React.useEffect(() => {
-    setNodes(initialGraph.nodes.map(toFlowNode));
-    setEdges(initialGraph.edges.map(toFlowEdge));
-  }, [initialGraph]);
+    const initial = buildCanvas(parsed.ok ? parsed.value : undefined);
+    for (const n of initial.nodes) layoutRef.current[n.id] = n.position;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Rebuild the canvas ONLY on an external value change (not our own echo). An
+  // echo is detected by comparing the incoming value against the last tree we
+  // emitted; a drag/edge/spec edit flows through emit() and is skipped here so
+  // the live node positions survive.
+  const valueKey = React.useMemo(() => safeStringify(parsed.ok ? parsed.value : null), [parsed]);
+  React.useEffect(() => {
+    if (lastEmittedRef.current !== null && valueKey === lastEmittedRef.current) {
+      return; // our own round-trip — keep the live canvas
+    }
+    const g = buildCanvas(parsed.ok ? parsed.value : undefined);
+    for (const n of g.nodes) layoutRef.current[n.id] = n.position;
+    setNodes(g.nodes.map(toFlowNode));
+    setEdges(g.edges.map(toFlowEdge));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valueKey]);
 
   const emit = React.useCallback(
     (next: unknown) => onChange({ target: { name, value: next, type: 'json' } }),
@@ -148,6 +182,9 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
         try {
           const { tree, layout } = canvasToTree(graph);
           layoutRef.current = layout; // sidecar — kept OUT of the engine tree
+          // Record what we're emitting so the value-change effect recognises its
+          // own echo and does NOT rebuild (which would reset drag positions).
+          lastEmittedRef.current = safeStringify(tree);
           emit(tree);
         } catch {
           // No trigger root yet / dangling edge: skip the write until the canvas
