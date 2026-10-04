@@ -1,6 +1,8 @@
 # =============================================================================
 # Stage 1: Builder — compile Go binary with CGO enabled (ZEN requires it)
 # =============================================================================
+# Use golang:1-bookworm (not a fixed minor) per project go.mod requiring go 1.26+.
+# GOTOOLCHAIN=auto (the default) allows the toolchain to upgrade as needed.
 FROM golang:1-bookworm AS builder
 
 # CGO deps: gcc + libc-dev are pre-installed on golang:bookworm, but explicit is
@@ -40,11 +42,8 @@ RUN groupadd -r -g 1000 engine && useradd -r -u 1000 -g engine engine
 WORKDIR /app
 
 # Copy only the binary from builder (multi-stage minimizes image per
-# [[ci-cd-and-delivery]]).
-COPY --from=builder /engine /engine
-
-# Runtime ownership — the binary is read-only; the user needs no write access.
-RUN chown engine:engine /engine
+# [[ci-cd-and-delivery]]). Use --chown to avoid an extra layer.
+COPY --from=builder --chown=engine:engine /engine /engine
 
 USER engine
 
