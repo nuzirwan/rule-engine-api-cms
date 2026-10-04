@@ -297,6 +297,20 @@ call):
   two are the only demo-ties left after the config-driven-routing fix removes the hardcoded route.
   (The in-flight config-driven-routing increment may address these opportunistically; if not,
   they're a small follow-up increment.)
+- **Provider-agnostic connector platform (NEXT PHASE — DESIGN DONE, not built).** Full design in
+  `docs/lld/connector-platform.md` (Slice G). Makes connection handling agnostic-by-contract so any
+  backend type (any SQL, REST, Valkey, future Kafka/RabbitMQ/streaming) plugs in via one `Connector`
+  interface with ZERO core changes. Fixes the company-wide scale blockers: (1) replace eager-load-all
+  at startup with LAZY per-connection opening + idle-reap (the fan-out fix — eager-load exhausts DB
+  `max_connections` at scale); (2) add a `Lifecycle()` + `Capabilities()` split so long-lived async
+  providers (Kafka/Rabbit consumers) get a ConsumerManager + new `messageTrigger` instead of the
+  pooled-at-boot model; (3) graceful startup (a dead backend no longer fails boot). Includes explicit
+  PERFORMANCE-COST analysis (lazy trades one-time cold-start latency for a large idle-footprint drop;
+  `minWarm` knob keeps hot paths warm) and BUSINESS justification (time-to-add-a-provider, DB infra
+  $ savings, SLA blast-radius isolation, future-proofing). Phase 1 (pooled-type scale + PgBouncer/
+  ProxySQL) is a company-wide-rollout prerequisite; Phase 2 (async providers) is gated on a messaging
+  iface being greenlit. 10 ACs (AC-G1..G10). This supersedes the earlier "connection fan-out risk"
+  note — it is the designed closure of that risk and relates to R10 (per-instance breakers).
 - **Collection logic over result sets (NEXT PHASE — not MVP).** The engine can return multi-row
   arrays, index into them, and iterate (`forEach`) with per-row ZEN decisions. It does NOT yet
   have first-class **`filter` / `find` / `map` / `reduce`/aggregate** nodes to select or compute a
