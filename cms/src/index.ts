@@ -1,4 +1,5 @@
 import type { Core } from '@strapi/strapi';
+import { buildPublishMiddleware } from './publish-middleware';
 
 // The two rule-engine custom fields (flow-canvas, jdm-editor) are ALSO registered
 // here at the app level — not only inside the local rule-engine plugin.
@@ -23,5 +24,11 @@ export default {
     ]);
   },
 
-  bootstrap(/* { strapi }: { strapi: Core.Strapi } */) {},
+  // The publish interception middleware MUST be registered here, at the app
+  // level. A Document Service middleware registered from the local plugin's
+  // register() does NOT fire on the content-manager publish path (proven live);
+  // the app-level bootstrap registration DOES see context.action === 'publish'.
+  bootstrap({ strapi }: { strapi: Core.Strapi }) {
+    strapi.documents.use(buildPublishMiddleware(strapi));
+  },
 };

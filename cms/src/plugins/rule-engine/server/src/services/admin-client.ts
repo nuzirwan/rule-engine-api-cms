@@ -21,7 +21,7 @@ import type {
   SetActiveResponse,
   ValidateFlowRequest,
   ValidateFlowResponse,
-} from '../../../../../../../types/engine';
+} from '../../../../../../types/engine';
 
 /** Resolved per-call configuration (base URL + token + payload env). */
 export interface AdminClientConfig {

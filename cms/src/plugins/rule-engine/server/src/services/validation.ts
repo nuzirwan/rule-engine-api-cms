@@ -17,7 +17,7 @@ import type {
   CreateConnectionRequest,
   EngineConnectionDef,
   ValidateFlowResponse,
-} from '../../../../../../../types/engine';
+} from '../../../../../../types/engine';
 import { AdminApiError, AdminClient } from './admin-client';
 import {
   ConnectionEntry,

@@ -17,7 +17,7 @@ import type {
   EngineFixture,
   EngineNode,
   EngineResilience,
-} from '../../../../../../../types/engine';
+} from '../../../../../../types/engine';
 
 /** Case-insensitive secret denylist (design §3.3.1) — CMS superset of the engine edge guard. */
 export const SECRET_DENYLIST = [

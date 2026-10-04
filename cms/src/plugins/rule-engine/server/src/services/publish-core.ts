@@ -29,7 +29,7 @@ import {
   toFlowEntry,
   toJdmEntry,
 } from '../controllers/publish';
-import type { EngineConnectionDef } from '../../../../../../../types/engine';
+import type { EngineConnectionDef } from '../../../../../../types/engine';
 
 export interface PublishCoreResult {
   writeBack: PublishWriteBack;
