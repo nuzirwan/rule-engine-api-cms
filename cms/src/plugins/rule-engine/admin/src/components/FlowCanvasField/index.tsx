@@ -1,5 +1,5 @@
 // FlowCanvasField (design §4.2) — the Strapi custom-field Input that authors the
-// engine flow tree on a reactflow 11 canvas. Registered with base type:'json'
+// engine flow tree on an @xyflow/react v12 canvas. Registered with base type:'json'
 // (finding 13) so Flow.tree persists the serialized engine Node tree into its
 // JSON column with no double-encode.
 //
@@ -15,7 +15,8 @@
 // fallback rather than a blank/broken canvas (design §4).
 
 import * as React from 'react';
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,
@@ -27,8 +28,8 @@ import ReactFlow, {
   type Node,
   type NodeChange,
   type EdgeChange,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { Box, Button, Field, Flex, Textarea, Typography } from '@strapi/design-system';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
@@ -73,7 +74,7 @@ interface InputProps {
   attribute?: { type?: string };
 }
 
-/** Convert the serializer's CanvasNode into a reactflow Node (spec rides in data). */
+/** Convert the serializer's CanvasNode into an @xyflow/react Node (spec rides in data). */
 function toFlowNode(n: CanvasNode): Node {
   return {
     id: n.id,
@@ -83,7 +84,7 @@ function toFlowNode(n: CanvasNode): Node {
   };
 }
 
-/** Convert a reactflow Node back into the serializer's CanvasNode shape. */
+/** Convert an @xyflow/react Node back into the serializer's CanvasNode shape. */
 function fromFlowNode(n: Node): CanvasNode {
   const data = (n.data ?? {}) as { nodeType?: string; spec?: Record<string, unknown> };
   return {
@@ -307,12 +308,12 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     <Field.Root name={name} hint={hint} error={error} required={required}>
       <Field.Label>{label}</Field.Label>
       <Flex ref={ref} direction="row" alignItems="stretch" gap={2} style={{ width: '100%' }}>
-        {/* reactflow 11 needs its parent to have an explicit, non-zero MEASURED
+        {/* @xyflow/react v12 needs its parent to have an explicit, non-zero MEASURED
             width AND height. In a flex row the default min-width is `auto`, so a
             `flex:1` child can collapse to the intrinsic (near-zero) width of the
             canvas and break the pointer/zoom math that drag relies on. `minWidth:0`
             plus a concrete `flexBasis` give the child a real measured width, and the
-            inner div pins width/height to 100% so reactflow measures a non-zero box. */}
+            inner div pins width/height to 100% so ReactFlow measures a non-zero box. */}
         <Box
           style={{ flex: '1 1 0%', minWidth: 0, height: 560 }}
           hasRadius
