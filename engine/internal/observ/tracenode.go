@@ -26,22 +26,35 @@ type NodeOutcome struct {
 // with the outcome error (which sets status + error_class), emits a debug trace
 // line with the same fields, and feeds the dry-run collector when one is attached
 // (so dry-run trace == live trace shape).
+//
+// When tr is nil, tracing is skipped but timing, logging, and collector recording
+// still occur. This allows dry-run traces to be collected without requiring a
+// tracer to be wired.
 func TraceNode(ctx context.Context, tr Tracer, log Logger, nodeID, nodeType string,
 	exec func(ctx context.Context) NodeOutcome) NodeOutcome {
 
-	cctx, span := tr.StartSpan(ctx, "node:"+nodeType, map[string]any{
-		FldNodeID:   nodeID,
-		FldNodeType: nodeType,
-	})
+	var cctx context.Context
+	var span Span
+	if tr != nil {
+		cctx, span = tr.StartSpan(ctx, "node:"+nodeType, map[string]any{
+			FldNodeID:   nodeID,
+			FldNodeType: nodeType,
+		})
+	} else {
+		cctx = ctx
+	}
+
 	start := time.Now()
 	out := exec(cctx)
 	durMs := time.Since(start).Milliseconds()
 
-	span.Set(FldDurationMs, durMs)
-	if out.Branch != "" {
-		span.Set(FldBranchTaken, out.Branch)
+	if span != nil {
+		span.Set(FldDurationMs, durMs)
+		if out.Branch != "" {
+			span.Set(FldBranchTaken, out.Branch)
+		}
+		span.End(out.Err)
 	}
-	span.End(out.Err)
 
 	fields := map[string]any{
 		FldNodeID:     nodeID,

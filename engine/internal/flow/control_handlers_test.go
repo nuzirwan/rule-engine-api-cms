@@ -30,6 +30,32 @@ func (l *recordingLogger) Emit(ctx context.Context, level, label string, fields 
 	l.records = append(l.records, logRecord{level: level, label: label, fields: fields})
 }
 
+// byLabel returns only records matching label, filtering out per-node trace logs.
+func (l *recordingLogger) byLabel(label string) []logRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []logRecord
+	for _, r := range l.records {
+		if r.label == label {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// excludeLabel returns records NOT matching label (useful to filter out "node" trace logs).
+func (l *recordingLogger) excludeLabel(label string) []logRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []logRecord
+	for _, r := range l.records {
+		if r.label != label {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // --- AC-2: nested branches + switch default --------------------------------
 
 func TestSwitch_NWayAndDefault(t *testing.T) {
@@ -346,10 +372,13 @@ func TestLogger_EmitsCaptureAndNeverAltersResponse(t *testing.T) {
 	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Log: log}); err != nil {
 		t.Fatalf("Run error: %v", err)
 	}
-	if len(log.records) != 1 {
-		t.Fatalf("logger emitted %d records, want 1", len(log.records))
+	// Filter out per-node trace logs ("node" label) to isolate the logger node's emit.
+	// The logger handler emits with label "flow.logger"; the spec's Label goes into fields["label"].
+	recs := log.byLabel("flow.logger")
+	if len(recs) != 1 {
+		t.Fatalf("logger emitted %d records with label 'flow.logger', want 1", len(recs))
 	}
-	rec := log.records[0]
+	rec := recs[0]
 	if rec.level != "info" || rec.fields["label"] != "checkpoint" || rec.fields["amount"] != 100 {
 		t.Fatalf("logger record = %#v", rec)
 	}
@@ -367,8 +396,10 @@ func TestLogger_SampleRateZeroSkips(t *testing.T) {
 	if err := New().Run(context.Background(), tree, Version{}, NewCtx("r", "t", "e", nil), Deps{Log: log}); err != nil {
 		t.Fatalf("Run error: %v", err)
 	}
-	if len(log.records) != 0 {
-		t.Fatalf("sampleRate 0 must suppress emit, got %d records", len(log.records))
+	// Exclude per-node trace logs ("node" label) to verify the logger node itself was suppressed.
+	recs := log.excludeLabel("node")
+	if len(recs) != 0 {
+		t.Fatalf("sampleRate 0 must suppress logger emit, got %d non-trace records", len(recs))
 	}
 }
 

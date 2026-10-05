@@ -154,8 +154,10 @@ func (ip *Interpreter) Walk(ctx context.Context, child *Node, c *Ctx, dep Deps) 
 	return ip.walk(ctx, child, c, dep)
 }
 
-// walk is the recursion body: budget + cancellation check, a per-node span, then
-// dispatch to the handler, passing the Interpreter itself as the Walker.
+// walk is the recursion body: budget + cancellation check, a per-node span via
+// TraceNode, then dispatch to the handler, passing the Interpreter itself as the
+// Walker. TraceNode creates the span, records the duration/branch, and feeds the
+// dry-run collector when one is attached — so dry-run trace == live trace shape.
 func (ip *Interpreter) walk(ctx context.Context, node *Node, c *Ctx, dep Deps) (Directive, error) {
 	if node == nil {
 		return Directive{}, newErr(ClassValidation, "nil node")
@@ -180,35 +182,23 @@ func (ip *Interpreter) walk(ctx context.Context, node *Node, c *Ctx, dep Deps) (
 		ctx = context.WithValue(ctx, depthKey{}, depth+1)
 	}
 
-	var span observ.Span
-	if dep.Trace != nil {
-		sp := startSpan(ctx, dep, "node."+string(node.Type), map[string]any{
-			"node_id":   node.ID,
-			"node_type": string(node.Type),
-		})
-		ctx, span = sp.ctx, sp.span
-	}
-
 	handler, ok := ip.handlers[node.Type]
 	if !ok {
-		err := validationf("unknown node type %q", string(node.Type))
-		if span != nil {
-			span.End(err)
-		}
-		return Directive{}, err
+		return Directive{}, validationf("unknown node type %q", string(node.Type))
 	}
 
-	directive, err := handler.Exec(ctx, c, *node, dep, ip)
-	if err != nil {
-		err = classify(err)
-		if span != nil {
-			span.End(err)
-		}
-		return directive, err
-	}
-	if span != nil {
-		span.Set("branch_taken", directive.Branch)
-		span.End(nil)
-	}
-	return directive, nil
+	// Use TraceNode for tracing and dry-run collection. When dep.Trace or dep.Log
+	// is nil, TraceNode still records to the collector if one is attached.
+	var directive Directive
+	var execErr error
+	out := observ.TraceNode(ctx, dep.Trace, dep.Log, node.ID, string(node.Type),
+		func(tctx context.Context) observ.NodeOutcome {
+			directive, execErr = handler.Exec(tctx, c, *node, dep, ip)
+			if execErr != nil {
+				execErr = classify(execErr)
+			}
+			return observ.NodeOutcome{Branch: directive.Branch, Err: execErr}
+		})
+
+	return directive, out.Err
 }
