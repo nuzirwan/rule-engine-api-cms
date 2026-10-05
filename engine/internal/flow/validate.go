@@ -43,6 +43,8 @@ var controlTypes = map[NodeType]bool{
 var leafTypes = map[NodeType]bool{
 	TypeAction:   true,
 	TypeDecision: true,
+	TypeFilter:   true,
+	TypeFind:     true,
 	TypeSet:      true,
 	TypeLogger:   true,
 	TypeResponse: true,
@@ -150,6 +152,32 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 				checkJDM(add, n.ID, refs, spec.JDMID)
 				if spec.SaveAs == "" {
 					add(n.ID, "decision_no_saveas", "decision missing saveAs")
+				}
+			}
+		case TypeFilter:
+			if spec, err := parseSpec[FilterSpec](n.Spec); err == nil {
+				checkJDM(add, n.ID, refs, spec.JDMID)
+				if spec.MaxItems <= 0 {
+					add(n.ID, "filter_maxitems", "filter maxItems must be > 0")
+				}
+				if spec.Over == "" {
+					add(n.ID, "filter_no_over", "filter missing over")
+				}
+				if spec.SaveAs == "" {
+					add(n.ID, "filter_no_saveas", "filter missing saveAs")
+				}
+			}
+		case TypeFind:
+			if spec, err := parseSpec[FindSpec](n.Spec); err == nil {
+				checkJDM(add, n.ID, refs, spec.JDMID)
+				if spec.MaxItems <= 0 {
+					add(n.ID, "find_maxitems", "find maxItems must be > 0")
+				}
+				if spec.Over == "" {
+					add(n.ID, "find_no_over", "find missing over")
+				}
+				if spec.SaveAs == "" {
+					add(n.ID, "find_no_saveas", "find missing saveAs")
 				}
 			}
 		case TypeForEach:

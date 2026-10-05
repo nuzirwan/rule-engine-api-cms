@@ -401,3 +401,167 @@ func itoa(i int) string {
 	}
 	return string(buf[pos:])
 }
+
+// filterHandler filters an array, keeping items where the ZEN predicate returns
+// a truthy "match" field. The filtered array is stored under SaveAs in Ctx.Data.
+// It is a leaf node (no children); its budget guard (maxItems) prevents runaway
+// iteration (AC-17).
+type filterHandler struct{}
+
+// Exec implements NodeHandler.
+func (filterHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[FilterSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	if spec.MaxItems <= 0 {
+		return Directive{}, validationf("filter %q requires maxItems > 0", n.ID)
+	}
+	if spec.Over == "" {
+		return Directive{}, validationf("filter %q requires over", n.ID)
+	}
+	if spec.JDMID == "" {
+		return Directive{}, validationf("filter %q requires jdmId", n.ID)
+	}
+	if spec.SaveAs == "" {
+		return Directive{}, validationf("filter %q requires saveAs", n.ID)
+	}
+	if dep.Decide == nil {
+		return Directive{}, newErr(ClassInternal, "no decision evaluator wired")
+	}
+
+	raw, ok := c.GetPath(spec.Over)
+	if !ok {
+		return Directive{}, validationf("filter %q source path %q not found", n.ID, spec.Over)
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return Directive{}, validationf("filter %q source %q is not an array", n.ID, spec.Over)
+	}
+	if len(items) > spec.MaxItems {
+		return Directive{}, validationf("filter %q over %d items exceeds maxItems %d", n.ID, len(items), spec.MaxItems)
+	}
+
+	var result []any
+	for _, item := range items {
+		if cerr := ctx.Err(); cerr != nil {
+			return Directive{}, wrapErr(ClassTimeout, "filter cancelled", cerr)
+		}
+
+		in := projectItemInputs(item, spec.Input)
+		out, err := dep.Decide.Evaluate(ctx, spec.JDMID, in)
+		if err != nil {
+			return Directive{}, classify(err)
+		}
+
+		if isTruthy(out["match"]) {
+			result = append(result, item)
+		}
+	}
+
+	if c.Data == nil {
+		c.Data = map[string]any{}
+	}
+	c.Data[spec.SaveAs] = result
+	return Directive{}, nil
+}
+
+// findHandler finds the first item in an array where the ZEN predicate returns
+// a truthy "match" field. The found item (or nil) is stored under SaveAs in
+// Ctx.Data. It is a leaf node (no children); its budget guard (maxItems) prevents
+// runaway iteration (AC-17).
+type findHandler struct{}
+
+// Exec implements NodeHandler.
+func (findHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[FindSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	if spec.MaxItems <= 0 {
+		return Directive{}, validationf("find %q requires maxItems > 0", n.ID)
+	}
+	if spec.Over == "" {
+		return Directive{}, validationf("find %q requires over", n.ID)
+	}
+	if spec.JDMID == "" {
+		return Directive{}, validationf("find %q requires jdmId", n.ID)
+	}
+	if spec.SaveAs == "" {
+		return Directive{}, validationf("find %q requires saveAs", n.ID)
+	}
+	if dep.Decide == nil {
+		return Directive{}, newErr(ClassInternal, "no decision evaluator wired")
+	}
+
+	raw, ok := c.GetPath(spec.Over)
+	if !ok {
+		return Directive{}, validationf("find %q source path %q not found", n.ID, spec.Over)
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return Directive{}, validationf("find %q source %q is not an array", n.ID, spec.Over)
+	}
+	if len(items) > spec.MaxItems {
+		return Directive{}, validationf("find %q over %d items exceeds maxItems %d", n.ID, len(items), spec.MaxItems)
+	}
+
+	var found any // nil if no match
+	for _, item := range items {
+		if cerr := ctx.Err(); cerr != nil {
+			return Directive{}, wrapErr(ClassTimeout, "find cancelled", cerr)
+		}
+
+		in := projectItemInputs(item, spec.Input)
+		out, err := dep.Decide.Evaluate(ctx, spec.JDMID, in)
+		if err != nil {
+			return Directive{}, classify(err)
+		}
+
+		if isTruthy(out["match"]) {
+			found = item
+			break // first match wins
+		}
+	}
+
+	if c.Data == nil {
+		c.Data = map[string]any{}
+	}
+	c.Data[spec.SaveAs] = found
+	return Directive{}, nil
+}
+
+// projectItemInputs builds the ZEN input map from an array item. If the item is
+// a map, only the specified input fields are projected; otherwise the whole item
+// is passed as "item".
+func projectItemInputs(item any, inputFields []string) map[string]any {
+	m, isMap := item.(map[string]any)
+	if !isMap || len(inputFields) == 0 {
+		return map[string]any{"item": item}
+	}
+	out := make(map[string]any, len(inputFields))
+	for _, k := range inputFields {
+		if v, ok := m[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// isTruthy reports whether v is truthy: true, non-zero number, or non-empty string.
+func isTruthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case int:
+		return t != 0
+	case int64:
+		return t != 0
+	case float64:
+		return t != 0
+	case string:
+		return t != "" && t != "false" && t != "0"
+	default:
+		return v != nil
+	}
+}

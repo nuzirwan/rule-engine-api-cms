@@ -28,6 +28,8 @@ const (
 	TypeSet       NodeType = "set"
 	TypeLogger    NodeType = "logger"
 	TypeResponse  NodeType = "response"
+	TypeFilter    NodeType = "filter"
+	TypeFind      NodeType = "find"
 )
 
 // Node is one node in the flow tree. Control nodes carry Children; leaves do not.

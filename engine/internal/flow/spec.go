@@ -156,6 +156,26 @@ type DecisionSpec struct {
 	SaveAs string   `json:"saveAs"`
 }
 
+// FilterSpec filters an array, keeping items where the ZEN predicate returns a
+// truthy "match" field. The filtered array is stored under SaveAs in Ctx.Data.
+type FilterSpec struct {
+	Over     string   `json:"over"`     // path to source array
+	JDMID    string   `json:"jdmId"`    // ZEN decision for predicate
+	Input    []string `json:"input"`    // fields from each item to pass to predicate
+	SaveAs   string   `json:"saveAs"`   // where to store filtered array
+	MaxItems int      `json:"maxItems"` // budget guard (AC-17)
+}
+
+// FindSpec finds the first item in an array where the ZEN predicate returns a
+// truthy "match" field. The found item (or null) is stored under SaveAs in Ctx.Data.
+type FindSpec struct {
+	Over     string   `json:"over"`     // path to source array
+	JDMID    string   `json:"jdmId"`    // ZEN decision for predicate
+	Input    []string `json:"input"`    // fields from each item to pass to predicate
+	SaveAs   string   `json:"saveAs"`   // where to store found item
+	MaxItems int      `json:"maxItems"` // budget guard (AC-17)
+}
+
 // LoggerSpec is an optional debug point (deferred in the thin slice).
 type LoggerSpec struct {
 	Label      string   `json:"label"`
@@ -175,6 +195,8 @@ var specValidators = map[NodeType]func(json.RawMessage) error{
 	TypeParallel:  func(r json.RawMessage) error { _, e := parseSpec[ParallelSpec](r); return e },
 	TypeForEach:   func(r json.RawMessage) error { _, e := parseSpec[ForEachSpec](r); return e },
 	TypeDecision:  func(r json.RawMessage) error { _, e := parseSpec[DecisionSpec](r); return e },
+	TypeFilter:    func(r json.RawMessage) error { _, e := parseSpec[FilterSpec](r); return e },
+	TypeFind:      func(r json.RawMessage) error { _, e := parseSpec[FindSpec](r); return e },
 	TypeSet:       func(r json.RawMessage) error { _, e := parseSpec[SetSpec](r); return e },
 	TypeLogger:    func(r json.RawMessage) error { _, e := parseSpec[LoggerSpec](r); return e },
 	TypeResponse:  func(r json.RawMessage) error { _, e := parseSpec[ResponseSpec](r); return e },

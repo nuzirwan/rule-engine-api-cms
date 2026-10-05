@@ -403,6 +403,219 @@ func TestLogger_SampleRateZeroSkips(t *testing.T) {
 	}
 }
 
+// --- filter/find tests -----------------------------------------------------
+
+// matchEvaluator returns match:true when "price" > threshold.
+type matchEvaluator struct {
+	threshold float64
+	seen      []map[string]any
+}
+
+func (e *matchEvaluator) Evaluate(ctx context.Context, jdmID string, input map[string]any) (map[string]any, error) {
+	e.seen = append(e.seen, input)
+	price, _ := input["price"].(float64)
+	return map[string]any{"match": price > e.threshold}, nil
+}
+
+func TestFilter_BasicFiltering(t *testing.T) {
+	items := []any{
+		map[string]any{"id": 1, "price": float64(50)},
+		map[string]any{"id": 2, "price": float64(150)},
+		map[string]any{"id": 3, "price": float64(75)},
+	}
+	filter := Node{
+		ID:   "f",
+		Type: TypeFilter,
+		Spec: rawSpec(t, FilterSpec{Over: "items", JDMID: "price-check", Input: []string{"price"}, SaveAs: "expensive", MaxItems: 10}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{filter, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	eval := &matchEvaluator{threshold: 100}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	result, ok := c.Data["expensive"].([]any)
+	if !ok {
+		t.Fatalf("filter result not stored: %#v", c.Data["expensive"])
+	}
+	if len(result) != 1 {
+		t.Fatalf("filter result len=%d, want 1", len(result))
+	}
+	item := result[0].(map[string]any)
+	if item["id"] != 2 {
+		t.Fatalf("filter result item id=%v, want 2", item["id"])
+	}
+}
+
+func TestFilter_EmptyResult(t *testing.T) {
+	items := []any{
+		map[string]any{"id": 1, "price": float64(50)},
+	}
+	filter := Node{
+		ID:   "f",
+		Type: TypeFilter,
+		Spec: rawSpec(t, FilterSpec{Over: "items", JDMID: "price-check", Input: []string{"price"}, SaveAs: "expensive", MaxItems: 10}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{filter, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	eval := &matchEvaluator{threshold: 100}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	result, ok := c.Data["expensive"].([]any)
+	if !ok {
+		// nil slice is acceptable for empty result
+		if c.Data["expensive"] != nil {
+			t.Fatalf("filter result not nil or empty slice: %#v", c.Data["expensive"])
+		}
+		return
+	}
+	if len(result) != 0 {
+		t.Fatalf("filter result len=%d, want 0", len(result))
+	}
+}
+
+func TestFilter_MaxItemsExceeded(t *testing.T) {
+	items := make([]any, 5)
+	for i := range items {
+		items[i] = map[string]any{"id": i}
+	}
+	filter := Node{
+		ID:   "f",
+		Type: TypeFilter,
+		Spec: rawSpec(t, FilterSpec{Over: "items", JDMID: "x", Input: []string{}, SaveAs: "out", MaxItems: 3}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{filter, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: &matchEvaluator{}})
+	if err == nil {
+		t.Fatalf("expected maxItems error")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestFind_FirstMatch(t *testing.T) {
+	items := []any{
+		map[string]any{"id": 1, "price": float64(50)},
+		map[string]any{"id": 2, "price": float64(150)},
+		map[string]any{"id": 3, "price": float64(200)},
+	}
+	find := Node{
+		ID:   "f",
+		Type: TypeFind,
+		Spec: rawSpec(t, FindSpec{Over: "items", JDMID: "price-check", Input: []string{"price"}, SaveAs: "found", MaxItems: 10}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{find, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	eval := &matchEvaluator{threshold: 100}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	result, ok := c.Data["found"].(map[string]any)
+	if !ok {
+		t.Fatalf("find result not a map: %#v", c.Data["found"])
+	}
+	if result["id"] != 2 {
+		t.Fatalf("find result id=%v, want 2 (first match)", result["id"])
+	}
+	// Verify it stopped at first match (didn't evaluate item 3)
+	if len(eval.seen) != 2 {
+		t.Fatalf("find evaluated %d items, want 2 (should stop at first match)", len(eval.seen))
+	}
+}
+
+func TestFind_NoMatch(t *testing.T) {
+	items := []any{
+		map[string]any{"id": 1, "price": float64(50)},
+	}
+	find := Node{
+		ID:   "f",
+		Type: TypeFind,
+		Spec: rawSpec(t, FindSpec{Over: "items", JDMID: "price-check", Input: []string{"price"}, SaveAs: "found", MaxItems: 10}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{find, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	eval := &matchEvaluator{threshold: 100}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	if c.Data["found"] != nil {
+		t.Fatalf("find result should be nil when no match: %#v", c.Data["found"])
+	}
+}
+
+func TestFind_MaxItemsExceeded(t *testing.T) {
+	items := make([]any, 5)
+	for i := range items {
+		items[i] = map[string]any{"id": i}
+	}
+	find := Node{
+		ID:   "f",
+		Type: TypeFind,
+		Spec: rawSpec(t, FindSpec{Over: "items", JDMID: "x", Input: []string{}, SaveAs: "out", MaxItems: 3}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{find, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: &matchEvaluator{}})
+	if err == nil {
+		t.Fatalf("expected maxItems error")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestFilter_SourceNotArray(t *testing.T) {
+	filter := Node{
+		ID:   "f",
+		Type: TypeFilter,
+		Spec: rawSpec(t, FilterSpec{Over: "item", JDMID: "x", Input: []string{}, SaveAs: "out", MaxItems: 10}),
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{filter, {ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})}}}
+
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"item": "not-an-array"}
+
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: &matchEvaluator{}})
+	if err == nil {
+		t.Fatalf("expected error for non-array source")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
 // --- helpers ---------------------------------------------------------------
 
 func rawSpec(t *testing.T, v any) json.RawMessage {

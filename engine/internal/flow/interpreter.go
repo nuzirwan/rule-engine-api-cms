@@ -65,6 +65,8 @@ func New() *Interpreter {
 		TypeForEach:   forEachHandler{},
 		TypeDecision:  decisionHandler{},
 		TypeLogger:    loggerHandler{},
+		TypeFilter:    filterHandler{},
+		TypeFind:      findHandler{},
 	}}
 }
 
