@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-03 · mainline HEAD at handoff: `df1a748` (feat/strapi-cms fast-forwarded in)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `6f824d7` (productionization artifacts landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -11,8 +11,11 @@ BUILT, reviewed APPROVED, and merged**, and the **Strapi CMS (the original ask) 
 reviewed APPROVED, and merged** — see "Strapi CMS — DONE" and "Config-management admin API — DONE"
 below. The CMS integrates with the engine **ONLY** via the admin HTTP API and runs on its **own
 isolated Postgres db + schema** (never `rule_engine`/`public`). **Both live-run bugs are fixed with
-tests** (`/readyz` false-negative; per-object idempotent seeding). What remains is productionize
-(see NEXT).
+tests** (`/readyz` false-negative; per-object idempotent seeding).
+
+**Productionization artifacts are now BUILT** (see "Productionization — DONE" below): glibc-based
+Dockerfiles for engine + CMS, Docker Compose for the full stack (5 services), and GitHub Actions
+CI/CD pipeline. What remains is deployment (see NEXT).
 
 The v1 engine is proven LIVE against the user's real Postgres + Valkey. Config
 store runs in `matcha` DB under the dedicated `rule_engine` schema (the user's `public` tables are
@@ -262,16 +265,46 @@ Key facts:
   `@xyflow/react` v12 migration deferred (on reactflow 11); one cosmetic dead `.writeBack` read in
   the controller catch (no gate/bookkeeping impact).
 
+### Productionization — DONE (merged @ `6f824d7`)
+Production-ready container infrastructure and CI/CD pipeline are BUILT:
+
+**Engine Dockerfile** (`engine/Dockerfile`):
+- Multi-stage glibc-based build (ADR-003/R9 — NOT alpine/musl for ZEN CGO)
+- Builder: `golang:1-bookworm` with CGO_ENABLED=1
+- Runtime: `debian:bookworm-slim` (140MB image)
+- Non-root user, health check on `/readyz`, CA certs + curl included
+- ENV: `ENGINE_ADDR`, `CONFIG_DSN`, `CONFIG_SCHEMA`, `VALKEY_ADDR` (all optional)
+
+**CMS Dockerfile** (`cms/Dockerfile`):
+- Multi-stage Node 22 build (per `package.json` engines)
+- Builder: full deps + TypeScript compile; Runtime: production deps only
+- `node:22-bookworm-slim` + libvips for Sharp
+- Non-root user, health check on `/_health`, 1337 exposed
+
+**Docker Compose** (`docker-compose.yml` + overrides):
+- 5 services: `engine`, `cms`, `postgres-engine`, `postgres-cms`, `valkey`
+- Named volumes for data persistence
+- Internal `nzr-internal` bridge network
+- `docker-compose.override.yml` (dev), `docker-compose.prod.yml` (prod)
+- `.env.docker.example` documents all env vars
+- `docs/DOCKER.md` — setup/usage documentation
+
+**GitHub Actions CI/CD** (`.github/workflows/ci.yml`):
+- Triggers: push to main/mainline, PRs
+- Jobs: `lint-engine`, `test-engine`, `build-engine`, `test-cms`, `build-cms`, `integration`, `docker-build`
+- Integration tests run with Docker services (postgres:16, valkey:7)
+- Docker images pushed to `ghcr.io` on main branch (engine + CMS if Dockerfile exists)
+- Go module + npm dependency caching
+
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
 non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
 `Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
 
-## NEXT — v1 engine + admin control plane + Strapi CMS are done; what remains is the broader system (see arc below)
-The admin API is BUILT (see "Config-management admin API — DONE"), the Strapi CMS is BUILT (see
-"Strapi CMS — DONE"), and both live-run bugs are fixed. Pick the next milestone (product-priority
-call):
-- **Productionize** the engine + CMS (deploy; wire the CMS's own Postgres + the admin-API bearer;
-  config written hand-seeded / via admin API / via Strapi), OR
+## NEXT — v1 engine + admin + CMS + productionization artifacts are done; what remains is deploy
+Productionization artifacts are BUILT (see "Productionization — DONE"). Pick the next milestone:
+- **Deploy** the stack (push images to registry, set up secrets in Vault/SSM, wire per-env
+  config stores + valkeys, configure CMS→engine admin-API bearer), OR
+- **Load test** the engine (esp. R10 per-instance breakers under traffic), OR
 - Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
   JSON-source rule-match — both specced as next-phase below; full per-node dry-run trace;
   idempotency/rate-limit/saga), OR
@@ -279,6 +312,8 @@ call):
 
 ## AFTER v1 engine — remaining project arc
 
+- **Productionization** — DONE (see "Productionization — DONE" above): Dockerfiles (glibc engine +
+  Node CMS), Docker Compose (5-service stack), GitHub Actions CI/CD. Deployment is next.
 - **Strapi control-plane module (the CMS)** — DONE (see "Strapi CMS — DONE" above): separate Strapi 5
   build under `cms/`, four content types, `@gorules/jdm-editor` + reactflow canvas, validation +
   draft/publish pipeline, publish transform pushed to the engine via the `/admin/*` HTTP API (NOT
