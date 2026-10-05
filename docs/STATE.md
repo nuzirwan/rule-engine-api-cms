@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-04 · mainline HEAD at handoff: `ef92a2c` (idempotency R4 landed)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `e93b98a` (dry-run trace landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -339,16 +339,22 @@ limiting — now **token-bucket rate limiter implemented (R6)**, per-instance br
   field resolves a path from Ctx and copies into `Operation.IdempotencyKey`; the connect layer's
   existing `dedupGuard` (dedup.go) then protects non-idempotent writes with a SET-NX lock in valkey;
   3 unit tests. Commit `ef92a2c`.
+- **De-demo adapters** — `internal/flow/spec.go` + `handlers.go`: `ActionSpec.UnwrapSingleRow` makes
+  single-row unwrapping explicit (config-declared, not assumed); `ConditionSpec.BranchField` declares
+  which decision output field is the branch (not the demo-tuned single-string heuristic). Both are
+  optional fields; omission retains existing behavior. Commit `02478e0`.
+- **Dry-run trace** — `internal/flow/interpreter.go` + `internal/observ/tracenode.go`: integrated
+  `TraceNode` into `Interpreter.walk()` so every node is recorded to the dry-run collector (not just
+  suppressed writes); `TraceNode` handles nil tracer for dry-run-without-tracing; logger tests updated
+  to filter by label. Commit `e93b98a`.
 
 ## NEXT — all build artifacts done; what remains is actual deployment
 All productionization and deployment artifacts are BUILT (see "Productionization — DONE" and
-"Deployment — DONE"). Rate limiter (R6), saga/compensation (R3), and idempotency (R4) are now
-implemented. Pick the next milestone:
+"Deployment — DONE"). Rate limiter (R6), saga/compensation (R3), idempotency (R4), de-demo adapters,
+and dry-run trace are now implemented. Pick the next milestone:
 - **Actually deploy** — push images to registry, apply k8s manifests to a cluster, wire real secrets
 - **Run load tests** — execute `scripts/loadtest.sh` against a running engine to validate R10 breakers
 - Pull a **deferred engine item** forward if a real need exists:
-  - `de-demo adapters` — remove demo-tuned heuristics from httpapi/adapters.go (see description below)
-  - `dry-run trace` — full per-node TraceNode integration in internal/flow
   - `collection nodes` — filter/find/map/reduce for result sets
 - Pull a **deferred CMS item** forward if needed:
   - `audit-viewer UI` — client has `audit()`, no UI yet
@@ -365,18 +371,14 @@ implemented. Pick the next milestone:
 - **Deferred engine items as needed**: ~~idempotency for required writes (R4)~~, ~~rate limiting (R6)~~,
   ~~cross-source saga/compensation (R3)~~ — **ALL THREE NOW IMPLEMENTED** (see "Additional deferred
   items completed" above).
-- **De-demo-ify `internal/httpapi/adapters.go` (platform-genericness, from a business-noun audit).**
-  Two demo-tuned heuristics live in the httpapi edge and should become CONFIG-DECLARED, not
-  assumed from the orders demo's data shape (per `concepts/config-driven-boundaries`): (1)
-  `normalizeResult` unwraps a single-row Postgres result to a map "because orders/{id} yields one
-  row" — a shape assumption; the action node should declare one-row-vs-many instead of the engine
-  guessing. (2) `soleStringValue`/`branchingEvaluator` treats a single-string decision output as
-  "the branch" regardless of field name — tuned to the order JDM's `{"shipping":"<branch>"}`; the
-  condition node should declare which decision output field is the branch. The core engine
-  (`internal/flow`, `connect`, `decision`, `config`, `observ`) is clean of business logic — these
-  two are the only demo-ties left after the config-driven-routing fix removes the hardcoded route.
-  (The in-flight config-driven-routing increment may address these opportunistically; if not,
-  they're a small follow-up increment.)
+- **De-demo-ify `internal/httpapi/adapters.go`** — DONE (see "Additional deferred items completed").
+  Two demo-tuned heuristics lived in the httpapi edge and are now CONFIG-DECLARED, not assumed
+  from the orders demo's data shape (per `concepts/config-driven-boundaries`): (1) `normalizeResult`
+  unwraps a single-row Postgres result to a map — now controlled by `ActionSpec.UnwrapSingleRow`
+  (explicitly declared in config, not assumed). (2) `soleStringValue`/`branchingEvaluator` treats a
+  single-string decision output as "the branch" — now controlled by `ConditionSpec.BranchField`
+  (declares which decision output field is the branch). The core engine is now fully clean of
+  business-logic assumptions.
 - **Provider-agnostic connector platform (NEXT PHASE — DESIGN DONE, not built).** Full design in
   `docs/lld/connector-platform.md` (Slice G). Makes connection handling agnostic-by-contract so any
   backend type (any SQL, REST, Valkey, future Kafka/RabbitMQ/streaming) plugs in via one `Connector`
