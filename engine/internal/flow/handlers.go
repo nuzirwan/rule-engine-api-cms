@@ -70,6 +70,17 @@ func (actionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walke
 		op.Override = ov
 	}
 
+	// Resolve the idempotency key template (R4). When IdempotencyKeyFrom is set
+	// the resolved value flows into op.IdempotencyKey; the connect layer's
+	// dedupGuard then protects the non-idempotent write with a SET-NX lock.
+	if spec.IdempotencyKeyFrom != "" {
+		if v, ok := c.GetPath(spec.IdempotencyKeyFrom); ok {
+			if s, ok := v.(string); ok && s != "" {
+				op.IdempotencyKey = s
+			}
+		}
+	}
+
 	// Dry-run write-suppression (AC-14): under a dry-run context a write op
 	// performs NO I/O. The suppressed write is recorded into the trace collector
 	// (if one is attached) as wrote:"suppressed", then the walk continues linearly

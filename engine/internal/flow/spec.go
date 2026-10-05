@@ -69,6 +69,14 @@ type ActionSpec struct {
 	SaveAs     string              `json:"saveAs"`
 	Resilience *ResilienceOverride `json:"resilience,omitempty"`
 	OnError    OnError             `json:"onError,omitempty"`
+
+	// IdempotencyKeyFrom is a template path that resolves to a unique key for
+	// deduplication (R4). When non-empty the resolved value is copied into the
+	// Operation.IdempotencyKey field; a non-idempotent write (exec/http POST/PUT/
+	// DELETE) protected by this key is deduped across the dedup-store TTL window
+	// so a replay within the window sees a short-circuit result instead of a
+	// duplicate side effect.
+	IdempotencyKeyFrom string `json:"idempotencyKeyFrom,omitempty"`
 }
 
 // ConditionSpec is a binary branch via a ZEN decision (control node).

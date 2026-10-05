@@ -361,3 +361,88 @@ func TestInterpreter_TimeoutOverrideApplied(t *testing.T) {
 		t.Fatalf("override timeout = %v, want %dms", fc.ops[0].Override.Timeout, ms)
 	}
 }
+
+func TestInterpreter_IdempotencyKeyFromResolved(t *testing.T) {
+	// When IdempotencyKeyFrom is set, the resolved value flows into op.IdempotencyKey.
+	fc := &fakeClient{result: map[string]any{}}
+	reg := &fakeRegistry{client: fc}
+	tree := &Node{
+		ID:   "root",
+		Type: TypeTrigger,
+		Spec: raw(t, TriggerSpec{Method: "POST", Path: "/orders"}),
+		Children: []Node{{
+			ID:   "create",
+			Type: TypeAction,
+			Spec: raw(t, ActionSpec{
+				ConnRef:            ConnRef{Connection: "pg"},
+				Operation:          connect.Operation{Kind: "exec"},
+				SaveAs:             "res",
+				IdempotencyKeyFrom: "requestId",
+			}),
+		}},
+	}
+	c := NewCtx("r", "t", "e", map[string]any{"requestId": "idem-abc123"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(fc.ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(fc.ops))
+	}
+	if fc.ops[0].IdempotencyKey != "idem-abc123" {
+		t.Fatalf("IdempotencyKey = %q, want %q", fc.ops[0].IdempotencyKey, "idem-abc123")
+	}
+}
+
+func TestInterpreter_IdempotencyKeyFromMissing(t *testing.T) {
+	// When IdempotencyKeyFrom path is missing, IdempotencyKey stays empty (no error).
+	fc := &fakeClient{result: map[string]any{}}
+	reg := &fakeRegistry{client: fc}
+	tree := &Node{
+		ID:   "root",
+		Type: TypeTrigger,
+		Spec: raw(t, TriggerSpec{Method: "POST", Path: "/orders"}),
+		Children: []Node{{
+			ID:   "create",
+			Type: TypeAction,
+			Spec: raw(t, ActionSpec{
+				ConnRef:            ConnRef{Connection: "pg"},
+				Operation:          connect.Operation{Kind: "exec"},
+				IdempotencyKeyFrom: "missingKey",
+			}),
+		}},
+	}
+	c := NewCtx("r", "t", "e", map[string]any{"other": "value"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(fc.ops) != 1 || fc.ops[0].IdempotencyKey != "" {
+		t.Fatalf("missing path should leave IdempotencyKey empty, got %q", fc.ops[0].IdempotencyKey)
+	}
+}
+
+func TestInterpreter_IdempotencyKeyFromNonString(t *testing.T) {
+	// When IdempotencyKeyFrom resolves to a non-string, IdempotencyKey stays empty.
+	fc := &fakeClient{result: map[string]any{}}
+	reg := &fakeRegistry{client: fc}
+	tree := &Node{
+		ID:   "root",
+		Type: TypeTrigger,
+		Spec: raw(t, TriggerSpec{Method: "POST", Path: "/orders"}),
+		Children: []Node{{
+			ID:   "create",
+			Type: TypeAction,
+			Spec: raw(t, ActionSpec{
+				ConnRef:            ConnRef{Connection: "pg"},
+				Operation:          connect.Operation{Kind: "exec"},
+				IdempotencyKeyFrom: "numericValue",
+			}),
+		}},
+	}
+	c := NewCtx("r", "t", "e", map[string]any{"numericValue": 12345})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(fc.ops) != 1 || fc.ops[0].IdempotencyKey != "" {
+		t.Fatalf("non-string should leave IdempotencyKey empty, got %q", fc.ops[0].IdempotencyKey)
+	}
+}
