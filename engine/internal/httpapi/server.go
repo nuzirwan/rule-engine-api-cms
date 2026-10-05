@@ -81,6 +81,11 @@ type Deps struct {
 	// OperAuth mounts the operator plane CLOSED: every /admin/* request is 503
 	// (deny-by-default), never mounted open.
 	OperAuth auth.OperatorAuthenticator
+	// RateLimit configures the token-bucket rate limiter applied to all
+	// inbound requests (data-plane + admin). Env overrides: RATE_LIMIT_RPS,
+	// RATE_LIMIT_BURST, RATE_LIMIT_BY_TOKEN. A zero-valued config (RPS ≤ 0)
+	// disables rate limiting — the zero value is safe for tests.
+	RateLimit RateLimitConfig
 }
 
 // NewServer builds an *http.Server whose handler serves the config-driven routes
@@ -126,7 +131,13 @@ func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler,
 	// The single catch-all: every other request re-resolves against LIVE config.
 	mux.HandleFunc("/", genericFlowHandler(store, interp, deps))
 
-	return mux, nil
+	// Wrap the entire mux with the token-bucket rate limiter so both the data
+	// plane ("/") and the admin plane ("/admin/*") are protected. A nil limiter
+	// (RPS ≤ 0) is a transparent no-op — existing tests that pass Deps{} are
+	// unaffected. Ops endpoints (/livez, /readyz, /metrics) are also wrapped;
+	// deploy behind an internal network or use a separate port to exempt them.
+	rl := newRateLimiter(deps.RateLimit)
+	return rateLimitMiddleware(rl)(mux), nil
 }
 
 // genericFlowHandler returns the single catch-all handler. On EVERY request it
