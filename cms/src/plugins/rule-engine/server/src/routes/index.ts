@@ -1,11 +1,6 @@
-// Admin-scoped route for the publish controller (design §5.4). The route is
-// mounted on the plugin's admin router so it sits behind Strapi's admin auth +
-// RBAC; the handler (controllers/publish.ts) runs the ordered, publish-blocking
-// sequence through the engine admin HTTP API.
-//
-// The plugin stays disabled until FEAT-004 wires the admin UI; this file
-// completes the server module graph so the controller is reachable the moment
-// the plugin is enabled.
+// Admin-scoped routes for the rule-engine plugin controllers. The routes are
+// mounted on the plugin's admin router so they sit behind Strapi's admin auth +
+// RBAC; handlers run through the engine admin HTTP API via AdminClient.
 
 export default {
   admin: {
@@ -18,6 +13,16 @@ export default {
         config: {
           // Guarded by Strapi admin auth; a dedicated RBAC action can be added
           // when the admin UI (FEAT-004) ships its permission wiring.
+          policies: [],
+        },
+      },
+      {
+        // Proxy GET /admin/audit/{type}/{id} from the engine — returns audit
+        // trail for flow, jdm, or connection entities.
+        method: 'GET',
+        path: '/audit/:type/:id',
+        handler: 'audit.audit',
+        config: {
           policies: [],
         },
       },

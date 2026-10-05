@@ -187,3 +187,28 @@ export interface EngineConnectionDef {
 export interface ListConnectionsResponse {
   connections: EngineConnectionDef[];
 }
+
+// ----------------------------------------------------------------------------
+// Audit trail — GET /admin/audit/{type}/{id}
+// ----------------------------------------------------------------------------
+
+/** Valid object types for the audit endpoint. */
+export type AuditObjectType = 'flow' | 'jdm' | 'connection';
+
+/** One entry in the audit trail (newest-first). */
+export interface AuditEntry {
+  action: string;
+  fromVersion: number | null;
+  toVersion: number | null;
+  actor: string;
+  /** ISO 8601 timestamp. */
+  at: string;
+  reason: string;
+}
+
+/** 200 from GET /admin/audit/{type}/{id}. */
+export interface AuditTrailResponse {
+  objectType: AuditObjectType;
+  objectId: string;
+  entries: AuditEntry[];
+}

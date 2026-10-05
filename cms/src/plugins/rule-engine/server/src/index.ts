@@ -12,6 +12,7 @@
 // only the custom-field registration, the publish controller, and routes.
 
 import publishController from './controllers/publish';
+import auditController from './controllers/audit';
 import routes from './routes';
 
 const PLUGIN_ID = 'rule-engine';
@@ -29,6 +30,7 @@ export default {
 
   controllers: {
     publish: publishController,
+    audit: auditController,
   },
 
   routes,

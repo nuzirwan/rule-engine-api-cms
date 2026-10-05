@@ -10,6 +10,8 @@
 // Stored-mode validate sends exactly `{ env, flowId, version }` (§5.1.1).
 
 import type {
+  AuditObjectType,
+  AuditTrailResponse,
   CreateConnectionRequest,
   CreateConnectionResponse,
   CreateFlowRequest,
@@ -178,9 +180,9 @@ export class AdminClient {
     return this.request<unknown>('POST', '/admin/flows/dry-run', body);
   }
 
-  /** GET /admin/audit/{type}/{id} — read audit trail. No v1 publish-path caller. */
-  audit(type: 'flow' | 'jdm' | 'connection', id: string): Promise<unknown> {
-    return this.request<unknown>(
+  /** GET /admin/audit/{type}/{id} — read audit trail for a flow, jdm, or connection. */
+  audit(type: AuditObjectType, id: string): Promise<AuditTrailResponse> {
+    return this.request<AuditTrailResponse>(
       'GET',
       `/admin/audit/${encodeURIComponent(type)}/${encodeURIComponent(id)}`
     );
