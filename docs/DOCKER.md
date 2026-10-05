@@ -2,6 +2,10 @@
 
 Multi-environment Docker Compose configuration for the nzr-rules-engine stack.
 
+> **Env var reference**: for the complete environment variable catalogue (required/optional,
+> secrets/config) see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+> For secrets management (Vault, SSM, rotation) see [`SECRETS.md`](./SECRETS.md).
+
 ## Architecture
 
 ```
