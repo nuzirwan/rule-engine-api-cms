@@ -77,6 +77,14 @@ type ActionSpec struct {
 	// so a replay within the window sees a short-circuit result instead of a
 	// duplicate side effect.
 	IdempotencyKeyFrom string `json:"idempotencyKeyFrom,omitempty"`
+
+	// UnwrapSingleRow controls how multi-row query results are normalized. When
+	// true (the default for backward compatibility), a single-row result is
+	// unwrapped to its map representation so "saveAs.field" paths resolve directly.
+	// When explicitly false, results are always returned as an array regardless of
+	// row count. This removes the demo-tuned heuristic that assumed single-row
+	// queries (e.g. orders/{id}).
+	UnwrapSingleRow *bool `json:"unwrapSingleRow,omitempty"`
 }
 
 // ConditionSpec is a binary branch via a ZEN decision (control node).
@@ -85,6 +93,13 @@ type ConditionSpec struct {
 	Input    []string `json:"input"`
 	TrueKey  string   `json:"trueKey"`
 	FalseKey string   `json:"falseKey"`
+
+	// BranchField names the decision output field to read for branching. When set,
+	// the condition reads this specific field from the decision output instead of
+	// relying on the generic "branch" or "result" convention. This removes the
+	// demo-tuned heuristic that assumed a single-string output (e.g. {"shipping":
+	// "expedite"}) could be auto-promoted to branch.
+	BranchField string `json:"branchField,omitempty"`
 }
 
 // SetSpec mounts a value or a resolved path into Response (leaf). Exactly one of

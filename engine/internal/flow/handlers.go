@@ -70,6 +70,11 @@ func (actionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walke
 		op.Override = ov
 	}
 
+	// Copy the UnwrapSingleRow preference to the operation so the httpapi adapter
+	// can use it in normalizeResult. This removes the demo-tuned heuristic that
+	// assumed single-row queries (e.g. orders/{id}) should always be unwrapped.
+	op.UnwrapSingleRow = spec.UnwrapSingleRow
+
 	// Resolve the idempotency key template (R4). When IdempotencyKeyFrom is set
 	// the resolved value flows into op.IdempotencyKey; the connect layer's
 	// dedupGuard then protects the non-idempotent write with a SET-NX lock.
@@ -154,7 +159,7 @@ func (conditionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Wa
 		return Directive{}, classify(err)
 	}
 
-	key := chooseBranch(out, spec.TrueKey, spec.FalseKey)
+	key := chooseBranch(out, spec.TrueKey, spec.FalseKey, spec.BranchField)
 	if key == "" {
 		// A false branch with no FalseKey is a linear fall-through: nothing to walk.
 		return Directive{Branch: ""}, nil
@@ -173,10 +178,28 @@ func (conditionHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Wa
 	return d, nil
 }
 
-// chooseBranch selects the branch key from a decision output. A string "branch"
-// field naming trueKey/falseKey wins; otherwise a truthy "result" picks trueKey,
-// a falsey one picks falseKey.
-func chooseBranch(out map[string]any, trueKey, falseKey string) string {
+// chooseBranch selects the branch key from a decision output. When branchField
+// is set, it reads that specific field from the output. Otherwise it falls back
+// to the generic "branch" or "result" convention: a string "branch" field naming
+// trueKey/falseKey wins; otherwise a truthy "result" picks trueKey, a falsey one
+// picks falseKey.
+func chooseBranch(out map[string]any, trueKey, falseKey, branchField string) string {
+	// When BranchField is explicitly set, read from that field. This removes the
+	// demo-tuned heuristic that auto-promoted a sole string value.
+	if branchField != "" {
+		if b, ok := out[branchField].(string); ok {
+			switch b {
+			case trueKey:
+				return trueKey
+			case falseKey:
+				return falseKey
+			}
+		}
+		// BranchField was set but didn't match a branch key; treat as falsey.
+		return falseKey
+	}
+
+	// Fallback: check for a "branch" field (backward compat with branchingEvaluator)
 	if b, ok := out["branch"].(string); ok {
 		switch b {
 		case trueKey:

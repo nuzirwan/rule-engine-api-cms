@@ -90,7 +90,7 @@ func (c *templatingClient) Execute(ctx context.Context, op connect.Operation) (a
 	if err != nil {
 		return res, err
 	}
-	return normalizeResult(res), nil
+	return normalizeResult(res, op.UnwrapSingleRow), nil
 }
 
 // resolvePayload resolves every template in the payload and, for a SQL op, binds
@@ -153,21 +153,34 @@ func posLabel(i int) string { return "$" + stringify(i+1) }
 
 // normalizeResult bridges the connect driver output shapes to the shapes
 // flow.Ctx.GetPath descends (map[string]any / []any). The postgres driver
-// returns rows as []map[string]any; a GET-one-resource read (orders/{id}) yields
-// a single row, so a one-row result is unwrapped to that row's map so a
-// condition can project "order.amount". A multi-row result is converted to a
-// []any of maps so index paths ("rows.0.x") still resolve. Any other result
-// (e.g. the rest driver's {status,headers,body}) is returned unchanged.
-func normalizeResult(res any) any {
+// returns rows as []map[string]any; when unwrapSingleRow is true (the default
+// via nil for backward compat), a single row is unwrapped to the map itself so a
+// condition can project "order.amount". When unwrapSingleRow is explicitly false,
+// results are always returned as []any regardless of row count (removing the
+// demo-tuned heuristic that assumed single-row queries). A multi-row result is
+// converted to a []any of maps so index paths ("rows.0.x") still resolve. Any
+// other result (e.g. the rest driver's {status,headers,body}) is returned unchanged.
+func normalizeResult(res any, unwrapSingleRow *bool) any {
 	rows, ok := res.([]map[string]any)
 	if !ok {
 		return res
 	}
+
+	// Determine whether to unwrap single rows: nil means true (backward compat),
+	// explicit false means never unwrap, explicit true means unwrap.
+	unwrap := unwrapSingleRow == nil || *unwrapSingleRow
+
 	switch len(rows) {
 	case 0:
-		return map[string]any{}
+		if unwrap {
+			return map[string]any{}
+		}
+		return []any{}
 	case 1:
-		return rows[0]
+		if unwrap {
+			return rows[0]
+		}
+		return []any{rows[0]}
 	default:
 		out := make([]any, len(rows))
 		for i, r := range rows {

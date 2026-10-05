@@ -364,17 +364,47 @@ func TestResolveTemplates(t *testing.T) {
 
 // TestNormalizeResult proves the pg []map[string]any result is bridged to the
 // shapes GetPath descends: a single row to a map, many rows to a []any, and a
-// non-row result (rest body) is passed through.
+// non-row result (rest body) is passed through. The unwrapSingleRow parameter
+// controls whether single rows are unwrapped (nil/true) or kept as arrays (false).
 func TestNormalizeResult(t *testing.T) {
-	single := normalizeResult([]map[string]any{{"amount": 1500}})
+	// Default (nil): single row unwrapped to map
+	single := normalizeResult([]map[string]any{{"amount": 1500}}, nil)
 	if m, ok := single.(map[string]any); !ok || m["amount"] != 1500 {
 		t.Errorf("single row not unwrapped to a map: %#v", single)
 	}
-	many := normalizeResult([]map[string]any{{"id": 1}, {"id": 2}})
+
+	// Explicit true: same as nil
+	tr := true
+	singleTrue := normalizeResult([]map[string]any{{"amount": 1500}}, &tr)
+	if m, ok := singleTrue.(map[string]any); !ok || m["amount"] != 1500 {
+		t.Errorf("single row with true not unwrapped: %#v", singleTrue)
+	}
+
+	// Explicit false: single row stays as array
+	fa := false
+	singleFalse := normalizeResult([]map[string]any{{"amount": 1500}}, &fa)
+	if s, ok := singleFalse.([]any); !ok || len(s) != 1 {
+		t.Errorf("single row with false should be array: %#v", singleFalse)
+	}
+
+	// Many rows always converted to []any
+	many := normalizeResult([]map[string]any{{"id": 1}, {"id": 2}}, nil)
 	if s, ok := many.([]any); !ok || len(s) != 2 {
 		t.Errorf("many rows not converted to []any: %#v", many)
 	}
-	passthrough := normalizeResult(map[string]any{"status": 200})
+
+	// Empty rows: depends on unwrap setting
+	emptyUnwrap := normalizeResult([]map[string]any{}, nil)
+	if _, ok := emptyUnwrap.(map[string]any); !ok {
+		t.Errorf("empty rows with unwrap should be empty map: %#v", emptyUnwrap)
+	}
+	emptyNoUnwrap := normalizeResult([]map[string]any{}, &fa)
+	if s, ok := emptyNoUnwrap.([]any); !ok || len(s) != 0 {
+		t.Errorf("empty rows with no unwrap should be empty array: %#v", emptyNoUnwrap)
+	}
+
+	// Non-row result passed through unchanged
+	passthrough := normalizeResult(map[string]any{"status": 200}, nil)
 	if m, ok := passthrough.(map[string]any); !ok || m["status"] != 200 {
 		t.Errorf("non-row result mangled: %#v", passthrough)
 	}

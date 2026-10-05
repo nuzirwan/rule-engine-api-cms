@@ -446,3 +446,96 @@ func TestInterpreter_IdempotencyKeyFromNonString(t *testing.T) {
 		t.Fatalf("non-string should leave IdempotencyKey empty, got %q", fc.ops[0].IdempotencyKey)
 	}
 }
+
+func TestInterpreter_ConditionBranchField(t *testing.T) {
+	// When BranchField is set, the condition reads from that specific field
+	// instead of the generic "branch" or "result" convention.
+	reg := &fakeRegistry{client: &fakeClient{result: map[string]any{"amount": 1500}}}
+
+	// Decision output has a custom field "shipping" with the branch value
+	eval := &fakeEvaluator{out: map[string]any{"shipping": "expedite"}}
+
+	tree := &Node{
+		ID:   "root",
+		Type: TypeTrigger,
+		Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{{
+			ID:   "load",
+			Type: TypeAction,
+			Spec: raw(t, ActionSpec{ConnRef: ConnRef{Connection: "pg"}, Operation: connect.Operation{Kind: "query"}, SaveAs: "data"}),
+			Children: []Node{{
+				ID:   "cond",
+				Type: TypeCondition,
+				Spec: raw(t, ConditionSpec{
+					JDMID:       "order",
+					Input:       []string{"data.amount"},
+					TrueKey:     "expedite",
+					FalseKey:    "standard",
+					BranchField: "shipping", // explicitly read from "shipping" field
+				}),
+				Children: []Node{
+					{
+						ID:   "expedite",
+						Type: TypeSet,
+						Spec: raw(t, SetSpec{TargetPath: "result", Value: "expedited"}),
+						Children: []Node{{
+							ID: "resp-exp", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200}),
+						}},
+					},
+					{
+						ID:   "standard",
+						Type: TypeSet,
+						Spec: raw(t, SetSpec{TargetPath: "result", Value: "standard"}),
+						Children: []Node{{
+							ID: "resp-std", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200}),
+						}},
+					},
+				},
+			}},
+		}},
+	}
+
+	c := NewCtx("r", "t", "e", nil)
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg, Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Response["result"] != "expedited" {
+		t.Errorf("expected expedited branch taken, got result=%v", c.Response["result"])
+	}
+}
+
+func TestInterpreter_ConditionBranchFieldMismatch(t *testing.T) {
+	// When BranchField is set but the value doesn't match a branch key,
+	// it falls through to falseKey.
+	reg := &fakeRegistry{client: &fakeClient{result: map[string]any{}}}
+	eval := &fakeEvaluator{out: map[string]any{"shipping": "unknown"}} // not "expedite" or "standard"
+
+	tree := &Node{
+		ID:   "root",
+		Type: TypeTrigger,
+		Spec: raw(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{{
+			ID:   "cond",
+			Type: TypeCondition,
+			Spec: raw(t, ConditionSpec{
+				JDMID:       "order",
+				Input:       []string{},
+				TrueKey:     "expedite",
+				FalseKey:    "standard",
+				BranchField: "shipping",
+			}),
+			Children: []Node{
+				{ID: "expedite", Type: TypeSet, Spec: raw(t, SetSpec{TargetPath: "result", Value: "expedited"}), Children: []Node{{ID: "r1", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200})}}},
+				{ID: "standard", Type: TypeSet, Spec: raw(t, SetSpec{TargetPath: "result", Value: "standard"}), Children: []Node{{ID: "r2", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200})}}},
+			},
+		}},
+	}
+
+	c := NewCtx("r", "t", "e", nil)
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg, Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Response["result"] != "standard" {
+		t.Errorf("expected standard branch (mismatch fallback), got result=%v", c.Response["result"])
+	}
+}

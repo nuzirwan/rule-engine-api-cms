@@ -46,6 +46,10 @@ type Operation struct {
 	IdempotencyKey string
 	// Required true => abort on failure; false => best-effort (R3).
 	Required bool
+	// UnwrapSingleRow controls result normalization: when true (the default via nil
+	// for backward compat), a single-row query result is unwrapped to a map; when
+	// explicitly false, results are always returned as an array.
+	UnwrapSingleRow *bool
 }
 
 // ResiliencePolicy carries timeout/retry/breaker settings. Fields are fixed here
