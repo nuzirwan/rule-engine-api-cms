@@ -128,6 +128,8 @@ The CMS owns a **separate** Postgres database and schema from the engine. It mus
 | `CMS_DB_SSL_KEY` | | 🔒 | — | Client TLS private key (PEM). Only used when `CMS_DB_SSL=true`. |
 | `CMS_DB_SSL_CERT` | | 🔒 | — | Client TLS certificate (PEM). Only used when `CMS_DB_SSL=true`. |
 | `CMS_DB_SSL_CA` | | 🔒 | — | CA certificate (PEM) for server verification. Only used when `CMS_DB_SSL=true`. |
+| `CMS_DB_SSL_CAPATH` | | ⚙️ | — | Path to a directory of CA certificates. Alternative to `CMS_DB_SSL_CA`. Only used when `CMS_DB_SSL=true`. |
+| `CMS_DB_SSL_CIPHER` | | ⚙️ | — | Allowed TLS cipher suite string passed directly to the TLS layer. Only used when `CMS_DB_SSL=true`. |
 | `CMS_DB_SSL_REJECT_UNAUTHORIZED` | | ⚙️ | `true` | Reject connections with invalid server certificates. **Never set to `false` in production.** |
 | `CMS_DB_POOL_MIN` | | ⚙️ | `2` | Minimum database connection pool size. |
 | `CMS_DB_POOL_MAX` | | ⚙️ | `10` | Maximum database connection pool size. |
@@ -179,9 +181,31 @@ container as the corresponding container-internal variable names.
 
 ## Infrastructure Variables (Docker Compose internal)
 
+These variables are set internally by `docker-compose.yml` for the supporting services. They are
+**not** set by operators directly — they are derived from the host-side variables documented in
+the engine and CMS sections above. They are listed here for completeness.
+
+### Postgres Engine Container (postgres-engine service)
+
+| Variable | Set from | Description |
+|----------|----------|-------------|
+| `POSTGRES_DB` | `ENGINE_DB_NAME` | Database name passed to the Postgres container image. |
+| `POSTGRES_USER` | `ENGINE_DB_USER` | Database superuser name passed to the Postgres container image. |
+| `POSTGRES_PASSWORD` | `ENGINE_DB_PASSWORD` | Database superuser password passed to the Postgres container image. |
+
+### Postgres CMS Container (postgres-cms service)
+
+| Variable | Set from | Description |
+|----------|----------|-------------|
+| `POSTGRES_DB` | `CMS_DB_NAME` | Database name passed to the Postgres container image. |
+| `POSTGRES_USER` | `CMS_DB_USER` | Database superuser name passed to the Postgres container image. |
+| `POSTGRES_PASSWORD` | `CMS_DB_PASSWORD` | Database superuser password passed to the Postgres container image. |
+
+### Valkey / Dev Port Overrides
+
 | Variable | Service | Default | Description |
 |----------|---------|---------|-------------|
-| `VALKEY_PORT` | valkey | `6379` | Host port for Valkey (dev override only). |
+| `VALKEY_PORT` | valkey | `6379` | Host port for Valkey (dev override only; not exposed in prod). |
 
 ---
 
