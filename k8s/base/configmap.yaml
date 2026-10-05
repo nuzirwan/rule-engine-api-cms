@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-config
+  labels:
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: engine
+data:
+  # Engine HTTP server bind address
+  ENGINE_ADDR: ":8080"
+  # Postgres schema for rule config store
+  CONFIG_SCHEMA: "rule_engine"
+  # Valkey cache address (service name resolves inside cluster)
+  VALKEY_ADDR: "valkey:6379"
+  # Admin control plane: set to "true" to enable /admin endpoints
+  ADMIN_ENABLED: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cms-config
+  labels:
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: cms
+data:
+  # Strapi server
+  HOST: "0.0.0.0"
+  PORT: "1337"
+  NODE_ENV: "production"
+  # CMS database (separate Postgres instance from engine)
+  DATABASE_CLIENT: "postgres"
+  CMS_DB_HOST: "postgres-cms"
+  CMS_DB_PORT: "5432"
+  CMS_DB_NAME: "strapi_cms"
+  CMS_DB_USER: "strapi_cms"
+  CMS_DB_SCHEMA: "strapi_cms"
+  CMS_DB_SSL: "false"
+  CMS_DB_POOL_MIN: "2"
+  CMS_DB_POOL_MAX: "10"
+  # Engine admin API base URL (service name resolves inside cluster)
+  ADMIN_API_BASE_URL: "http://engine:8080"
+  # Strapi feature flags
+  FLAG_NPS: "true"
+  FLAG_PROMOTE_EE: "true"
+  FLAG_DOC_LINKS: "true"
+  WEBHOOKS_POPULATE_RELATIONS: "false"

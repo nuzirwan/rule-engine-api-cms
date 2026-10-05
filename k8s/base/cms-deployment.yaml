@@ -1,0 +1,192 @@
+# =============================================================================
+# CMS — Strapi 5 Content Management System
+# Deployment + ClusterIP Service
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cms
+  labels:
+    app.kubernetes.io/name: cms
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: cms
+spec:
+  # Strapi is stateful (admin uploads); run a single replica unless you have
+  # shared-storage (ReadWriteMany PVC) for /public/uploads.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cms
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cms
+        app.kubernetes.io/part-of: nzr-rules-engine
+        app.kubernetes.io/component: cms
+    spec:
+      # Non-root user (uid 1001) as set in cms Dockerfile — least privilege
+      # per [[security-and-authz]]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        # Wait for engine to be ready before starting CMS — mirrors
+        # docker-compose depends_on engine:condition:service_healthy
+        - name: wait-for-engine
+          image: curlimages/curl:8.10.1
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until curl -sf http://engine:8080/readyz; do
+                echo "waiting for engine readyz..."; sleep 5
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+      containers:
+        - name: cms
+          image: nzr-strapi-cms:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 1337
+              protocol: TCP
+
+          # ---- Non-secret configuration --------------------------------
+          envFrom:
+            - configMapRef:
+                name: cms-config
+
+          # ---- Secret configuration ------------------------------------
+          env:
+            - name: CMS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: CMS_DB_PASSWORD
+            - name: APP_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: APP_KEYS
+            - name: API_TOKEN_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: API_TOKEN_SALT
+            - name: ADMIN_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: ADMIN_JWT_SECRET
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: JWT_SECRET
+            - name: TRANSFER_TOKEN_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: TRANSFER_TOKEN_SALT
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: ENCRYPTION_KEY
+            - name: ADMIN_API_OPERATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cms-secrets
+                  key: ADMIN_API_OPERATOR_TOKEN
+
+          # ---- Health probes -------------------------------------------
+          # Strapi 5 built-in /_health endpoint
+          livenessProbe:
+            httpGet:
+              path: /_health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /_health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+
+          # ---- Resources -----------------------------------------------
+          # Strapi needs more memory for admin build artifacts
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+
+          # ---- Persistent uploads volume --------------------------------
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/public/uploads
+
+          # ---- Security context ----------------------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            # CMS writes to /app/public/uploads; not fully read-only
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      volumes:
+        - name: uploads
+          # Replace with a PersistentVolumeClaim for durable uploads storage.
+          # For dev/ephemeral environments emptyDir is acceptable.
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 30
+      restartPolicy: Always
+---
+# =============================================================================
+# CMS — ClusterIP Service
+# Internal access only. Expose via Ingress if external access is needed.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: cms
+  labels:
+    app.kubernetes.io/name: cms
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: cms
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cms
+  ports:
+    - name: http
+      port: 1337
+      targetPort: http
+      protocol: TCP

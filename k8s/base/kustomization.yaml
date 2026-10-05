@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: nzr-rules-engine-base
+
+# Namespace applied to all resources; override in overlays
+namespace: nzr-rules-engine
+
+# Common labels merged into every resource's metadata.labels
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/part-of: nzr-rules-engine
+    includeSelectors: false
+
+resources:
+  - configmap.yaml
+  - secrets.yaml
+  - engine-deployment.yaml
+  - cms-deployment.yaml

@@ -1,0 +1,63 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: nzr-rules-engine-dev
+
+namespace: nzr-rules-engine-dev
+
+resources:
+  - ../../base
+
+# Override image tags for dev — typically a branch SHA or "dev"
+images:
+  - name: nzr-rules-engine
+    newTag: dev
+  - name: nzr-strapi-cms
+    newTag: dev
+
+patches:
+  # Engine: single replica is fine in dev (saves resources)
+  - target:
+      kind: Deployment
+      name: engine
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # CMS: reduce memory limits in dev
+  - target:
+      kind: Deployment
+      name: cms
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "128Mi"
+
+  # HPA: pin to 1 replica in dev (disable auto-scaling)
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: engine
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 1
+
+  # engine-config: dev-specific schema name
+  - target:
+      kind: ConfigMap
+      name: engine-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: engine-config
+      data:
+        CONFIG_SCHEMA: "rule_engine_dev"

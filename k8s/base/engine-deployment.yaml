@@ -1,0 +1,198 @@
+# =============================================================================
+# Engine — Go Rules Engine
+# Deployment + ClusterIP Service + HPA
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine
+  labels:
+    app.kubernetes.io/name: engine
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: engine
+spec:
+  # HPA manages replica count; this is the initial value.
+  # Min replicas are enforced by the HPA below (min: 2).
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: engine
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # At most 1 unavailable during rollout (keeps at least 1 healthy)
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: engine
+        app.kubernetes.io/part-of: nzr-rules-engine
+        app.kubernetes.io/component: engine
+    spec:
+      # Non-root user (uid 1000) as set in engine Dockerfile — least privilege
+      # per [[security-and-authz]]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across nodes and zones for HA
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: engine
+
+      containers:
+        - name: engine
+          image: nzr-rules-engine:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # ---- Non-secret configuration --------------------------------
+          envFrom:
+            - configMapRef:
+                name: engine-config
+
+          # ---- Secret configuration ------------------------------------
+          env:
+            - name: CONFIG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: engine-secrets
+                  key: CONFIG_DSN
+            - name: ADMIN_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: engine-secrets
+                  key: ADMIN_TOKENS
+
+          # ---- Health probes -------------------------------------------
+          # Liveness: /livez never gates on dependencies — always 200 if
+          # the process is alive. Kill and restart if this fails.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness: /readyz gates on config-store connectivity (2s timeout
+          # per ops.go). Remove from LB rotation if this fails.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+
+          # ---- Resources -----------------------------------------------
+          # Baseline: sensible defaults; tune per observed p95 usage.
+          # Per [[performance-defaults]]: bound every resource.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # ---- Security context ----------------------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+      # Graceful shutdown: give in-flight requests time to drain
+      # per [[graceful-shutdown]] (SIGTERM → drain → exit)
+      terminationGracePeriodSeconds: 30
+
+      restartPolicy: Always
+---
+# =============================================================================
+# Engine — ClusterIP Service
+# Exposes engine to other pods in the cluster (CMS, ingress, etc.)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: engine
+  labels:
+    app.kubernetes.io/name: engine
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: engine
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+# =============================================================================
+# Engine — HorizontalPodAutoscaler
+# Scales engine replicas based on CPU utilization.
+# Placeholder: adjust targetCPUUtilizationPercentage per real SLO.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: engine
+  labels:
+    app.kubernetes.io/name: engine
+    app.kubernetes.io/part-of: nzr-rules-engine
+    app.kubernetes.io/component: engine
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: engine
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Scale out when average CPU exceeds 70% of the requested 100m
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          # Scale out when average memory exceeds 80% of the requested 128Mi
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      # Stabilize for 5 minutes before scaling down to avoid flapping
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
