@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-04 · mainline HEAD at handoff: `f1c4afd` (deployment artifacts landed)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `ef92a2c` (idempotency R4 landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -324,17 +324,35 @@ Kubernetes manifests, deployment documentation, and load testing infrastructure 
 - Fully configurable via env vars
 
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
-non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
+non-atomic cross-source writes — now mitigated by **saga/compensation coordinator (R3)**, no rate
+limiting — now **token-bucket rate limiter implemented (R6)**, per-instance breakers (R10), and
+**idempotency key support wired into flow layer (R4)**.
 `Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
+
+### Additional deferred items completed (merged post-deployment):
+- **Rate limiter (R6)** — `internal/httpapi/ratelimit.go`: token-bucket implementation with
+  configurable per-IP and global limits; 10 unit tests. Middleware wired into server. Commit `dbfc1f6`.
+- **Saga/compensation (R3)** — `internal/flow/saga/saga.go`: saga context for recording forward
+  steps + compensations; reverse-order compensation on failure; 12 unit tests (all states, failure
+  modes, compensation order). Commit `98ac066`.
+- **Idempotency key (R4)** — `internal/flow/spec.go` + `handlers.go`: `ActionSpec.IdempotencyKeyFrom`
+  field resolves a path from Ctx and copies into `Operation.IdempotencyKey`; the connect layer's
+  existing `dedupGuard` (dedup.go) then protects non-idempotent writes with a SET-NX lock in valkey;
+  3 unit tests. Commit `ef92a2c`.
 
 ## NEXT — all build artifacts done; what remains is actual deployment
 All productionization and deployment artifacts are BUILT (see "Productionization — DONE" and
-"Deployment — DONE"). Pick the next milestone:
+"Deployment — DONE"). Rate limiter (R6), saga/compensation (R3), and idempotency (R4) are now
+implemented. Pick the next milestone:
 - **Actually deploy** — push images to registry, apply k8s manifests to a cluster, wire real secrets
 - **Run load tests** — execute `scripts/loadtest.sh` against a running engine to validate R10 breakers
-- Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
-  JSON-source rule-match; full per-node dry-run trace; idempotency/rate-limit/saga), OR
-- Pull a **deferred CMS item** forward if needed (audit-viewer UI; `@xyflow/react` v12 migration).
+- Pull a **deferred engine item** forward if a real need exists:
+  - `de-demo adapters` — remove demo-tuned heuristics from httpapi/adapters.go (see description below)
+  - `dry-run trace` — full per-node TraceNode integration in internal/flow
+  - `collection nodes` — filter/find/map/reduce for result sets
+- Pull a **deferred CMS item** forward if needed:
+  - `audit-viewer UI` — client has `audit()`, no UI yet
+  - `@xyflow/react` v12 migration — currently on reactflow 11
 
 ## AFTER v1 engine — remaining project arc
 
@@ -344,8 +362,9 @@ All productionization and deployment artifacts are BUILT (see "Productionization
   build under `cms/`, four content types, `@gorules/jdm-editor` + reactflow canvas, validation +
   draft/publish pipeline, publish transform pushed to the engine via the `/admin/*` HTTP API (NOT
   the config store directly), on its own isolated Postgres db + schema.
-- **Deferred engine items as needed**: idempotency for required writes (R4), rate limiting (R6),
-  cross-source saga/compensation (R3).
+- **Deferred engine items as needed**: ~~idempotency for required writes (R4)~~, ~~rate limiting (R6)~~,
+  ~~cross-source saga/compensation (R3)~~ — **ALL THREE NOW IMPLEMENTED** (see "Additional deferred
+  items completed" above).
 - **De-demo-ify `internal/httpapi/adapters.go` (platform-genericness, from a business-noun audit).**
   Two demo-tuned heuristics live in the httpapi edge and should become CONFIG-DECLARED, not
   assumed from the orders demo's data shape (per `concepts/config-driven-boundaries`): (1)
