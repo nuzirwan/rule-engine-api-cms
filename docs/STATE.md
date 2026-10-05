@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-04 · mainline HEAD at handoff: `6f824d7` (productionization artifacts landed)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `f1c4afd` (deployment artifacts landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -15,7 +15,9 @@ tests** (`/readyz` false-negative; per-object idempotent seeding).
 
 **Productionization artifacts are now BUILT** (see "Productionization — DONE" below): glibc-based
 Dockerfiles for engine + CMS, Docker Compose for the full stack (5 services), and GitHub Actions
-CI/CD pipeline. What remains is deployment (see NEXT).
+CI/CD pipeline. **Deployment artifacts are now BUILT** (see "Deployment — DONE" below): Kubernetes
+manifests (Kustomize), secrets/deployment documentation, and load testing script. What remains is
+actual deployment to a cluster.
 
 The v1 engine is proven LIVE against the user's real Postgres + Valkey. Config
 store runs in `matcha` DB under the dedicated `rule_engine` schema (the user's `public` tables are
@@ -296,18 +298,42 @@ Production-ready container infrastructure and CI/CD pipeline are BUILT:
 - Docker images pushed to `ghcr.io` on main branch (engine + CMS if Dockerfile exists)
 - Go module + npm dependency caching
 
+### Deployment — DONE (merged @ `f1c4afd`)
+Kubernetes manifests, deployment documentation, and load testing infrastructure are BUILT:
+
+**Kubernetes Manifests** (`k8s/`):
+- `k8s/base/` — Kustomize base: engine + CMS Deployments, Services, ConfigMap, placeholder Secrets, HPA
+- `k8s/overlays/dev/` — single replica, dev image tags, dev schema
+- `k8s/overlays/prod/` — HA replicas, larger limits, PVC for CMS uploads
+- `k8s/validate.sh` — 41-check manifest validation script
+- `k8s/README.md` — operator guide
+- Health probes: `/readyz` (engine), `/_health` (CMS)
+- Resource limits: 100m-500m CPU, 128Mi-512Mi mem
+- Security: non-root UIDs, drop ALL caps, readOnlyRootFilesystem on engine
+- HPA: min 2 / max 10 replicas for engine
+
+**Deployment Documentation**:
+- `docs/DEPLOYMENT.md` — complete env var reference (30 vars), required/optional/secret classification, deployment checklist
+- `docs/SECRETS.md` — secrets inventory, AWS SSM + HashiCorp Vault integration patterns, rotation guidance, Kubernetes External Secrets pattern
+
+**Load Testing** (`scripts/loadtest.sh`):
+- 4 scenarios: baseline (10c/1000req), normal (50c/5000req), spike (200c/2000req), sustained (30c/60s)
+- Tool auto-detection: hey → wrk → curl fallback
+- Metrics: RPS, p50/p95/p99 latency, error rate
+- R10 breaker state check via `/metrics` after spike
+- Fully configurable via env vars
+
 ### v1 ENGINE COMPLETE (AC-1..26). Remaining v1 documented constraints unchanged:
 non-atomic cross-source writes (R3), no rate limiting (R6), per-instance breakers (R10).
 `Interpreter.Run` seam deviation `(ctx, tree, ver, c, dep)` (import-cycle break) still stands.
 
-## NEXT — v1 engine + admin + CMS + productionization artifacts are done; what remains is deploy
-Productionization artifacts are BUILT (see "Productionization — DONE"). Pick the next milestone:
-- **Deploy** the stack (push images to registry, set up secrets in Vault/SSM, wire per-env
-  config stores + valkeys, configure CMS→engine admin-API bearer), OR
-- **Load test** the engine (esp. R10 per-instance breakers under traffic), OR
+## NEXT — all build artifacts done; what remains is actual deployment
+All productionization and deployment artifacts are BUILT (see "Productionization — DONE" and
+"Deployment — DONE"). Pick the next milestone:
+- **Actually deploy** — push images to registry, apply k8s manifests to a cluster, wire real secrets
+- **Run load tests** — execute `scripts/loadtest.sh` against a running engine to validate R10 breakers
 - Pull a **deferred engine item** forward if a real need exists (collection filter/find nodes;
-  JSON-source rule-match — both specced as next-phase below; full per-node dry-run trace;
-  idempotency/rate-limit/saga), OR
+  JSON-source rule-match; full per-node dry-run trace; idempotency/rate-limit/saga), OR
 - Pull a **deferred CMS item** forward if needed (audit-viewer UI; `@xyflow/react` v12 migration).
 
 ## AFTER v1 engine — remaining project arc
