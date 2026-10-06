@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-04 · mainline HEAD at handoff: `39f52fe` (audit-viewer UI landed)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `a0999d6` (engine-cms sync feature landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -358,12 +358,19 @@ limiting — now **token-bucket rate limiter implemented (R6)**, per-instance br
   trail viewer component + server proxy route (`GET /audit/:type/:id`). Uses `useFetchClient` from
   Strapi admin, follows ValidationPanel pattern, includes loading/error/empty/list states. Pure
   helpers extracted to `utils.ts` for testability. 13 new tests. Commit `39f52fe`.
+- **Engine-CMS sync feature** — bidirectional sync so CMS can pull existing config from engine.
+  **Engine side** (`engine/internal/httpapi/admin_handlers.go` + `config/pgstore_admin.go`): 6 new
+  read endpoints (`GET /admin/flows`, `/flows/{id}`, `/flows/{id}/versions`, `/jdms`, `/jdms/{id}`,
+  `/connections/{key}`) with operator auth and secret redaction; 182 lines of tests.
+  **CMS side** (`cms/src/plugins/rule-engine/`): AdminClient read methods, sync controller
+  (`syncStatus`/`importAll`/`importOne`), SyncPanel UI component with status display and import
+  buttons. 98 tests pass. Commits `2636286` (engine), `a0999d6` (CMS).
 
 ## NEXT — all build artifacts done; what remains is actual deployment
 All productionization and deployment artifacts are BUILT (see "Productionization — DONE" and
 "Deployment — DONE"). Rate limiter (R6), saga/compensation (R3), idempotency (R4), de-demo adapters,
-dry-run trace, collection nodes (filter/find), xyflow v12 migration, and audit-viewer UI are now
-implemented. Pick the next milestone:
+dry-run trace, collection nodes (filter/find), xyflow v12 migration, audit-viewer UI, and engine-CMS
+sync are now implemented. Pick the next milestone:
 - **Actually deploy** — push images to registry, apply k8s manifests to a cluster, wire real secrets
 - **Run load tests** — execute `scripts/loadtest.sh` against a running engine to validate R10 breakers
 - Pull a **deferred engine item** forward if a real need exists:
