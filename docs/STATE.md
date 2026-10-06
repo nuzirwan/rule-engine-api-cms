@@ -3,7 +3,7 @@
 Single source of truth for picking up work in a fresh session. Everything below is committed on
 the `mainline` branch. Read this first, then the docs it points to.
 
-Last updated: 2026-10-04 · mainline HEAD at handoff: `cdb84d0` (filter/find collection nodes landed)
+Last updated: 2026-10-04 · mainline HEAD at handoff: `39f52fe` (audit-viewer UI landed)
 
 ## LATEST STATUS (read this first)
 The **v1 engine is complete and proven LIVE**, the **config-management Admin API (control plane) is
@@ -352,18 +352,22 @@ limiting — now **token-bucket rate limiter implemented (R6)**, per-instance br
   can't push filtering down): `filter` keeps items where ZEN predicate returns truthy `match`;
   `find` returns first matching item. Both use ZEN decision tables as predicates, include maxItems
   budget guard (AC-17), and store results via saveAs. 7 unit tests. Commit `cdb84d0`.
+- **@xyflow/react v12 migration** — `cms/package.json` + `FlowCanvasField/index.tsx`: migrated from
+  reactflow 11 to @xyflow/react 12.12.0 (named export + updated CSS path). 88 tests pass. Commit `c264c55`.
+- **Audit-viewer UI** — `cms/server/src/controllers/audit.ts` + `admin/…/AuditViewer/`: added audit
+  trail viewer component + server proxy route (`GET /audit/:type/:id`). Uses `useFetchClient` from
+  Strapi admin, follows ValidationPanel pattern, includes loading/error/empty/list states. Pure
+  helpers extracted to `utils.ts` for testability. 13 new tests. Commit `39f52fe`.
 
 ## NEXT — all build artifacts done; what remains is actual deployment
 All productionization and deployment artifacts are BUILT (see "Productionization — DONE" and
 "Deployment — DONE"). Rate limiter (R6), saga/compensation (R3), idempotency (R4), de-demo adapters,
-dry-run trace, and collection nodes (filter/find) are now implemented. Pick the next milestone:
+dry-run trace, collection nodes (filter/find), xyflow v12 migration, and audit-viewer UI are now
+implemented. Pick the next milestone:
 - **Actually deploy** — push images to registry, apply k8s manifests to a cluster, wire real secrets
 - **Run load tests** — execute `scripts/loadtest.sh` against a running engine to validate R10 breakers
 - Pull a **deferred engine item** forward if a real need exists:
   - `map/reduce nodes` — transform and aggregate collections (filter/find cover 80% of use cases)
-- Pull a **deferred CMS item** forward if needed:
-  - `audit-viewer UI` — client has `audit()`, no UI yet
-  - `@xyflow/react` v12 migration — currently on reactflow 11
 
 ## AFTER v1 engine — remaining project arc
 
