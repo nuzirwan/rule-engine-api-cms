@@ -212,3 +212,72 @@ export interface AuditTrailResponse {
   objectId: string;
   entries: AuditEntry[];
 }
+
+// ----------------------------------------------------------------------------
+// Read endpoints for sync — GET /admin/flows, /admin/jdms, /admin/connections/:key
+// ----------------------------------------------------------------------------
+
+/** A flow summary returned by GET /admin/flows. */
+export interface FlowSummary {
+  id: string;
+  method: string;
+  path: string;
+  activeVersion: number | null;
+  updatedAt: string;
+}
+
+/** 200 from GET /admin/flows. */
+export interface ListFlowsResponse {
+  flows: FlowSummary[];
+}
+
+/** 200 from GET /admin/flows/{id} — the flow definition with its tree. */
+export interface GetFlowResponse {
+  flowId: string;
+  version: number;
+  method: string;
+  path: string;
+  tree: EngineNode;
+  fixtures?: EngineFixture[];
+}
+
+/** A version summary for a flow. */
+export interface VersionSummary {
+  version: number;
+  validated: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+/** 200 from GET /admin/flows/{id}/versions. */
+export interface ListFlowVersionsResponse {
+  flowId: string;
+  versions: VersionSummary[];
+}
+
+/** A JDM summary returned by GET /admin/jdms. */
+export interface JDMSummary {
+  id: string;
+  updatedAt: string;
+}
+
+/** 200 from GET /admin/jdms. */
+export interface ListJdmsResponse {
+  jdms: JDMSummary[];
+}
+
+/** 200 from GET /admin/jdms/{id}. */
+export interface GetJdmResponse {
+  jdmId: string;
+  version: number;
+  doc: unknown;
+}
+
+/** 200 from GET /admin/connections/{key}. Same shape as EngineConnectionDef. */
+export interface GetConnectionResponse {
+  key: string;
+  type: string;
+  settings: Record<string, unknown>;
+  secretRef: string;
+  resilience: EngineResilience;
+}

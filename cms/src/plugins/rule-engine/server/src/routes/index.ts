@@ -26,6 +26,34 @@ export default {
           policies: [],
         },
       },
+      // --- Sync routes (FEAT-002) ---
+      {
+        // GET /sync/status — compare CMS vs engine, return diff status.
+        method: 'GET',
+        path: '/sync/status',
+        handler: 'sync.syncStatus',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /sync/import — pull all engine config and create/update CMS content.
+        method: 'POST',
+        path: '/sync/import',
+        handler: 'sync.importAll',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /sync/import/:type/:id — pull a single item from engine.
+        method: 'POST',
+        path: '/sync/import/:type/:id',
+        handler: 'sync.importOne',
+        config: {
+          policies: [],
+        },
+      },
     ],
   },
 };

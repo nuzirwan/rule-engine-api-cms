@@ -19,7 +19,13 @@ import type {
   CreateJDMRequest,
   CreateJDMResponse,
   DryRunFlowRequest,
+  GetConnectionResponse,
+  GetFlowResponse,
+  GetJdmResponse,
   ListConnectionsResponse,
+  ListFlowsResponse,
+  ListFlowVersionsResponse,
+  ListJdmsResponse,
   SetActiveResponse,
   ValidateFlowRequest,
   ValidateFlowResponse,
@@ -185,6 +191,50 @@ export class AdminClient {
     return this.request<AuditTrailResponse>(
       'GET',
       `/admin/audit/${encodeURIComponent(type)}/${encodeURIComponent(id)}`
+    );
+  }
+
+  // --- read endpoints for sync (FEAT-002) ----------------------------------
+
+  /** GET /admin/flows — list all flows with their active version info. */
+  listFlows(): Promise<ListFlowsResponse> {
+    return this.request<ListFlowsResponse>('GET', '/admin/flows');
+  }
+
+  /** GET /admin/flows/{id} — get the active (or latest) version of a flow. */
+  getFlow(id: string): Promise<GetFlowResponse> {
+    return this.request<GetFlowResponse>(
+      'GET',
+      `/admin/flows/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** GET /admin/flows/{id}/versions — list all versions for a flow. */
+  listFlowVersions(id: string): Promise<ListFlowVersionsResponse> {
+    return this.request<ListFlowVersionsResponse>(
+      'GET',
+      `/admin/flows/${encodeURIComponent(id)}/versions`
+    );
+  }
+
+  /** GET /admin/jdms — list all JDMs. */
+  listJdms(): Promise<ListJdmsResponse> {
+    return this.request<ListJdmsResponse>('GET', '/admin/jdms');
+  }
+
+  /** GET /admin/jdms/{id} — get the active version of a JDM. */
+  getJdm(id: string): Promise<GetJdmResponse> {
+    return this.request<GetJdmResponse>(
+      'GET',
+      `/admin/jdms/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** GET /admin/connections/{key} — get a single connection definition. */
+  getConnection(key: string): Promise<GetConnectionResponse> {
+    return this.request<GetConnectionResponse>(
+      'GET',
+      `/admin/connections/${encodeURIComponent(key)}`
     );
   }
 }
