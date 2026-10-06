@@ -26,6 +26,12 @@ type registry struct {
 // compile-time assertion that registry satisfies the frozen Registry seam.
 var _ Registry = (*registry)(nil)
 
+// SecretProvider returns the registry's secret provider for use by other
+// components that need to resolve secret refs (e.g. webhook signature verification).
+func (r *registry) SecretProvider() SecretProvider {
+	return r.secrets
+}
+
 // New builds a registry from the given connectors and connection defs.
 // When USE_CONNECTOR_POOL=true, it returns a lazy-pool registry that defers
 // connection opening to first use. Otherwise, it returns the eager-load registry

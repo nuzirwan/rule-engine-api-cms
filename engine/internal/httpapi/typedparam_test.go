@@ -34,6 +34,9 @@ func (r recordingRegistry) Reload(ctx context.Context, defs []connect.Connection
 }
 func (r recordingRegistry) HealthCheck(ctx context.Context) error { return nil }
 func (r recordingRegistry) Close() error                          { return nil }
+func (r recordingRegistry) SecretProvider() connect.SecretProvider {
+	return connect.NewEnvSecretProvider()
+}
 
 var _ connect.Registry = recordingRegistry{}
 

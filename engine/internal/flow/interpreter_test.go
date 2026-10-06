@@ -29,6 +29,7 @@ func (r *fakeRegistry) Client(ctx context.Context, key string) (connect.Client, 
 func (r *fakeRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error { return nil }
 func (r *fakeRegistry) HealthCheck(ctx context.Context) error                          { return nil }
 func (r *fakeRegistry) Close() error                                                   { return nil }
+func (r *fakeRegistry) SecretProvider() connect.SecretProvider                         { return connect.NewEnvSecretProvider() }
 
 // fakeClient returns a canned result and records the ops it executed.
 type fakeClient struct {

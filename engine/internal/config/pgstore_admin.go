@@ -202,6 +202,31 @@ func (s *PgStore) ListJDMs(ctx context.Context, env string) ([]JDMSummary, error
 	return out, nil
 }
 
+// GetActiveFlowByID resolves the active flow version by flow ID (not by method+path).
+// This is used by webhooks which store a flow_id reference rather than a route pattern.
+// A missing flow or no active version is NotFound.
+func (s *PgStore) GetActiveFlowByID(ctx context.Context, env, flowID string) (FlowVersion, error) {
+	pool, err := s.pool(env)
+	if err != nil {
+		return FlowVersion{}, err
+	}
+
+	// Get the active version number from active_pointers.
+	var activeVersion int
+	err = pool.QueryRow(ctx,
+		`SELECT version FROM active_pointers WHERE object_type=$1 AND object_id=$2`,
+		objFlow, flowID).Scan(&activeVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FlowVersion{}, newErr(NotFound, "no active flow for "+quote(flowID))
+	}
+	if err != nil {
+		return FlowVersion{}, classifyPg("get active flow version", err)
+	}
+
+	// Delegate to GetFlowVersion which already handles tree decoding and fixtures.
+	return s.GetFlowVersion(ctx, env, flowID, activeVersion)
+}
+
 // GetConnection returns a single connection def by key, or NotFound.
 func (s *PgStore) GetConnection(ctx context.Context, env, key string) (connect.ConnectionDef, error) {
 	pool, err := s.pool(env)

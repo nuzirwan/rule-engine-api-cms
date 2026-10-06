@@ -152,6 +152,12 @@ func (r *registryV2) Close() error {
 	return r.pool.Close()
 }
 
+// SecretProvider returns the registry's secret provider for use by other
+// components that need to resolve secret refs (e.g. webhook signature verification).
+func (r *registryV2) SecretProvider() SecretProvider {
+	return r.secrets
+}
+
 // UseConnectorPool returns true if the USE_CONNECTOR_POOL env var is set to "true".
 func UseConnectorPool() bool {
 	return os.Getenv("USE_CONNECTOR_POOL") == "true"

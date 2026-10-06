@@ -37,6 +37,7 @@ func (r *spyRegistry) Client(ctx context.Context, key string) (connect.Client, e
 func (r *spyRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error { return nil }
 func (r *spyRegistry) HealthCheck(ctx context.Context) error                          { return nil }
 func (r *spyRegistry) Close() error                                                   { return nil }
+func (r *spyRegistry) SecretProvider() connect.SecretProvider                         { return connect.NewEnvSecretProvider() }
 
 // actionNode builds a single-action flow: trigger -> action(kind) -> response,
 // so the walk runs the action then terminates.

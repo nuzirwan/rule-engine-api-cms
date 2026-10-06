@@ -28,6 +28,8 @@ type Registry interface {
 	HealthCheck(ctx context.Context) error
 	// Close drains and closes all connections. cmd/engine calls it on shutdown.
 	Close() error
+	// SecretProvider returns the registry's secret provider for resolving secret refs.
+	SecretProvider() SecretProvider
 }
 
 // Client is a single pooled connection to one source. Execute honors the ctx

@@ -128,6 +128,24 @@ func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler,
 	admin := newAdmin(interp, deps)
 	admin.mount(mux)
 
+	// Webhook receiver: public endpoint, rate-limited but no operator auth.
+	// POST /webhooks/{webhook_id} receives external events from providers.
+	if whs, ok := deps.Admin.(WebhookStore); ok && deps.Conns != nil {
+		// Get the secret provider from the registry if available.
+		if rg, ok := deps.Conns.(interface{ SecretProvider() connect.SecretProvider }); ok {
+			secrets := rg.SecretProvider()
+			if secrets != nil {
+				MountWebhookHandler(mux, WebhookHandlerDeps{
+					WebhookStore: whs,
+					FlowStore:    store,
+					Interpreter:  interp,
+					Deps:         deps,
+					Secrets:      secrets,
+				})
+			}
+		}
+	}
+
 	// The single catch-all: every other request re-resolves against LIVE config.
 	mux.HandleFunc("/", genericFlowHandler(store, interp, deps))
 

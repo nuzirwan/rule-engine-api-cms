@@ -30,6 +30,7 @@ func (r *fakeRegistry) Client(_ context.Context, key string) (connect.Client, er
 func (r *fakeRegistry) Reload(_ context.Context, _ []connect.ConnectionDef) error { return nil }
 func (r *fakeRegistry) HealthCheck(_ context.Context) error                       { return nil }
 func (r *fakeRegistry) Close() error                                              { return nil }
+func (r *fakeRegistry) SecretProvider() connect.SecretProvider                    { return connect.NewEnvSecretProvider() }
 
 // fakeClient records all Execute calls and optionally returns an error.
 type fakeClient struct {

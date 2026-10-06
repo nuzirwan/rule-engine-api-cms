@@ -70,6 +70,11 @@ func (r *templatingRegistry) Close() error {
 	return r.inner.Close()
 }
 
+// SecretProvider delegates to the inner registry.
+func (r *templatingRegistry) SecretProvider() connect.SecretProvider {
+	return r.inner.SecretProvider()
+}
+
 // templatingClient resolves templates in an Operation's payload against the
 // request Ctx, then delegates Execute to the inner pooled client.
 type templatingClient struct {
