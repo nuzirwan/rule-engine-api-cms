@@ -31,6 +31,29 @@ type FlowFixture struct {
 	Want  map[string]any `json:"want,omitempty"`
 }
 
+// FlowSummary is the list response shape for GET /admin/flows (one row per flow).
+type FlowSummary struct {
+	ID            string     `json:"id"`
+	Method        string     `json:"method"`
+	Path          string     `json:"path"`
+	ActiveVersion *int       `json:"activeVersion"` // nil if unpublished
+	UpdatedAt     *time.Time `json:"updatedAt,omitempty"`
+}
+
+// VersionSummary is one version in the list returned by GET /admin/flows/{id}/versions.
+type VersionSummary struct {
+	Version   int        `json:"version"`
+	Validated bool       `json:"validated"`
+	CreatedAt time.Time  `json:"createdAt"`
+	CreatedBy string     `json:"createdBy,omitempty"`
+}
+
+// JDMSummary is the list response shape for GET /admin/jdms (one row per JDM).
+type JDMSummary struct {
+	ID        string     `json:"id"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+}
+
 // FlowVersion is one published version of a flow. Tree is the root flow.Node, so
 // config imports flow (one-directional: flow never imports config). It mirrors
 // the frozen Store contract (lld-contracts.md).

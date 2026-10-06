@@ -34,6 +34,15 @@ type fakeAdminStore struct {
 	getFlowVersionErr error
 	auditEntries      []config.AuditEntry
 	auditErr          error
+	// list methods:
+	listFlows           []config.FlowSummary
+	listFlowsErr        error
+	listFlowVersions    []config.VersionSummary
+	listFlowVersionsErr error
+	listJDMs            []config.JDMSummary
+	listJDMsErr         error
+	getConnection       connect.ConnectionDef
+	getConnectionErr    error
 
 	// capture:
 	lastPutFlow   config.FlowVersion
@@ -76,6 +85,18 @@ func (f *fakeAdminStore) GetFlowVersion(ctx context.Context, env, flowID string,
 }
 func (f *fakeAdminStore) AuditTrail(ctx context.Context, env, objectType, objectID string) ([]config.AuditEntry, error) {
 	return f.auditEntries, f.auditErr
+}
+func (f *fakeAdminStore) ListFlows(ctx context.Context, env string) ([]config.FlowSummary, error) {
+	return f.listFlows, f.listFlowsErr
+}
+func (f *fakeAdminStore) ListFlowVersions(ctx context.Context, env, flowID string) ([]config.VersionSummary, error) {
+	return f.listFlowVersions, f.listFlowVersionsErr
+}
+func (f *fakeAdminStore) ListJDMs(ctx context.Context, env string) ([]config.JDMSummary, error) {
+	return f.listJDMs, f.listJDMsErr
+}
+func (f *fakeAdminStore) GetConnection(ctx context.Context, env, key string) (connect.ConnectionDef, error) {
+	return f.getConnection, f.getConnectionErr
 }
 
 var _ AdminStore = (*fakeAdminStore)(nil)
@@ -309,5 +330,166 @@ func TestAdminRequiresConfigStore(t *testing.T) {
 	rec := doJSON(t, h, http.MethodPost, "/admin/flows", `{"flowId":"x","method":"POST","path":"/x"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("nil-admin status = %d want 500", rec.Code)
+	}
+}
+
+// TestAdminListFlows proves GET /admin/flows returns the list of flows.
+func TestAdminListFlows(t *testing.T) {
+	v := 3
+	store := &fakeAdminStore{listFlows: []config.FlowSummary{
+		{ID: "orders", Method: "POST", Path: "/orders", ActiveVersion: &v},
+		{ID: "refunds", Method: "GET", Path: "/refunds"},
+	}}
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/flows", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list flows status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	flows, ok := out["flows"].([]any)
+	if !ok || len(flows) != 2 {
+		t.Fatalf("list flows body = %v want 2 flows", out)
+	}
+
+	// Error case.
+	store2 := &fakeAdminStore{listFlowsErr: config.ErrUpstream}
+	h2 := newAdminTestHandler(t, store2)
+	rec = doJSON(t, h2, http.MethodGet, "/admin/flows", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("list flows error status = %d want 502", rec.Code)
+	}
+}
+
+// TestAdminGetFlow proves GET /admin/flows/{id} returns the flow.
+func TestAdminGetFlow(t *testing.T) {
+	v := 2
+	store := &fakeAdminStore{
+		listFlows:        []config.FlowSummary{{ID: "orders", Method: "POST", Path: "/orders", ActiveVersion: &v}},
+		listFlowVersions: []config.VersionSummary{{Version: 2, Validated: true}, {Version: 1}},
+		getFlowVersion:   config.FlowVersion{FlowID: "orders", Version: 2, Method: "POST", Path: "/orders", Tree: minimalTree()},
+	}
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/flows/orders", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get flow status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["flowId"] != "orders" {
+		t.Fatalf("get flow body = %v want flowId orders", out)
+	}
+
+	// Not found case.
+	store2 := &fakeAdminStore{listFlowVersionsErr: config.ErrNotFound}
+	h2 := newAdminTestHandler(t, store2)
+	rec = doJSON(t, h2, http.MethodGet, "/admin/flows/nonexistent", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get flow not found status = %d want 404", rec.Code)
+	}
+}
+
+// TestAdminListFlowVersions proves GET /admin/flows/{id}/versions returns versions.
+func TestAdminListFlowVersions(t *testing.T) {
+	store := &fakeAdminStore{listFlowVersions: []config.VersionSummary{
+		{Version: 3, Validated: true},
+		{Version: 2, Validated: true},
+		{Version: 1, Validated: false},
+	}}
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/flows/orders/versions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["flowId"] != "orders" {
+		t.Fatalf("list versions body missing flowId: %v", out)
+	}
+	versions, ok := out["versions"].([]any)
+	if !ok || len(versions) != 3 {
+		t.Fatalf("list versions body = %v want 3 versions", out)
+	}
+
+	// Not found case.
+	store2 := &fakeAdminStore{listFlowVersionsErr: config.ErrNotFound}
+	h2 := newAdminTestHandler(t, store2)
+	rec = doJSON(t, h2, http.MethodGet, "/admin/flows/nonexistent/versions", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("list versions not found status = %d want 404", rec.Code)
+	}
+}
+
+// TestAdminListJDMs proves GET /admin/jdms returns the list of JDMs.
+func TestAdminListJDMs(t *testing.T) {
+	store := &fakeAdminStore{listJDMs: []config.JDMSummary{
+		{ID: "risk-scoring"},
+		{ID: "pricing"},
+	}}
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/jdms", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list jdms status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	jdms, ok := out["jdms"].([]any)
+	if !ok || len(jdms) != 2 {
+		t.Fatalf("list jdms body = %v want 2 jdms", out)
+	}
+}
+
+// TestAdminGetJDM proves GET /admin/jdms/{id} returns the JDM doc.
+func TestAdminGetJDM(t *testing.T) {
+	store := &fakeAdminStore{} // GetJDM returns []byte(`{}`), 1, nil by default
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/jdms/risk-scoring", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get jdm status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["jdmId"] != "risk-scoring" || out["version"] != float64(1) {
+		t.Fatalf("get jdm body = %v want jdmId risk-scoring, version 1", out)
+	}
+
+	// Not found case.
+	store2 := &fakeAdminStore{getJDMErr: config.ErrNotFound}
+	h2 := newAdminTestHandler(t, store2)
+	rec = doJSON(t, h2, http.MethodGet, "/admin/jdms/nonexistent", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get jdm not found status = %d want 404", rec.Code)
+	}
+}
+
+// TestAdminGetConnectionRedacts proves GET /admin/connections/{key} returns the
+// connection with settings redacted.
+func TestAdminGetConnectionRedacts(t *testing.T) {
+	store := &fakeAdminStore{getConnection: connect.ConnectionDef{
+		Key: "pg", Type: "postgres", Settings: map[string]any{"host": "h", "password": "leak"}, SecretRef: "env:PG_PW",
+	}}
+	h := newAdminTestHandler(t, store)
+	rec := doJSON(t, h, http.MethodGet, "/admin/connections/pg", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get connection status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "leak") {
+		t.Fatalf("secret value leaked in connection: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "env:PG_PW") {
+		t.Fatalf("secretRef pointer missing from connection: %s", rec.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["key"] != "pg" || out["type"] != "postgres" {
+		t.Fatalf("get connection body = %v want key pg, type postgres", out)
+	}
+
+	// Not found case.
+	store2 := &fakeAdminStore{getConnectionErr: config.ErrNotFound}
+	h2 := newAdminTestHandler(t, store2)
+	rec = doJSON(t, h2, http.MethodGet, "/admin/connections/nonexistent", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get connection not found status = %d want 404", rec.Code)
 	}
 }

@@ -303,3 +303,163 @@ func (a *Admin) auditTrail(w http.ResponseWriter, r *http.Request) {
 		"entries":    out,
 	})
 }
+
+// ---- GET /admin/flows -> ListFlows ----
+
+func (a *Admin) listFlows(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	ctx := r.Context()
+	flows, err := a.store.ListFlows(ctx, a.env)
+	if err != nil {
+		a.fail(w, ctx, "admin.listFlows", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"flows": flows})
+}
+
+// ---- GET /admin/flows/{id} -> GetFlowVersion (active version) ----
+
+func (a *Admin) getFlow(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	flowID := r.PathValue("id")
+	if flowID == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing flow id")
+		return
+	}
+
+	ctx := r.Context()
+	// Get versions list to find the active version.
+	versions, err := a.store.ListFlowVersions(ctx, a.env, flowID)
+	if err != nil {
+		a.fail(w, ctx, "admin.getFlow", err)
+		return
+	}
+	if len(versions) == 0 {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	// Get the flow summary to find active version.
+	flows, err := a.store.ListFlows(ctx, a.env)
+	if err != nil {
+		a.fail(w, ctx, "admin.getFlow", err)
+		return
+	}
+	var activeVersion *int
+	for _, f := range flows {
+		if f.ID == flowID {
+			activeVersion = f.ActiveVersion
+			break
+		}
+	}
+
+	// Get the flow version body (active version if published, otherwise latest).
+	version := versions[0].Version // Latest version.
+	if activeVersion != nil {
+		version = *activeVersion
+	}
+	fv, err := a.store.GetFlowVersion(ctx, a.env, flowID, version)
+	if err != nil {
+		a.fail(w, ctx, "admin.getFlow", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fv)
+}
+
+// ---- GET /admin/flows/{id}/versions -> ListFlowVersions ----
+
+func (a *Admin) listFlowVersions(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	flowID := r.PathValue("id")
+	if flowID == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing flow id")
+		return
+	}
+
+	ctx := r.Context()
+	versions, err := a.store.ListFlowVersions(ctx, a.env, flowID)
+	if err != nil {
+		a.fail(w, ctx, "admin.listFlowVersions", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flowId":   flowID,
+		"versions": versions,
+	})
+}
+
+// ---- GET /admin/jdms -> ListJDMs ----
+
+func (a *Admin) listJdms(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	ctx := r.Context()
+	jdms, err := a.store.ListJDMs(ctx, a.env)
+	if err != nil {
+		a.fail(w, ctx, "admin.listJdms", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jdms": jdms})
+}
+
+// ---- GET /admin/jdms/{id} -> GetJDM ----
+
+func (a *Admin) getJdm(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	jdmID := r.PathValue("id")
+	if jdmID == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing jdm id")
+		return
+	}
+
+	ctx := r.Context()
+	doc, version, err := a.store.GetJDM(ctx, a.env, jdmID)
+	if err != nil {
+		a.fail(w, ctx, "admin.getJdm", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jdmId":   jdmID,
+		"version": version,
+		"doc":     json.RawMessage(doc),
+	})
+}
+
+// ---- GET /admin/connections/{key} -> GetConnection (redacted) ----
+
+func (a *Admin) getConnection(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	key := r.PathValue("key")
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing connection key")
+		return
+	}
+
+	ctx := r.Context()
+	def, err := a.store.GetConnection(ctx, a.env, key)
+	if err != nil {
+		a.fail(w, ctx, "admin.getConnection", err)
+		return
+	}
+
+	// Backstop redaction (same as listConnections).
+	redactor := observ.NewRedactor()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key":        def.Key,
+		"type":       def.Type,
+		"settings":   redactor.Scrub(def.Settings),
+		"secretRef":  def.SecretRef,
+		"resilience": def.Resilience,
+	})
+}

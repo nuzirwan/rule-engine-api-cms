@@ -38,6 +38,11 @@ type AdminStore interface {
 	MarkValidated(ctx context.Context, env, flowID string, version int) error
 	GetFlowVersion(ctx context.Context, env, flowID string, version int) (config.FlowVersion, error)
 	AuditTrail(ctx context.Context, env, objectType, objectID string) ([]config.AuditEntry, error)
+	// list endpoints for CMS sync:
+	ListFlows(ctx context.Context, env string) ([]config.FlowSummary, error)
+	ListFlowVersions(ctx context.Context, env, flowID string) ([]config.VersionSummary, error)
+	ListJDMs(ctx context.Context, env string) ([]config.JDMSummary, error)
+	GetConnection(ctx context.Context, env, key string) (connect.ConnectionDef, error)
 }
 
 // compile-time assertion that the concrete *config.PgStore satisfies the admin
@@ -96,6 +101,13 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("POST /admin/connections", h(a.createConnection))
 	mux.Handle("GET /admin/connections", h(a.listConnections))
 	mux.Handle("GET /admin/audit/{type}/{id}", h(a.auditTrail))
+	// Read endpoints for CMS sync:
+	mux.Handle("GET /admin/flows", h(a.listFlows))
+	mux.Handle("GET /admin/flows/{id}", h(a.getFlow))
+	mux.Handle("GET /admin/flows/{id}/versions", h(a.listFlowVersions))
+	mux.Handle("GET /admin/jdms", h(a.listJdms))
+	mux.Handle("GET /admin/jdms/{id}", h(a.getJdm))
+	mux.Handle("GET /admin/connections/{key}", h(a.getConnection))
 }
 
 // requireRole is the route->required-role RBAC map (slice-f-admin-api.md §3.4).
