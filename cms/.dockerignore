@@ -1,0 +1,52 @@
+# Dependencies (will be installed fresh in container)
+node_modules/
+
+# Build artifacts (generated during build)
+dist/
+build/
+
+# Strapi runtime files
+.strapi/
+.tmp/
+.cache/
+
+# Environment files (secrets must be passed at runtime, not baked in)
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Test files and coverage
+coverage/
+*.test.ts
+*.test.js
+vitest.config.ts
+vitest.config.js
+
+# Documentation
+README.md
+CHANGELOG.md
+
+# Strapi update files
+.strapi-updater.json
+.strapi-cloud.json
+
+# Local dev files
+.nvmrc
+.npmrc
+license.txt
+exports/
