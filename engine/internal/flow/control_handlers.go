@@ -565,3 +565,128 @@ func isTruthy(v any) bool {
 		return v != nil
 	}
 }
+
+// mapHandler transforms each item in an array via a ZEN decision. For each item,
+// the ZEN output is collected into the result array (same length as input). The
+// result is stored under SaveAs in Ctx.Data. It is a leaf node (no children);
+// its budget guard (maxItems) prevents runaway iteration (AC-17).
+type mapHandler struct{}
+
+// Exec implements NodeHandler.
+func (mapHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[MapSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	if spec.MaxItems <= 0 {
+		return Directive{}, validationf("map %q requires maxItems > 0", n.ID)
+	}
+	if spec.Over == "" {
+		return Directive{}, validationf("map %q requires over", n.ID)
+	}
+	if spec.JDMID == "" {
+		return Directive{}, validationf("map %q requires jdmId", n.ID)
+	}
+	if spec.SaveAs == "" {
+		return Directive{}, validationf("map %q requires saveAs", n.ID)
+	}
+	if dep.Decide == nil {
+		return Directive{}, newErr(ClassInternal, "no decision evaluator wired")
+	}
+
+	raw, ok := c.GetPath(spec.Over)
+	if !ok {
+		return Directive{}, validationf("map %q source path %q not found", n.ID, spec.Over)
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return Directive{}, validationf("map %q source %q is not an array", n.ID, spec.Over)
+	}
+	if len(items) > spec.MaxItems {
+		return Directive{}, validationf("map %q over %d items exceeds maxItems %d", n.ID, len(items), spec.MaxItems)
+	}
+
+	result := make([]any, len(items))
+	for i, item := range items {
+		if cerr := ctx.Err(); cerr != nil {
+			return Directive{}, wrapErr(ClassTimeout, "map cancelled", cerr)
+		}
+		in := projectItemInputs(item, spec.Input)
+		out, err := dep.Decide.Evaluate(ctx, spec.JDMID, in)
+		if err != nil {
+			return Directive{}, classify(err)
+		}
+		result[i] = out
+	}
+
+	if c.Data == nil {
+		c.Data = map[string]any{}
+	}
+	c.Data[spec.SaveAs] = result
+	return Directive{}, nil
+}
+
+// reduceHandler aggregates an array to a single value via a ZEN decision. Each
+// iteration calls ZEN with {"accumulator": <acc>, "current": <item>, "index": <n>}
+// and ZEN returns the new accumulator. The final accumulator is stored under
+// SaveAs in Ctx.Data. It is a leaf node (no children); its budget guard (maxItems)
+// prevents runaway iteration (AC-17).
+type reduceHandler struct{}
+
+// Exec implements NodeHandler.
+func (reduceHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[ReduceSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	if spec.MaxItems <= 0 {
+		return Directive{}, validationf("reduce %q requires maxItems > 0", n.ID)
+	}
+	if spec.Over == "" {
+		return Directive{}, validationf("reduce %q requires over", n.ID)
+	}
+	if spec.JDMID == "" {
+		return Directive{}, validationf("reduce %q requires jdmId", n.ID)
+	}
+	if spec.SaveAs == "" {
+		return Directive{}, validationf("reduce %q requires saveAs", n.ID)
+	}
+	if dep.Decide == nil {
+		return Directive{}, newErr(ClassInternal, "no decision evaluator wired")
+	}
+
+	raw, ok := c.GetPath(spec.Over)
+	if !ok {
+		return Directive{}, validationf("reduce %q source path %q not found", n.ID, spec.Over)
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return Directive{}, validationf("reduce %q source %q is not an array", n.ID, spec.Over)
+	}
+	if len(items) > spec.MaxItems {
+		return Directive{}, validationf("reduce %q over %d items exceeds maxItems %d", n.ID, len(items), spec.MaxItems)
+	}
+
+	var acc any = spec.InitialValue
+	for i, item := range items {
+		if cerr := ctx.Err(); cerr != nil {
+			return Directive{}, wrapErr(ClassTimeout, "reduce cancelled", cerr)
+		}
+		in := map[string]any{
+			"accumulator": acc,
+			"current":     projectItemInputs(item, spec.Input),
+			"index":       float64(i),
+		}
+		out, err := dep.Decide.Evaluate(ctx, spec.JDMID, in)
+		if err != nil {
+			return Directive{}, classify(err)
+		}
+		acc = out
+	}
+
+	if c.Data == nil {
+		c.Data = map[string]any{}
+	}
+	c.Data[spec.SaveAs] = acc
+	return Directive{}, nil
+}

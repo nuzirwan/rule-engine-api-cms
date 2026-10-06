@@ -67,6 +67,8 @@ func New() *Interpreter {
 		TypeLogger:    loggerHandler{},
 		TypeFilter:    filterHandler{},
 		TypeFind:      findHandler{},
+		TypeMap:       mapHandler{},
+		TypeReduce:    reduceHandler{},
 	}}
 }
 

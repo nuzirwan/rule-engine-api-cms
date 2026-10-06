@@ -176,6 +176,30 @@ type FindSpec struct {
 	MaxItems int      `json:"maxItems"` // budget guard (AC-17)
 }
 
+// MapSpec transforms each item in an array via a ZEN decision. For each item,
+// the ZEN receives the item (or projected fields) and returns the transformed
+// value. The output array has the same length as the input. It is a leaf node.
+type MapSpec struct {
+	Over     string   `json:"over"`     // path to source array (required)
+	JDMID    string   `json:"jdmId"`    // ZEN decision for transformation (required)
+	Input    []string `json:"input"`    // fields from each item to pass to ZEN (optional)
+	SaveAs   string   `json:"saveAs"`   // where to store transformed array (required)
+	MaxItems int      `json:"maxItems"` // budget guard, required > 0 (AC-17)
+}
+
+// ReduceSpec aggregates an array to a single value via a ZEN decision. For each
+// item, the ZEN receives {"accumulator": <acc>, "current": <item>, "index": <n>}
+// and returns the new accumulator. The final accumulator is stored at SaveAs.
+// It is a leaf node.
+type ReduceSpec struct {
+	Over         string   `json:"over"`                   // path to source array (required)
+	JDMID        string   `json:"jdmId"`                  // ZEN decision for reducer (required)
+	Input        []string `json:"input"`                  // fields from current item to project (optional)
+	SaveAs       string   `json:"saveAs"`                 // where to store final accumulator (required)
+	MaxItems     int      `json:"maxItems"`               // budget guard, required > 0 (AC-17)
+	InitialValue any      `json:"initialValue,omitempty"` // starting accumulator, defaults to nil
+}
+
 // LoggerSpec is an optional debug point (deferred in the thin slice).
 type LoggerSpec struct {
 	Label      string   `json:"label"`
@@ -197,6 +221,8 @@ var specValidators = map[NodeType]func(json.RawMessage) error{
 	TypeDecision:  func(r json.RawMessage) error { _, e := parseSpec[DecisionSpec](r); return e },
 	TypeFilter:    func(r json.RawMessage) error { _, e := parseSpec[FilterSpec](r); return e },
 	TypeFind:      func(r json.RawMessage) error { _, e := parseSpec[FindSpec](r); return e },
+	TypeMap:       func(r json.RawMessage) error { _, e := parseSpec[MapSpec](r); return e },
+	TypeReduce:    func(r json.RawMessage) error { _, e := parseSpec[ReduceSpec](r); return e },
 	TypeSet:       func(r json.RawMessage) error { _, e := parseSpec[SetSpec](r); return e },
 	TypeLogger:    func(r json.RawMessage) error { _, e := parseSpec[LoggerSpec](r); return e },
 	TypeResponse:  func(r json.RawMessage) error { _, e := parseSpec[ResponseSpec](r); return e },

@@ -45,6 +45,8 @@ var leafTypes = map[NodeType]bool{
 	TypeDecision: true,
 	TypeFilter:   true,
 	TypeFind:     true,
+	TypeMap:      true,
+	TypeReduce:   true,
 	TypeSet:      true,
 	TypeLogger:   true,
 	TypeResponse: true,
@@ -178,6 +180,32 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 				}
 				if spec.SaveAs == "" {
 					add(n.ID, "find_no_saveas", "find missing saveAs")
+				}
+			}
+		case TypeMap:
+			if spec, err := parseSpec[MapSpec](n.Spec); err == nil {
+				checkJDM(add, n.ID, refs, spec.JDMID)
+				if spec.MaxItems <= 0 {
+					add(n.ID, "map_maxitems", "map maxItems must be > 0")
+				}
+				if spec.Over == "" {
+					add(n.ID, "map_no_over", "map missing over")
+				}
+				if spec.SaveAs == "" {
+					add(n.ID, "map_no_saveas", "map missing saveAs")
+				}
+			}
+		case TypeReduce:
+			if spec, err := parseSpec[ReduceSpec](n.Spec); err == nil {
+				checkJDM(add, n.ID, refs, spec.JDMID)
+				if spec.MaxItems <= 0 {
+					add(n.ID, "reduce_maxitems", "reduce maxItems must be > 0")
+				}
+				if spec.Over == "" {
+					add(n.ID, "reduce_no_over", "reduce missing over")
+				}
+				if spec.SaveAs == "" {
+					add(n.ID, "reduce_no_saveas", "reduce missing saveAs")
 				}
 			}
 		case TypeForEach:

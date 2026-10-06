@@ -627,3 +627,474 @@ func rawSpec(t *testing.T, v any) json.RawMessage {
 func op(kind string) connect.Operation {
 	return connect.Operation{Kind: kind}
 }
+
+// --- map node tests ---------------------------------------------------------
+
+// transformEvaluator returns a transformation of the input for map tests.
+type transformEvaluator struct {
+	transform func(input map[string]any) map[string]any
+	seen      []map[string]any
+}
+
+func (e *transformEvaluator) Evaluate(_ context.Context, _ string, input map[string]any) (map[string]any, error) {
+	e.seen = append(e.seen, copyTestMap(input))
+	return e.transform(input), nil
+}
+
+// reduceEvaluator applies a fold function for reduce tests.
+type reduceEvaluator struct {
+	fold func(acc, current any, index float64) map[string]any
+	seen []map[string]any
+	err  error
+}
+
+func (e *reduceEvaluator) Evaluate(_ context.Context, _ string, input map[string]any) (map[string]any, error) {
+	if e.err != nil {
+		return nil, e.err
+	}
+	e.seen = append(e.seen, copyTestMap(input))
+	acc := input["accumulator"]
+	current := input["current"]
+	index := input["index"].(float64)
+	return e.fold(acc, current, index), nil
+}
+
+func copyTestMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// mapTree builds a minimal trigger + map + response tree.
+func mapTree(t *testing.T, spec MapSpec) *Node {
+	t.Helper()
+	return &Node{
+		ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{
+			{ID: "m", Type: TypeMap, Spec: rawSpec(t, spec)},
+			{ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+}
+
+// reduceTree builds a minimal trigger + reduce + response tree.
+func reduceTree(t *testing.T, spec ReduceSpec) *Node {
+	t.Helper()
+	return &Node{
+		ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{
+			{ID: "r", Type: TypeReduce, Spec: rawSpec(t, spec)},
+			{ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+}
+
+func TestMap_EmptyArray(t *testing.T) {
+	eval := &transformEvaluator{transform: func(input map[string]any) map[string]any {
+		return map[string]any{"out": input["item"]}
+	}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{}}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result := c.Data["result"].([]any)
+	if len(result) != 0 {
+		t.Fatalf("expected empty array, got len=%d", len(result))
+	}
+	if len(eval.seen) != 0 {
+		t.Fatalf("expected 0 ZEN calls, got %d", len(eval.seen))
+	}
+}
+
+func TestMap_SingleItem(t *testing.T) {
+	eval := &transformEvaluator{transform: func(input map[string]any) map[string]any {
+		return map[string]any{"transformed": true}
+	}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{map[string]any{"v": 1}}}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result := c.Data["result"].([]any)
+	if len(result) != 1 {
+		t.Fatalf("expected 1-element array, got len=%d", len(result))
+	}
+	if len(eval.seen) != 1 {
+		t.Fatalf("expected 1 ZEN call, got %d", len(eval.seen))
+	}
+}
+
+func TestMap_TransformItems(t *testing.T) {
+	// ZEN reads input["v"] (via projectItemInputs field projection) and scales by 1.1
+	eval := &transformEvaluator{transform: func(input map[string]any) map[string]any {
+		v := input["v"].(float64)
+		return map[string]any{"price": v * 1.1}
+	}}
+	items := []any{
+		map[string]any{"v": float64(100)},
+		map[string]any{"v": float64(200)},
+		map[string]any{"v": float64(300)},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", Input: []string{"v"}, SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result := c.Data["result"].([]any)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(result))
+	}
+	// Each element is the full ZEN output map.
+	want := []float64{110, 220, 330}
+	for i, w := range want {
+		m := result[i].(map[string]any)
+		got := m["price"].(float64)
+		if got < w-0.01 || got > w+0.01 {
+			t.Fatalf("result[%d].price = %v, want ~%v", i, got, w)
+		}
+	}
+}
+
+func TestMap_MaxItemsExceeded(t *testing.T) {
+	items := make([]any, 5)
+	for i := range items {
+		items[i] = i
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 3})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: &transformEvaluator{transform: func(input map[string]any) map[string]any { return nil }}})
+	if err == nil {
+		t.Fatalf("expected maxItems error")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestMap_SourceNotFound(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{}
+	tree := mapTree(t, MapSpec{Over: "missing", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: &transformEvaluator{transform: func(input map[string]any) map[string]any { return nil }}})
+	if err == nil {
+		t.Fatalf("expected error for missing source path")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestMap_InputProjection(t *testing.T) {
+	// With input: ["price"], ZEN should only receive the "price" field.
+	var seen []map[string]any
+	eval := &transformEvaluator{transform: func(input map[string]any) map[string]any {
+		seen = append(seen, copyTestMap(input))
+		return map[string]any{"ok": true}
+	}}
+	items := []any{map[string]any{"price": float64(10), "extra": "ignored"}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", Input: []string{"price"}, SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("expected 1 ZEN call")
+	}
+	if _, hasExtra := seen[0]["extra"]; hasExtra {
+		t.Fatalf("ZEN input should not contain 'extra' field")
+	}
+	if seen[0]["price"] != float64(10) {
+		t.Fatalf("ZEN input missing price field")
+	}
+}
+
+func TestMap_ZENReturnsNonMap(t *testing.T) {
+	// ZEN returns a non-map (nil) — stored as-is in the result array.
+	eval := &transformEvaluator{transform: func(input map[string]any) map[string]any {
+		return nil // ZEN returns nil map
+	}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{"a", "b"}}
+	tree := mapTree(t, MapSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result := c.Data["result"].([]any)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(result))
+	}
+}
+
+// --- reduce node tests ------------------------------------------------------
+
+func TestReduce_EmptyArray(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		return nil
+	}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{}}
+	initial := map[string]any{"sum": float64(0)}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10, InitialValue: initial})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(eval.seen) != 0 {
+		t.Fatalf("expected 0 ZEN calls for empty array, got %d", len(eval.seen))
+	}
+	result := c.Data["result"]
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if m["sum"] != float64(0) {
+		t.Fatalf("expected sum=0, got %v", m["sum"])
+	}
+}
+
+func TestReduce_EmptyArrayNoInitial(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any { return nil }}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{}}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(eval.seen) != 0 {
+		t.Fatalf("expected 0 ZEN calls for empty array, got %d", len(eval.seen))
+	}
+	if c.Data["result"] != nil {
+		t.Fatalf("expected nil result for empty array with no initialValue, got %v", c.Data["result"])
+	}
+}
+
+func TestReduce_SingleItem(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		return map[string]any{"done": true}
+	}}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{map[string]any{"v": 1}}}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(eval.seen) != 1 {
+		t.Fatalf("expected 1 ZEN call, got %d", len(eval.seen))
+	}
+	m := c.Data["result"].(map[string]any)
+	if m["done"] != true {
+		t.Fatalf("unexpected result: %v", m)
+	}
+}
+
+func TestReduce_SumValues(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		var sum float64
+		if acc != nil {
+			sum = acc.(map[string]any)["sum"].(float64)
+		}
+		cur := current.(map[string]any)
+		sum += cur["item"].(map[string]any)["v"].(float64)
+		return map[string]any{"sum": sum}
+	}}
+	items := []any{
+		map[string]any{"v": float64(1)},
+		map[string]any{"v": float64(2)},
+		map[string]any{"v": float64(3)},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	m := c.Data["result"].(map[string]any)
+	if m["sum"] != float64(6) {
+		t.Fatalf("expected sum=6, got %v", m["sum"])
+	}
+}
+
+func TestReduce_FindMax(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		var max float64
+		if acc != nil {
+			max = acc.(map[string]any)["max"].(float64)
+		}
+		n := current.(map[string]any)["item"].(map[string]any)["n"].(float64)
+		if n > max {
+			max = n
+		}
+		return map[string]any{"max": max}
+	}}
+	items := []any{
+		map[string]any{"n": float64(3)},
+		map[string]any{"n": float64(1)},
+		map[string]any{"n": float64(5)},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	m := c.Data["result"].(map[string]any)
+	if m["max"] != float64(5) {
+		t.Fatalf("expected max=5, got %v", m["max"])
+	}
+}
+
+func TestReduce_BuildObject(t *testing.T) {
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		out := map[string]any{}
+		if acc != nil {
+			for k, v := range acc.(map[string]any) {
+				out[k] = v
+			}
+		}
+		item := current.(map[string]any)["item"].(map[string]any)
+		out[item["k"].(string)] = item["v"]
+		return out
+	}}
+	items := []any{
+		map[string]any{"k": "a", "v": float64(1)},
+		map[string]any{"k": "b", "v": float64(2)},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	m := c.Data["result"].(map[string]any)
+	if m["a"] != float64(1) || m["b"] != float64(2) {
+		t.Fatalf("unexpected result: %v", m)
+	}
+}
+
+func TestReduce_MaxItemsExceeded(t *testing.T) {
+	items := make([]any, 5)
+	for i := range items {
+		items[i] = i
+	}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 3})
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any { return nil }}
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval})
+	if err == nil {
+		t.Fatalf("expected maxItems error")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestReduce_SourceNotFound(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{}
+	tree := reduceTree(t, ReduceSpec{Over: "missing", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any { return nil }}
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval})
+	if err == nil {
+		t.Fatalf("expected error for missing source path")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestReduce_SourceNotArray(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": "not-an-array"}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any { return nil }}
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval})
+	if err == nil {
+		t.Fatalf("expected error for non-array source")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestReduce_ZENInputShape(t *testing.T) {
+	// Verify that ZEN receives {"accumulator": ..., "current": {"item": ...}, "index": float64}
+	var seenInputs []map[string]any
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		seenInputs = append(seenInputs, map[string]any{
+			"accumulator": acc,
+			"current":     current,
+			"index":       index,
+		})
+		return map[string]any{"acc": true}
+	}}
+	items := []any{42.0, 43.0}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(seenInputs) != 2 {
+		t.Fatalf("expected 2 inputs, got %d", len(seenInputs))
+	}
+	// First call: acc=nil, current={"item": 42.0}, index=0
+	first := seenInputs[0]
+	if first["accumulator"] != nil {
+		t.Fatalf("first call accumulator should be nil, got %v", first["accumulator"])
+	}
+	cur := first["current"].(map[string]any)
+	if cur["item"] != float64(42) {
+		t.Fatalf("first call current.item = %v, want 42", cur["item"])
+	}
+	if first["index"] != float64(0) {
+		t.Fatalf("first call index = %v, want 0.0", first["index"])
+	}
+}
+
+func TestReduce_IndexIsFloat64(t *testing.T) {
+	var indices []float64
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any {
+		indices = append(indices, index)
+		return map[string]any{"last": index}
+	}}
+	items := []any{1, 2, 3}
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": items}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(indices) != 3 {
+		t.Fatalf("expected 3 indices, got %d", len(indices))
+	}
+	for i, idx := range indices {
+		if idx != float64(i) {
+			t.Fatalf("index[%d] = %v, want %v", i, idx, float64(i))
+		}
+	}
+}
+
+func TestReduce_CtxCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	c := NewCtx("r", "t", "e", nil)
+	c.Data = map[string]any{"items": []any{1, 2, 3}}
+	tree := reduceTree(t, ReduceSpec{Over: "items", JDMID: "x", SaveAs: "result", MaxItems: 10})
+	eval := &reduceEvaluator{fold: func(acc, current any, index float64) map[string]any { return nil }}
+	err := New().Run(ctx, tree, Version{}, c, Deps{Decide: eval})
+	if err == nil {
+		t.Fatalf("expected timeout error for cancelled context")
+	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected timeout error, got: %v", err)
+	}
+}

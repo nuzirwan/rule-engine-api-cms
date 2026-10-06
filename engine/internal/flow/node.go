@@ -30,6 +30,8 @@ const (
 	TypeResponse  NodeType = "response"
 	TypeFilter    NodeType = "filter"
 	TypeFind      NodeType = "find"
+	TypeMap       NodeType = "map"
+	TypeReduce    NodeType = "reduce"
 )
 
 // Node is one node in the flow tree. Control nodes carry Children; leaves do not.
