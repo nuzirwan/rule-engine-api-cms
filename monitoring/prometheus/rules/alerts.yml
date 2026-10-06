@@ -1,0 +1,37 @@
+groups:
+  - name: nzr-engine
+    rules:
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(nzr_flow_requests_total{status="error"}[5m]))
+          /
+          sum(rate(nzr_flow_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Flow error rate > 5%"
+          description: "{{ $value | humanizePercentage }} of flow requests are erroring."
+
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(nzr_flow_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Flow p99 latency > 1s"
+          description: "p99 latency is {{ $value | humanizeDuration }}."
+
+      - alert: CircuitBreakerOpen
+        expr: nzr_breaker_state == 2
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker OPEN on {{ $labels.conn_key }}"
+          description: "Connection {{ $labels.conn_key }} breaker is open."

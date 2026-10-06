@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: nzr-engine
+    orgId: 1
+    folder: NZR Rules Engine
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
