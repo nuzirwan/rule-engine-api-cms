@@ -42,10 +42,10 @@ type FlowSummary struct {
 
 // VersionSummary is one version in the list returned by GET /admin/flows/{id}/versions.
 type VersionSummary struct {
-	Version   int        `json:"version"`
-	Validated bool       `json:"validated"`
-	CreatedAt time.Time  `json:"createdAt"`
-	CreatedBy string     `json:"createdBy,omitempty"`
+	Version   int       `json:"version"`
+	Validated bool      `json:"validated"`
+	CreatedAt time.Time `json:"createdAt"`
+	CreatedBy string    `json:"createdBy,omitempty"`
 }
 
 // JDMSummary is the list response shape for GET /admin/jdms (one row per JDM).
@@ -99,6 +99,26 @@ type Cache interface {
 	Get(ctx context.Context, key string) ([]byte, bool, error)
 	Set(ctx context.Context, key string, v []byte, ttl time.Duration) error
 	Invalidate(ctx context.Context, keyPattern string) error // publishes change event
+}
+
+// WebhookStore is the interface for webhook admin operations. It is NOT on the
+// frozen Store seam — the hot-path receiver uses GetActiveWebhook via the
+// concrete PgStore. This interface exists for testing admin handlers.
+type WebhookStore interface {
+	// Hot path (used by webhook receiver):
+	GetActiveWebhook(ctx context.Context, env, webhookID string) (Webhook, error)
+
+	// Admin methods:
+	CreateWebhook(ctx context.Context, env string, w Webhook) (version int, err error)
+	GetWebhook(ctx context.Context, env, webhookID string) (Webhook, error)
+	GetWebhookVersion(ctx context.Context, env, webhookID string, version int) (Webhook, error)
+	ListWebhooks(ctx context.Context, env string) ([]WebhookSummary, error)
+	ListWebhookVersions(ctx context.Context, env, webhookID string) ([]WebhookVersionSummary, error)
+	UpdateWebhook(ctx context.Context, env string, w Webhook) (version int, err error)
+	DeleteWebhook(ctx context.Context, env, webhookID string) error
+	SetWebhookActive(ctx context.Context, env, webhookID string, version int) error
+	LogWebhook(ctx context.Context, env string, log WebhookLog) (int64, error)
+	GetWebhookLogs(ctx context.Context, env, webhookID string, limit int) ([]WebhookLog, error)
 }
 
 // jdmEntry is a JDM's bytes plus its version, keyed by (env,id).
