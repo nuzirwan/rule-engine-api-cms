@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Add CMS import/sync feature: extend AdminClient with read methods, add sync controller with /sync/status and /sync/import endpoints, create SyncPanel and SyncPage admin UI components. Depends on FEAT-001 engine endpoints being available.",
+  "status": "completed",
+  "steps": [
+    "1. Add TypeScript interfaces to cms/types/engine.ts: ListFlowsResponse, GetFlowResponse, ListFlowVersionsResponse, ListJdmsResponse, GetJdmResponse, GetConnectionResponse with appropriate shapes matching engine endpoints.",
+    "2. Extend AdminClient in cms/src/plugins/rule-engine/server/src/services/admin-client.ts with methods: listFlows(), getFlow(id), listFlowVersions(id), listJdms(), getJdm(id), getConnection(key) following existing listConnections pattern.",
+    "3. Create sync controller in cms/src/plugins/rule-engine/server/src/controllers/sync.ts following audit.ts pattern: resolveAdminConfig, create AdminClient, handle AdminApiError with recoverable/non-recoverable classification. Implement: syncStatus() for GET /sync/status that compares CMS vs engine; importAll() for POST /sync/import; importOne(type, id) for POST /sync/import/:type/:id.",
+    "4. Register routes in cms/src/plugins/rule-engine/server/src/routes/index.ts: GET /sync/status, POST /sync/import, POST /sync/import/:type/:id with handler: 'sync.methodName'.",
+    "5. Update plugin server entry cms/src/plugins/rule-engine/server/src/index.ts: import syncController, add to controllers object.",
+    "6. Create SyncPanel component in cms/src/plugins/rule-engine/admin/src/components/SyncPanel/index.tsx following AuditViewer pattern: useFetchClient, FetchState union, @strapi/design-system components. Show diff status (synced/local-only/engine-only), Import All button, per-item import buttons.",
+    "7. Create types.ts for SyncPanel in cms/src/plugins/rule-engine/admin/src/components/SyncPanel/types.ts with SyncStatus, SyncItem, DiffResult interfaces.",
+    "8. Create SyncPage in cms/src/plugins/rule-engine/admin/src/pages/SyncPage.tsx that wraps SyncPanel with page layout. Note: Page registration in admin routes is a separate integration task; this creates the page component only.",
+    "9. Add vitest tests in cms/src/plugins/rule-engine/server/tests/sync.test.ts following audit-controller.test.ts pattern: mock engine responses with nock, test syncStatus returns correct diff, importAll calls correct endpoints, error handling for 5xx/4xx."
+  ],
+  "acceptance_criteria": [
+    "AdminClient has working listFlows, getFlow, listFlowVersions, listJdms, getJdm, getConnection methods",
+    "GET /sync/status returns JSON {flows: {synced: [], localOnly: [], engineOnly: []}, jdms: {...}, connections: {...}}",
+    "POST /sync/import pulls all engine config and creates/updates CMS content types, returns {imported: {flows: n, jdms: n, connections: n}}",
+    "POST /sync/import/:type/:id pulls single item from engine",
+    "SyncPanel displays sync status with visual indicators for synced/local-only/engine-only items",
+    "SyncPanel has working Import All button that calls POST /sync/import",
+    "SyncPanel has per-item import buttons for engine-only items",
+    "All error states (5xx, 4xx, network) display appropriate messages",
+    "npm run build succeeds",
+    "npm run test passes all tests including new ones"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms && npm run build",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": "All 9 steps completed. TypeScript interfaces added to cms/types/engine.ts for ListFlowsResponse, GetFlowResponse, ListFlowVersionsResponse, ListJdmsResponse, GetJdmResponse, GetConnectionResponse. AdminClient extended with 6 new methods (listFlows, getFlow, listFlowVersions, listJdms, getJdm, getConnection). Sync controller created with syncStatus, importAll, importOne handlers following the audit.ts pattern with error classification (5xx recoverable → 503, 4xx non-recoverable → echo status). Routes registered at GET /sync/status, POST /sync/import, POST /sync/import/:type/:id. SyncPanel component created with FetchState union pattern, Import All button, per-item import buttons for engine-only items. SyncPage wrapper created for admin page layout. 10 vitest tests added covering syncStatus diffing, importAll with counts, importOne for each type, and error handling. All 98 tests pass."
+}

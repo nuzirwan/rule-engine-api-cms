@@ -1,0 +1,33 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add Engine Admin API read endpoints (GET /admin/flows, GET /admin/flows/{id}, GET /admin/flows/{id}/versions, GET /admin/jdms, GET /admin/jdms/{id}, GET /admin/connections/{key}) with operator auth, no secrets in responses. Requires new PgStore list methods and corresponding AdminStore interface additions.",
+  "status": "completed",
+  "steps": [
+    "1. Add FlowSummary, VersionSummary, JDMSummary struct types to engine/internal/config/store.go for list endpoint responses.",
+    "2. Add ListFlows, ListFlowVersions, ListJDMs, GetConnection methods to engine/internal/config/pgstore_admin.go following existing GetFlowVersion pattern: pool lookup, query execution, classifyPg for errors.",
+    "3. Extend AdminStore interface in engine/internal/httpapi/admin.go with the four new methods: ListFlows, ListFlowVersions, ListJDMs, GetConnection.",
+    "4. Add handler methods in engine/internal/httpapi/admin_handlers.go: listFlows, getFlow, listFlowVersions, listJdms, getJdm, getConnection. Each follows the listConnections pattern: requireStore check, call store method, use observ.NewRedactor().Scrub() on settings for connection, writeJSON response.",
+    "5. Register routes in admin.go mount(): GET /admin/flows, GET /admin/flows/{id}, GET /admin/flows/{id}/versions, GET /admin/jdms, GET /admin/jdms/{id}, GET /admin/connections/{key}. All wrapped with h() guard same as existing GET /admin/connections.",
+    "6. Add fakeAdminStore method stubs in engine/internal/httpapi/admin_test.go: listFlows, listFlowVersions, listJdms, getConnection fields plus their implementations.",
+    "7. Add unit tests in engine/internal/httpapi/admin_test.go for each new endpoint following existing TestAdminCreateFlow pattern: happy path returns expected JSON, error cases map to correct status codes."
+  ],
+  "acceptance_criteria": [
+    "GET /admin/flows returns JSON {flows: [{id, method, path, activeVersion, updatedAt}, ...]}",
+    "GET /admin/flows/{id} returns JSON {flowId, version, method, path, tree, fixtures}",
+    "GET /admin/flows/{id}/versions returns JSON {flowId, versions: [{version, validated, createdAt, createdBy}, ...]}",
+    "GET /admin/jdms returns JSON {jdms: [{id, updatedAt}, ...]}",
+    "GET /admin/jdms/{id} returns JSON {jdmId, version, doc}",
+    "GET /admin/connections/{key} returns JSON {key, type, settings (redacted), secretRef, resilience} with no secrets",
+    "All endpoints require operator auth (401 without valid Bearer token)",
+    "Missing resources return 404 with 'not found' message",
+    "go build ./... succeeds with no errors",
+    "go test ./... passes all tests including new ones"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine && CGO_ENABLED=1 go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine && go test ./..."
+  ],
+  "blocked_reason": null,
+  "findings": "All endpoints implemented. GET /admin/flows/{id} returns the active version if published, or the latest version otherwise. Secrets are redacted in connection responses using the same observ.NewRedactor().Scrub() pattern as listConnections. The fakeAdminStore in tests was extended with 8 new fields (4 result fields + 4 error fields) and 4 method implementations. Six new unit tests added covering happy paths and 404 error cases."
+}

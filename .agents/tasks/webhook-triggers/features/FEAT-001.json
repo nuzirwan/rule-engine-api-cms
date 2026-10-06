@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add webhook database schema and core Go types. Creates webhooks identity table, webhook_versions table (immutable), webhook_logs table for audit/debug, and active_pointers integration. Adds Webhook struct to config package with store methods following PgStore patterns.",
+  "status": "completed",
+  "steps": [
+    "1. Create migration 0003_webhooks.up.sql in engine/migrations/ with: webhooks table (id text PK, name text, provider text, flow_id text FK, env text, created_at, created_by), webhook_versions table (webhook_id FK, version int, secret_ref text, mapping jsonb, filter jsonb, created_at, created_by, PK webhook_id+version), webhook_logs table (id bigserial PK, webhook_id text, at timestamptz, provider text, event_type text, flow_triggered text, status text, request_headers jsonb, payload_hash text, error text), add index on webhook_logs (webhook_id, at DESC). Extend active_pointers to support object_type='webhook'.",
+    "2. Create migration 0003_webhooks.down.sql with DROP TABLE webhook_logs, webhook_versions, webhooks CASCADE.",
+    "3. Create engine/internal/config/webhook.go with: Webhook struct (ID, Name, SecretRef, Provider, FlowID, Mapping, Filter, Env, Version), WebhookLog struct (ID, WebhookID, At, Provider, EventType, FlowTriggered, Status, PayloadHash, Error), WebhookSummary struct for list endpoints. Define Provider constants (ProviderStripe, ProviderGitHub, ProviderGeneric).",
+    "4. Add webhook store methods to engine/internal/config/pgstore_webhook.go: CreateWebhook, GetWebhook, ListWebhooks, UpdateWebhook, DeleteWebhook, SetWebhookActive, GetActiveWebhook, LogWebhook, GetWebhookLogs - all following existing PgStore patterns (pool lookup, classifyPg error handling, audit trail).",
+    "5. Extend Store interface in engine/internal/config/store.go with webhook methods if needed for hot path (GetActiveWebhook for receiver). Add WebhookStore interface for admin methods.",
+    "6. Add unit tests in engine/internal/config/webhook_test.go using memStore pattern - test Webhook CRUD, version management, log storage.",
+    "7. Register migration in engine/migrations/migrations.go embed directive."
+  ],
+  "acceptance_criteria": [
+    "Migration 0003_webhooks.up.sql creates all tables with correct foreign keys and indexes",
+    "Webhook struct has all required fields: ID, Name, SecretRef (not Secret), Provider, FlowID, Mapping (map[string]string for JSONPath), Filter (map[string][]string), Env",
+    "PgStore methods compile and follow existing patterns (pool lookup, classifyPg, audit logging)",
+    "go build ./... succeeds in engine directory",
+    "go test ./internal/config/... passes with new webhook tests"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go test ./internal/config/..."
+  ],
+  "blocked_reason": null,
+  "findings": "Added WebhookStore interface to store.go for admin methods. Migration 0003 includes indexes for webhook_logs and webhooks tables. The active_pointers table already supports arbitrary object_type values via its (object_type, object_id) PK, so no schema change needed - just insert 'webhook' values."
+}

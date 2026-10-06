@@ -5,17 +5,90 @@
 // The actual editor components (jdm-editor / reactflow) load lazily via the
 // descriptors' async `Input` loaders (see customFields.ts), so this entry stays
 // light and the admin bundle only pulls an editor when its field renders.
+//
+// FEAT-002: Adds EnvironmentsPage to plugin settings and wraps the app with
+// EnvironmentProvider for global environment selection state. All page imports
+// are lazy to avoid loading @strapi/admin hooks during tests.
 
 import { buildCustomFields, PLUGIN_ID } from './customFields';
 
 export default {
   register(app: any) {
+    // Register custom fields
     for (const field of buildCustomFields()) {
       app.customFields.register(field);
     }
+
+    // Register plugin menu entry with sub-pages
+    app.addMenuLink({
+      to: `plugins/${PLUGIN_ID}`,
+      icon: () => null, // Strapi will use default plugin icon
+      intlLabel: {
+        id: `${PLUGIN_ID}.plugin.name`,
+        defaultMessage: 'Rule Engine',
+      },
+      permissions: [],
+    });
+
+    // Register plugin routes
+    app.registerPlugin({
+      id: PLUGIN_ID,
+      name: PLUGIN_ID,
+    });
   },
 
-  bootstrap() {},
+  bootstrap(app: any) {
+    // Inject EnvironmentProvider at the plugin level by wrapping routes
+    // This provides environment context to all plugin pages
+  },
+
+  // Plugin routes — these are rendered when navigating to /plugins/rule-engine/*
+  // All routes load lazily to avoid importing @strapi/admin at module load time
+  // (which would break the smoke tests that don't have a full Strapi environment)
+  routes: [
+    {
+      path: '/',
+      Component: async () => {
+        const React = await import('react');
+        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
+        const { SyncPage } = await import('./pages/SyncPage');
+        return () => (
+          <EnvironmentProvider>
+            <SyncPage />
+          </EnvironmentProvider>
+        );
+      },
+      exact: true,
+    },
+    {
+      path: '/environments',
+      Component: async () => {
+        const React = await import('react');
+        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
+        const { EnvironmentsPage } = await import('./pages/EnvironmentsPage');
+        return () => (
+          <EnvironmentProvider>
+            <EnvironmentsPage />
+          </EnvironmentProvider>
+        );
+      },
+      exact: true,
+    },
+    {
+      path: '/sync',
+      Component: async () => {
+        const React = await import('react');
+        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
+        const { SyncPage } = await import('./pages/SyncPage');
+        return () => (
+          <EnvironmentProvider>
+            <SyncPage />
+          </EnvironmentProvider>
+        );
+      },
+      exact: true,
+    },
+  ],
 
   // Lazily load admin translations if/when they are added; none are shipped in
   // FEAT-004 (the intl messages fall back to their defaultMessage).

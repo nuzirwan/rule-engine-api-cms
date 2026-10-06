@@ -1,0 +1,7 @@
+{
+  "task_id": "task-engine-cms-sync",
+  "task_description": "Build bidirectional sync: Engine read endpoints (GET /admin/flows, /admin/flows/{id}, etc.) + CMS import/sync feature with admin UI that pulls engine config into CMS content types.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

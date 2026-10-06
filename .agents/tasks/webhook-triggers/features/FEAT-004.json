@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Add CMS webhook content type and admin UI. Includes Strapi content type schema, AdminClient webhook methods, and basic list/edit UI components.",
+  "status": "pending",
+  "steps": [
+    "1. Create cms/src/api/webhook/content-types/webhook/schema.json following connection schema pattern: collectionType with fields webhookId (uid, required), name (string, required), secretRef (string, maxLength 256), provider (enumeration: stripe|github|generic, default generic), flowId (relation to flow), mapping (json), filter (json), environment (relation to environment), engineVersion (integer), lastSyncStatus (enumeration: none|synced|failed).",
+    "2. Create cms/src/api/webhook/controllers/webhook.ts, routes/webhook.ts, services/webhook.ts following existing API patterns (can be minimal - Strapi generates CRUD).",
+    "3. Create cms/src/components/webhook/mapping-field.json component for the mapping field structure (array of {sourceJsonPath: string, targetContextPath: string}).",
+    "4. Create cms/src/components/webhook/filter-field.json component for filter structure (array of {jsonPath: string, allowedValues: string[]}).",
+    "5. Add webhook types to cms/types/engine.ts: WebhookConfig interface (id, name, secretRef, provider, flowId, mapping, filter), CreateWebhookRequest, CreateWebhookResponse, ListWebhooksResponse, GetWebhookResponse, UpdateWebhookRequest, WebhookLogEntry, WebhookLogsResponse.",
+    "6. Extend AdminClient in cms/src/plugins/rule-engine/server/src/services/admin-client.ts with webhook methods: listWebhooks(), getWebhook(id), createWebhook(req), updateWebhook(id, req), deleteWebhook(id), getWebhookLogs(id, opts).",
+    "7. Create basic webhook management page cms/src/plugins/rule-engine/admin/src/pages/WebhooksPage.tsx: list webhooks with name, provider, flowId, status. Use @strapi/design-system components (Table, Button, Box). Link to standard Strapi content manager for editing (no custom editor needed initially).",
+    "8. Register WebhooksPage in cms/src/plugins/rule-engine/admin/src/index.tsx if plugin uses custom pages, otherwise rely on content manager auto-generation.",
+    "9. Add tests in cms/src/plugins/rule-engine/server/tests/webhook-admin.test.ts: test AdminClient webhook methods mock responses."
+  ],
+  "acceptance_criteria": [
+    "Webhook content type schema created with all required fields (webhookId, name, secretRef, provider, flowId, mapping, filter)",
+    "Provider field is enumeration with stripe, github, generic options",
+    "secretRef is stored as reference string, never actual secret value",
+    "AdminClient has typed methods for all webhook CRUD operations",
+    "Webhooks appear in Strapi content manager",
+    "npm run build succeeds in cms directory",
+    "npm run test passes in cms directory"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/cms && npm run build",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

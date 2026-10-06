@@ -2,10 +2,11 @@
 // admin page layout. This creates the page component only; registration in
 // admin routes is a separate integration task.
 //
-// Follows Strapi 5 admin page conventions with @strapi/design-system layout.
+// Follows Strapi 5 admin page conventions with @strapi/admin Layouts.
 
 import * as React from 'react';
-import { Box, Main, HeaderLayout, ContentLayout } from '@strapi/design-system';
+import { Box } from '@strapi/design-system';
+import { Layouts } from '@strapi/admin/strapi-admin';
 
 import { SyncPanel } from '../components/SyncPanel';
 
@@ -16,17 +17,17 @@ export interface SyncPageProps {
 
 export const SyncPage: React.FC<SyncPageProps> = ({ onImportComplete }) => {
   return (
-    <Main>
-      <HeaderLayout
+    <Layouts.Root>
+      <Layouts.Header
         title="Engine Sync"
         subtitle="Compare and sync configuration between CMS and the rule engine"
       />
-      <ContentLayout>
+      <Layouts.Content>
         <Box padding={4}>
           <SyncPanel onImportComplete={onImportComplete} />
         </Box>
-      </ContentLayout>
-    </Main>
+      </Layouts.Content>
+    </Layouts.Root>
   );
 };
 

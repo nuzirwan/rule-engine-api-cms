@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Make the SyncPanel environment-aware: filter by selected environment when syncing, show environment badge on items, add 'All Environments' mode. Also modify validation/publish flows to use selected environment's config.",
+  "status": "pending",
+  "steps": [
+    "Modify cms/src/plugins/rule-engine/admin/src/components/SyncPanel/index.tsx: import useEnvironment hook, pass selected environment's documentId to the sync status API call as query param (?env=docId or empty for all). Show environment badge on each SyncItem if displaying all environments.",
+    "Add optional 'env' query param to GET /sync/status route in server. Modify syncController.syncStatus() to filter CMS queries by environment relation when env param is provided.",
+    "Modify syncController to pass environment's config to AdminClient when calling engine APIs (so it syncs against the correct engine deployment).",
+    "Create cms/src/plugins/rule-engine/admin/src/hooks/useEnvironmentConfig.ts helper hook that returns the resolved AdminClientConfig for the selected environment (for validation panel usage).",
+    "Add environment badge display to SyncPanel items when in 'All Environments' mode: show which env each flow/jdm/connection belongs to.",
+    "Add server route POST /environments/:id/validate-flow/:flowId that validates a flow against a specific environment's engine (passes env config to AdminClient). This supports validating a flow against different environments.",
+    "Extend environment controller with validateFlow() method.",
+    "Update sync.test.ts to cover environment-filtered sync status.",
+    "Add integration notes in context about how content-manager edit views (Flow, JDM, Connection) could be extended to show the EnvironmentSelector — that's outside plugin scope but the hooks are ready."
+  ],
+  "acceptance_criteria": [
+    "SyncPanel filters by selected environment when one is selected",
+    "SyncPanel shows all environments when 'All Environments' is selected",
+    "Each sync item shows environment badge when in all-envs mode",
+    "Sync operations target the correct engine based on selected environment",
+    "Test connection and validation target correct engine per environment",
+    "All existing tests pass plus new env-filter tests"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run build",
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

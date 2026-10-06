@@ -1,0 +1,50 @@
+{
+  "project_type": "Go rule engine + Strapi 5 CMS monorepo",
+  "language": "Go (engine), TypeScript (CMS)",
+  "build_system": "Go modules for engine, npm for CMS. Engine requires CGO_ENABLED=1 for decision/ZEN package.",
+  "test_framework": "Go testing (engine), Vitest (CMS)",
+  "build_command": "cd engine && CGO_ENABLED=1 go build ./...",
+  "test_command": "cd engine && CGO_ENABLED=1 go test ./... (engine) | cd cms && npm run build && npm run test (CMS)",
+  "verification_instructions": "1. Engine: CGO_ENABLED=1 go build ./... && go test ./... in engine directory. 2. CMS: npm run build && npm run test in cms directory.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "CGO_ENABLED=1 required for Go builds (ZEN decision engine). Working in worktree at /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers on branch feat/webhook-triggers.",
+  "contribution_requirements": "Secrets via secretRef only (never inline). Operator auth on all /admin/* endpoints. Rate limiting on public endpoints. Signature verification required in production.",
+  "key_patterns": {
+    "config_store": "PgStore implements Store interface with cache-aside pattern. Migrations in engine/migrations/. Objects have identity tables + immutable version tables + active_pointers.",
+    "admin_api": "Admin struct in internal/httpapi/admin.go mounts routes on mux with OperatorGuard protection. Handlers use writeJSON/writeError, decodeJSON helpers. Status mapping via statusForAdmin.",
+    "flow_trigger": "genericFlowHandler resolves active routes per-request, pins flow version via store.ActiveFlow, builds flow.Ctx from request, runs interpreter.Run.",
+    "secret_handling": "SecretProvider interface (Resolve, Watch) in internal/connect/secret.go. envProvider resolves 'env:NAME' refs. Secrets never stored inline - always secretRef.",
+    "rate_limiting": "rateLimitMiddleware wraps mux, newRateLimiter builds token bucket from RateLimitConfig in Deps.",
+    "cms_content_types": "Content types in cms/src/api/<name>/content-types/<name>/schema.json. Components in cms/src/components/.",
+    "admin_client": "AdminClient class in cms/src/plugins/rule-engine/server/src/services/admin-client.ts provides typed methods for engine admin API."
+  },
+  "relevant_files": [
+    "engine/internal/config/pgstore.go",
+    "engine/internal/config/store.go",
+    "engine/internal/config/pgstore_admin.go",
+    "engine/internal/httpapi/server.go",
+    "engine/internal/httpapi/admin.go",
+    "engine/internal/httpapi/admin_handlers.go",
+    "engine/internal/httpapi/ratelimit.go",
+    "engine/internal/auth/operator.go",
+    "engine/internal/connect/secret.go",
+    "engine/internal/connect/connect.go",
+    "engine/internal/flow/ctx.go",
+    "engine/internal/flow/interpreter.go",
+    "engine/migrations/0001_init.up.sql",
+    "cms/src/api/connection/content-types/connection/schema.json",
+    "cms/src/api/flow/content-types/flow/schema.json",
+    "cms/src/plugins/rule-engine/server/src/services/admin-client.ts",
+    "cms/types/engine.ts"
+  ],
+  "directory_structure": {
+    "engine/": "Go rule engine - internal/ has packages (config, httpapi, auth, connect, flow, decision, observ). migrations/ has SQL. cmd/engine has main.",
+    "engine/internal/config/": "Configuration store - PgStore (Postgres), memStore (testing), types (FlowVersion, ConnectionDef), migrations",
+    "engine/internal/httpapi/": "HTTP handlers - server.go (router), admin.go (control plane), ops.go (health), ratelimit.go",
+    "engine/internal/auth/": "Authentication - middleware.go (Authn/Authz), operator.go (OperatorGuard)",
+    "engine/internal/connect/": "Connection registry - drivers, secret.go (SecretProvider), resilience",
+    "engine/internal/flow/": "Flow interpreter - ctx.go (Ctx), interpreter.go, handlers.go, spec.go",
+    "cms/src/api/": "Strapi content types - flow/, connection/, jdm/, environment/",
+    "cms/src/plugins/rule-engine/": "Rule engine plugin - admin/ (custom fields), server/ (services, controllers)"
+  }
+}

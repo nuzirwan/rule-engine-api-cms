@@ -24,6 +24,9 @@ describe('§6.4 admin plugin smoke', () => {
           registered.push(field);
         }),
       },
+      // FEAT-002: mock the new Strapi app methods used for page registration
+      addMenuLink: vi.fn(),
+      registerPlugin: vi.fn(),
     };
 
     expect(() => adminEntry.register(app)).not.toThrow();

@@ -1,0 +1,40 @@
+{
+  "project_type": "Strapi 5 CMS plugin (TypeScript admin + server sides)",
+  "language": "TypeScript",
+  "build_system": "Strapi 5 build system with npm scripts; plugin under cms/src/plugins/rule-engine/",
+  "test_framework": "vitest with nock for HTTP mocking; tests in cms/src/plugins/rule-engine/server/tests/ and admin smoke tests",
+  "build_command": "cd /home/nuzirwan/project/rule-engine-api/cms && npm run build",
+  "test_command": "cd /home/nuzirwan/project/rule-engine-api/cms && npm run test",
+  "verification_instructions": "1. Run `npm run build` in cms/ to verify TypeScript compiles. 2. Run `npm run test` in cms/ to run vitest suite. Both must pass.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "CMS runs on Node 22.x; CGO not relevant for CMS. No Strapi runtime in tests (pure unit tests with mocks).",
+  "contribution_requirements": "Follow existing patterns in SyncPanel, AuditViewer, ValidationPanel for admin components. Use useFetchClient for API calls. Use @strapi/design-system components. Server routes go in routes/index.ts, controllers exported from server/src/index.ts.",
+  "key_patterns": {
+    "admin_components": "React functional components with FetchState union type for loading/error/ok states. Use useFetchClient from @strapi/admin/strapi-admin. Components in cms/src/plugins/rule-engine/admin/src/components/.",
+    "server_routes": "Routes defined in cms/src/plugins/rule-engine/server/src/routes/index.ts under admin.routes array. Controllers are factory functions that receive { strapi } and return method handlers.",
+    "admin_client": "AdminClient class in admin-client.ts accepts config from resolveAdminConfig(). Config can override baseUrl/token/payloadEnv from an Environment content type.",
+    "page_layout": "Pages use Main, HeaderLayout, ContentLayout from @strapi/design-system. See SyncPage.tsx for pattern.",
+    "content_types": "Flow, JDM, Connection all have optional `environment` relation (manyToOne to api::environment.environment). Environment has name, adminApiBaseUrl, operatorTokenRef, payloadEnv."
+  },
+  "relevant_files": [
+    "cms/src/plugins/rule-engine/admin/src/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/customFields.ts",
+    "cms/src/plugins/rule-engine/admin/src/components/SyncPanel/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/components/AuditViewer/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/pages/SyncPage.tsx",
+    "cms/src/plugins/rule-engine/server/src/index.ts",
+    "cms/src/plugins/rule-engine/server/src/routes/index.ts",
+    "cms/src/plugins/rule-engine/server/src/services/admin-client.ts",
+    "cms/src/plugins/rule-engine/server/src/controllers/sync.ts",
+    "cms/src/plugins/rule-engine/server/tests/sync.test.ts",
+    "cms/src/api/environment/content-types/environment/schema.json",
+    "cms/src/api/flow/content-types/flow/schema.json"
+  ],
+  "directory_structure": {
+    "cms/src/plugins/rule-engine/admin/src/": "Admin UI entry (index.tsx), customFields.ts, pages/, components/, lib/",
+    "cms/src/plugins/rule-engine/server/src/": "Server entry (index.ts), routes/, controllers/, services/, lifecycles/",
+    "cms/src/plugins/rule-engine/server/tests/": "Server-side tests with vitest + nock",
+    "cms/src/api/environment/": "Strapi Environment content type (already exists)",
+    "cms/src/api/flow/": "Flow content type with environment relation"
+  }
+}

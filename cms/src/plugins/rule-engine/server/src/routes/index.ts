@@ -54,12 +54,48 @@ export default {
           policies: [],
         },
       },
-      // --- Environment routes (FEAT-001 multi-env-ui) ---
+      // --- Environment routes (FEAT-001/FEAT-002 multi-env-ui) ---
       {
         // GET /environments — list all Environment entries.
         method: 'GET',
         path: '/environments',
         handler: 'environment.list',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /environments — create a new Environment entry.
+        method: 'POST',
+        path: '/environments',
+        handler: 'environment.create',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // PUT /environments/:id — update an existing Environment entry.
+        method: 'PUT',
+        path: '/environments/:id',
+        handler: 'environment.update',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // DELETE /environments/:id — delete an Environment entry.
+        method: 'DELETE',
+        path: '/environments/:id',
+        handler: 'environment.remove',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /environments/:id/test — test connection to an environment's engine.
+        method: 'POST',
+        path: '/environments/:id/test',
+        handler: 'environment.testConnection',
         config: {
           policies: [],
         },

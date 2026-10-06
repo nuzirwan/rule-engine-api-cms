@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Create EnvironmentSelector dropdown component and EnvironmentsPage management page. Integrate EnvironmentProvider into admin entry and add page route registration.",
+  "status": "completed",
+  "steps": [
+    "Create cms/src/plugins/rule-engine/admin/src/components/EnvironmentSelector/index.tsx: dropdown component using @strapi/design-system SingleSelect. Consumes useEnvironment hook. Shows environment name + color-coded badge (success for prod/default, alternative for staging, warning for dev based on name pattern). Includes 'All Environments' option that sets selectedEnv to null.",
+    "Create cms/src/plugins/rule-engine/admin/src/pages/EnvironmentsPage.tsx following SyncPage pattern: page wrapper with HeaderLayout title 'Environments', ContentLayout containing EnvironmentManager component.",
+    "Create cms/src/plugins/rule-engine/admin/src/components/EnvironmentManager/index.tsx: full CRUD panel for environments. Lists all environments in a Table with columns (Name, Admin URL, Token Ref, Payload Env, Actions). Add/Edit modal with form fields. Delete confirmation. Test Connection button that calls POST /rule-engine/environments/:id/test.",
+    "Create cms/src/plugins/rule-engine/admin/src/components/EnvironmentManager/types.ts for EnvironmentFormData interface.",
+    "Add server routes: POST /environments (create), PUT /environments/:id (update), DELETE /environments/:id (delete), POST /environments/:id/test (test connection).",
+    "Extend cms/src/plugins/rule-engine/server/src/controllers/environment.ts with create(), update(), remove(), testConnection() methods. testConnection() creates an AdminClient from the environment's config and calls GET /livez (or GET /readyz) to verify reachability.",
+    "Modify cms/src/plugins/rule-engine/admin/src/index.tsx: wrap the admin entry's register() to set up menu link to EnvironmentsPage and wrap the plugin with EnvironmentProvider in bootstrap(). The provider should wrap at the plugin level, not globally (Strapi 5 pattern: use app.createSettingSection or similar for page registration).",
+    "Add unit test for EnvironmentSelector component mocking useEnvironment.",
+    "Add unit test for EnvironmentManager covering form validation and API calls."
+  ],
+  "acceptance_criteria": [
+    "EnvironmentSelector dropdown appears and allows selection",
+    "Selecting an environment persists across page reloads (via context + localStorage)",
+    "EnvironmentsPage lists all environments with CRUD actions",
+    "Test Connection button hits the environment's engine and shows success/failure",
+    "New environments can be created with name, adminApiBaseUrl, operatorTokenRef, payloadEnv",
+    "Build and tests pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run build",
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": "Used Strapi 5's Layouts.Root/Layouts.Header/Layouts.Content from @strapi/admin/strapi-admin instead of @strapi/design-system HeaderLayout/ContentLayout (which don't exist in current version). Routes are defined with async Component loaders to avoid loading @strapi/admin hooks at module load time, which would break smoke tests. Updated smoke.test.ts to mock addMenuLink and registerPlugin methods used for plugin registration. testConnection uses listFlows() as health check (verifies both connectivity and auth). Form validation in types.ts handles URL validation, name uniqueness, and format checks."
+}

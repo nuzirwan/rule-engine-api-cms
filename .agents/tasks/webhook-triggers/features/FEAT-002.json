@@ -1,0 +1,37 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Implement webhook receiver endpoint POST /webhooks/{webhook_id} with signature verification and provider-specific parsing. The receiver looks up webhook config, verifies signature using secretRef, extracts payload data via provider parser or JSONPath mapping, builds flow context, and triggers the configured flow.",
+  "status": "completed",
+  "steps": [
+    "1. Create engine/internal/webhook/provider.go with Provider interface (VerifySignature, ParseEvent, ExtractEventType) and types: WebhookEvent (Type, Payload, Headers, RawBody), SignatureParams (Header, Algorithm, Secret). Define provider constants.",
+    "2. Create engine/internal/webhook/stripe.go implementing Provider for Stripe: verify using Stripe-Signature header + HMAC-SHA256 with t=timestamp,v1=signature format, parse event envelope, extract type from $.type.",
+    "3. Create engine/internal/webhook/github.go implementing Provider for GitHub: verify using X-Hub-Signature-256 header + HMAC-SHA256 (sha256=signature format), get event type from X-GitHub-Event header, pass payload through.",
+    "4. Create engine/internal/webhook/generic.go implementing Provider for generic HMAC: configurable header name + algorithm (sha256/sha1), signature format (raw hex or prefixed). Default to X-Webhook-Signature header.",
+    "5. Create engine/internal/webhook/mapping.go with MapPayload function: takes raw payload + mapping config (map[string]string where key is ctx path like 'ctx.eventType' and value is JSONPath like '$.type'), returns map[string]any for flow context. Use a JSONPath library (github.com/PaesslerAG/jsonpath or similar already in go.mod).",
+    "6. Create engine/internal/webhook/filter.go with MatchesFilter function: takes parsed event + filter config (map[string][]string where key is JSONPath and value is allowed values), returns bool. An empty filter matches all.",
+    "7. Create engine/internal/httpapi/webhook.go with: webhookReceiver struct holding store, interpreter, deps, secretProvider; webhookHandler returns http.HandlerFunc for POST /webhooks/{webhook_id}. Handler flow: parse webhook_id from path, get webhook config from store, resolve secret via secretProvider, get provider parser, verify signature, parse/extract event, check filter, build flow.Ctx with mapped payload, run interpreter on configured flow.",
+    "8. Update engine/internal/httpapi/server.go NewHandler to mount webhookHandler on 'POST /webhooks/{webhook_id}' with rate limiting but WITHOUT operator auth (public endpoint). Pass deps.Conns secret provider to webhook receiver.",
+    "9. Add Webhook receiver specific error handling: 401 for bad signature, 404 for unknown webhook_id, 400 for unparseable payload, 500 for internal errors. Log webhook invocation via store.LogWebhook (redact sensitive payload fields).",
+    "10. Add unit tests in engine/internal/webhook/*_test.go for each provider's signature verification and parsing. Add engine/internal/httpapi/webhook_test.go for receiver handler tests using fake store."
+  ],
+  "acceptance_criteria": [
+    "POST /webhooks/{webhook_id} accepts any JSON payload without auth",
+    "Stripe signature verification works with Stripe-Signature header format (t=timestamp,v1=sig)",
+    "GitHub signature verification works with X-Hub-Signature-256 header",
+    "Generic HMAC verification is configurable (header name, algorithm)",
+    "Filter blocks events not matching configured criteria and returns 200 (ack without trigger)",
+    "Mapping extracts JSONPath values into flow context under configured keys",
+    "Flow is triggered with mapped context when signature valid and filter matches",
+    "Invalid signature returns 401 Unauthorized",
+    "Unknown webhook_id returns 404 Not Found",
+    "Webhook invocation is logged with redacted payload"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go test ./internal/webhook/...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go test ./internal/httpapi/..."
+  ],
+  "blocked_reason": null,
+  "findings": "Used tidwall/gjson (already in go.mod as indirect dependency) for JSONPath extraction instead of PaesslerAG/jsonpath. Added GetActiveFlowByID method to PgStore to resolve flows by ID (webhooks store flow_id, not route pattern). Added SecretProvider() method to registry to expose secrets for webhook signature verification. Webhook handler mounts via MountWebhookHandler called from NewHandler when WebhookStore and SecretProvider are available."
+}

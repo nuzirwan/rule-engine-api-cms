@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Implement webhook admin API for CRUD operations and log queries. All endpoints require operator auth. Follows existing admin.go patterns with OperatorGuard protection.",
+  "status": "completed",
+  "steps": [
+    "1. Create engine/internal/httpapi/webhook_admin.go with webhookAdmin struct and mount method. Define request/response types: createWebhookRequest (name, secretRef, provider, flowId, mapping, filter), updateWebhookRequest (same fields, all optional), webhookResponse (id, name, provider, flowId, mapping, filter, version, active).",
+    "2. Implement GET /admin/webhooks handler (listWebhooks): call store.ListWebhooks, return array of webhooks with version info. Redact any sensitive fields using observ.Redactor.",
+    "3. Implement GET /admin/webhooks/{id} handler (getWebhook): call store.GetWebhook, return single webhook config. Return 404 if not found.",
+    "4. Implement POST /admin/webhooks handler (createWebhook): validate request (name required, secretRef required, flowId required, provider defaults to 'generic'), call store.CreateWebhook, return 201 with webhook id and version.",
+    "5. Implement PUT /admin/webhooks/{id} handler (updateWebhook): validate request, call store.UpdateWebhook (creates new version), return updated webhook.",
+    "6. Implement DELETE /admin/webhooks/{id} handler (deleteWebhook): call store.DeleteWebhook (soft delete by removing from active_pointers), return 204 No Content.",
+    "7. Implement GET /admin/webhooks/{id}/logs handler (getWebhookLogs): accept query params (limit, offset, status filter), call store.GetWebhookLogs, return array of log entries. Logs should NOT include raw payload (only hash), should include status, event_type, flow_triggered, timestamp, error.",
+    "8. Update engine/internal/httpapi/admin.go Admin.mount to register webhook admin routes on mux: GET/POST /admin/webhooks, GET/PUT/DELETE /admin/webhooks/{id}, GET /admin/webhooks/{id}/logs. All protected by a.guard.Protect().",
+    "9. Update requireRole function in admin.go to add RBAC for webhook routes: webhook.read for GET, webhook.write for POST/PUT/DELETE.",
+    "10. Add tests in engine/internal/httpapi/webhook_admin_test.go: test CRUD operations with fakeAdminStore extended to include webhook methods, test 404 on unknown id, test RBAC enforcement."
+  ],
+  "acceptance_criteria": [
+    "GET /admin/webhooks returns list of webhooks with version info (operator auth required)",
+    "GET /admin/webhooks/{id} returns single webhook or 404 (operator auth required)",
+    "POST /admin/webhooks creates webhook, returns 201 with id and version (operator auth required)",
+    "PUT /admin/webhooks/{id} updates webhook (creates new version), returns updated webhook (operator auth required)",
+    "DELETE /admin/webhooks/{id} removes webhook (soft delete), returns 204 (operator auth required)",
+    "GET /admin/webhooks/{id}/logs returns invocation logs with redacted payload (operator auth required)",
+    "RBAC roles: webhook.read for GET, webhook.write for POST/PUT/DELETE",
+    "All endpoints return 401 without valid operator token",
+    "All endpoints return 403 without required role"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/webhook-triggers/engine && CGO_ENABLED=1 go test ./internal/httpapi/..."
+  ],
+  "blocked_reason": null,
+  "findings": "Created webhook_admin.go with webhookAdmin struct implementing CRUD handlers for webhooks. Added WebhookAdminStore interface satisfied by *config.PgStore. Extended requireRole() in admin.go for webhook RBAC (webhook.read for GET, webhook.write for POST/PUT/DELETE). Webhook admin routes are mounted via admin.mount() which delegates to webhookAdmin.mount() when deps.Admin implements WebhookAdminStore. Added POST /admin/webhooks/{id}/publish endpoint for activating specific webhook versions. Comprehensive tests in webhook_admin_test.go cover CRUD, RBAC enforcement, and error cases."
+}

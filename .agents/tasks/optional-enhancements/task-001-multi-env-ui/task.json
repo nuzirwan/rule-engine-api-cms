@@ -1,0 +1,7 @@
+{
+  "task_id": "task-001-multi-env-ui",
+  "task_description": "Build environment switching UI for the rule-engine CMS so operators can manage flows/JDMs/connections across multiple environments (dev, staging, prod) from a single CMS instance.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

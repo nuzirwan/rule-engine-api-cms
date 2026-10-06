@@ -1,0 +1,7 @@
+{
+  "task_id": "task-webhook-triggers",
+  "task_description": "Build webhook receiver endpoints that trigger flows on incoming webhooks from external services (Stripe, GitHub, Twilio, etc.). Includes webhook configuration, signature verification, provider-specific parsing, admin CRUD, and CMS integration.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}
