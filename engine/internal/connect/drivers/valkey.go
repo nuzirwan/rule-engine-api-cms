@@ -21,6 +21,15 @@ func newValkeyConnector() connect.Connector { return valkeyConnector{} }
 // Type implements connect.Connector.
 func (valkeyConnector) Type() string { return "valkey" }
 
+// Lifecycle implements connect.Connector. Valkey manages its own connection pool.
+func (valkeyConnector) Lifecycle() connect.Lifecycle { return connect.LifecyclePooled }
+
+// Capabilities implements connect.Connector. Valkey supports key-value ops and
+// can serve as a dedup store for idempotency locks.
+func (valkeyConnector) Capabilities() connect.Capability {
+	return connect.CapKeyValue | connect.CapDedupStore
+}
+
 // Open builds a valkey client from the def's Settings and the resolved secret.
 // Settings carry addr/addrs (InitAddress), db (SelectDB), and optional tls; the
 // resolved secret supplies the password. No per-op timeout is set on the client

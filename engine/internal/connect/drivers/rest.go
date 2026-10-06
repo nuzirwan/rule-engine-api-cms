@@ -30,6 +30,12 @@ func newRESTConnector(alias string) connect.Connector { return restConnector{ali
 // Type implements connect.Connector; it returns the registered alias.
 func (c restConnector) Type() string { return c.alias }
 
+// Lifecycle implements connect.Connector. REST is ephemeral — one connection per request.
+func (c restConnector) Lifecycle() connect.Lifecycle { return connect.LifecycleEphemeral }
+
+// Capabilities implements connect.Connector. REST supports query/exec via HTTP.
+func (c restConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
+
 // Open builds the shared client from Settings (baseURL, default headers, and
 // transport tunables). A resolved secret, when present, is exposed as a default
 // bearer/credential header value only if the def names a header for it; by

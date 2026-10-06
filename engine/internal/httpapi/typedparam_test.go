@@ -33,6 +33,7 @@ func (r recordingRegistry) Reload(ctx context.Context, defs []connect.Connection
 	return nil
 }
 func (r recordingRegistry) HealthCheck(ctx context.Context) error { return nil }
+func (r recordingRegistry) Close() error                          { return nil }
 
 var _ connect.Registry = recordingRegistry{}
 

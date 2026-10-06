@@ -26,10 +26,21 @@ type registry struct {
 // compile-time assertion that registry satisfies the frozen Registry seam.
 var _ Registry = (*registry)(nil)
 
-// New builds a registry from the given connectors and connection defs, resolving
-// each def's SecretRef via secrets and opening one pooled client per key. A
-// nil tracer/logger is tolerated (the registry only calls them when non-nil).
-func New(connectors []Connector, defs []ConnectionDef, secrets SecretProvider, tracer observ.Tracer, log observ.Logger) (*registry, error) {
+// New builds a registry from the given connectors and connection defs.
+// When USE_CONNECTOR_POOL=true, it returns a lazy-pool registry that defers
+// connection opening to first use. Otherwise, it returns the eager-load registry
+// that opens one pooled client per key at construction time.
+// A nil tracer/logger is tolerated (the registry only calls them when non-nil).
+func New(connectors []Connector, defs []ConnectionDef, secrets SecretProvider, tracer observ.Tracer, log observ.Logger) (Registry, error) {
+	if UseConnectorPool() {
+		return newRegistryV2(connectors, defs, secrets, tracer, log)
+	}
+	return newEagerRegistry(connectors, defs, secrets, tracer, log)
+}
+
+// newEagerRegistry builds the original eager-load registry, resolving each def's
+// SecretRef via secrets and opening one pooled client per key.
+func newEagerRegistry(connectors []Connector, defs []ConnectionDef, secrets SecretProvider, tracer observ.Tracer, log observ.Logger) (*registry, error) {
 	if secrets == nil {
 		secrets = NewEnvSecretProvider()
 	}

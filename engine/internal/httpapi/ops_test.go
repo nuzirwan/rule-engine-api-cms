@@ -28,6 +28,7 @@ func (f fakeRegistry) Client(ctx context.Context, key string) (connect.Client, e
 }
 func (f fakeRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error { return nil }
 func (f fakeRegistry) HealthCheck(ctx context.Context) error                          { return f.healthErr }
+func (f fakeRegistry) Close() error                                                   { return nil }
 
 var _ connect.Registry = fakeRegistry{}
 

@@ -28,7 +28,8 @@ func (r *fakeRegistry) Client(_ context.Context, key string) (connect.Client, er
 	return c, nil
 }
 func (r *fakeRegistry) Reload(_ context.Context, _ []connect.ConnectionDef) error { return nil }
-func (r *fakeRegistry) HealthCheck(_ context.Context) error                        { return nil }
+func (r *fakeRegistry) HealthCheck(_ context.Context) error                       { return nil }
+func (r *fakeRegistry) Close() error                                              { return nil }
 
 // fakeClient records all Execute calls and optionally returns an error.
 type fakeClient struct {
@@ -133,7 +134,7 @@ func TestSagaContext_Compensate_SkipsNilCompensation(t *testing.T) {
 	reg := &fakeRegistry{clients: map[string]*fakeClient{"pg": client}}
 
 	sc := saga.New("sk1", nil)
-	sc.Record("n1", "exec", "pg", nil)                          // no compensation
+	sc.Record("n1", "exec", "pg", nil)                           // no compensation
 	sc.Record("n2", "exec", "pg", compensationFor("pg", "exec")) // has compensation
 
 	if err := sc.Compensate(context.Background(), reg); err != nil {
@@ -222,9 +223,9 @@ func TestSagaContext_Compensate_CompensationStopsAtFirstFailure(t *testing.T) {
 	// Only the last step (first in reverse) should be attempted + fail.
 	// Earlier steps should NOT be compensated (fail-fast).
 	errMid := errors.New("middle failed")
-	client1 := &fakeClient{}          // n1 compensation (not reached)
+	client1 := &fakeClient{}            // n1 compensation (not reached)
 	client2 := &fakeClient{err: errMid} // n2 compensation (fails)
-	client3 := &fakeClient{}          // n3 compensation (attempted first — reverse order)
+	client3 := &fakeClient{}            // n3 compensation (attempted first — reverse order)
 
 	reg := &fakeRegistry{clients: map[string]*fakeClient{
 		"c1": client1,

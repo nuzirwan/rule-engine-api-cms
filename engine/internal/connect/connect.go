@@ -26,6 +26,8 @@ type Registry interface {
 	Reload(ctx context.Context, defs []ConnectionDef) error
 	// HealthCheck fans out cheap probes for readiness gating.
 	HealthCheck(ctx context.Context) error
+	// Close drains and closes all connections. cmd/engine calls it on shutdown.
+	Close() error
 }
 
 // Client is a single pooled connection to one source. Execute honors the ctx

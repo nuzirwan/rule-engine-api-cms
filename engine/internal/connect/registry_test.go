@@ -21,6 +21,10 @@ func newFakeConnector(typ string) *fakeConnector {
 
 func (f *fakeConnector) Type() string { return f.typ }
 
+func (f *fakeConnector) Lifecycle() Lifecycle { return LifecyclePooled }
+
+func (f *fakeConnector) Capabilities() Capability { return CapQueryExec }
+
 func (f *fakeConnector) Open(ctx context.Context, def ConnectionDef) (Client, error) {
 	c, ok := f.opens[def.Key]
 	if !ok {
@@ -73,7 +77,7 @@ func (c *fakeClient) Close() error {
 
 func newTestRegistry(t *testing.T, conn Connector, defs ...ConnectionDef) *registry {
 	t.Helper()
-	r, err := New([]Connector{conn}, defs, NewEnvSecretProvider(), nil, nil)
+	r, err := newEagerRegistry([]Connector{conn}, defs, NewEnvSecretProvider(), nil, nil)
 	if err != nil {
 		t.Fatalf("New registry: %v", err)
 	}
@@ -185,7 +189,9 @@ func TestTimeoutOverrideWins(t *testing.T) {
 // slowConnector builds a client whose Execute blocks ~500ms unless ctx expires.
 type slowConnector struct{}
 
-func (slowConnector) Type() string { return "slow" }
+func (slowConnector) Type() string             { return "slow" }
+func (slowConnector) Lifecycle() Lifecycle     { return LifecyclePooled }
+func (slowConnector) Capabilities() Capability { return CapQueryExec }
 func (slowConnector) Open(ctx context.Context, def ConnectionDef) (Client, error) {
 	return &fakeClient{key: def.Key, sleep: 500 * time.Millisecond}, nil
 }

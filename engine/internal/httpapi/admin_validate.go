@@ -194,6 +194,7 @@ func (m *mockRegistry) Client(ctx context.Context, key string) (connect.Client, 
 }
 func (m *mockRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error { return nil }
 func (m *mockRegistry) HealthCheck(ctx context.Context) error                          { return nil }
+func (m *mockRegistry) Close() error                                                   { return nil }
 
 // mockClient answers an Operation from the fixture mocks keyed by the op kind. A
 // missing mock returns an empty result (not an error) so a validate run does not

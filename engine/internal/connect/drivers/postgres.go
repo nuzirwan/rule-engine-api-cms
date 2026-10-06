@@ -23,6 +23,12 @@ func newPGConnector() connect.Connector { return pgConnector{} }
 // Type implements connect.Connector.
 func (pgConnector) Type() string { return "postgres" }
 
+// Lifecycle implements connect.Connector. Postgres uses pgxpool internally.
+func (pgConnector) Lifecycle() connect.Lifecycle { return connect.LifecyclePooled }
+
+// Capabilities implements connect.Connector. Postgres supports query/exec.
+func (pgConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
+
 // Open builds a pgxpool from the def's Settings and the resolved secret, then
 // wraps it in a pgClient. The pool is the shared resource (one per key, AC-5).
 // Settings may carry a ready-made "dsn", or discrete host/port/database/user

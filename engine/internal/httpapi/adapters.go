@@ -65,6 +65,11 @@ func (r *templatingRegistry) HealthCheck(ctx context.Context) error {
 	return r.inner.HealthCheck(ctx)
 }
 
+// Close delegates to the inner registry.
+func (r *templatingRegistry) Close() error {
+	return r.inner.Close()
+}
+
 // templatingClient resolves templates in an Operation's payload against the
 // request Ctx, then delegates Execute to the inner pooled client.
 type templatingClient struct {
