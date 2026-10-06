@@ -54,6 +54,16 @@ export default {
           policies: [],
         },
       },
+      // --- Environment routes (FEAT-001 multi-env-ui) ---
+      {
+        // GET /environments — list all Environment entries.
+        method: 'GET',
+        path: '/environments',
+        handler: 'environment.list',
+        config: {
+          policies: [],
+        },
+      },
     ],
   },
 };

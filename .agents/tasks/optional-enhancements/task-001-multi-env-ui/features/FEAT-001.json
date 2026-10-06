@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create EnvironmentContext React context with provider, hook, and localStorage persistence. Add server route GET /environments to list all Environment entries. This is the foundation for all environment-aware features.",
+  "status": "completed",
+  "steps": [
+    "Create cms/src/plugins/rule-engine/admin/src/contexts/EnvironmentContext.tsx with: (1) EnvironmentContextValue interface containing { environments: Environment[], selectedEnv: Environment | null, selectEnv(name: string): void, isLoading: boolean, error: string | null }; (2) EnvironmentProvider component that fetches environments on mount via useFetchClient GET to /rule-engine/environments, persists selectedEnv name to localStorage key 'rule-engine-selected-env', restores on mount; (3) useEnvironment hook that throws if used outside provider.",
+    "Create cms/src/plugins/rule-engine/admin/src/contexts/types.ts exporting Environment interface matching the Strapi content type: { documentId: string, name: string, adminApiBaseUrl: string | null, operatorTokenRef: string | null, payloadEnv: string }.",
+    "Add server route GET /environments in cms/src/plugins/rule-engine/server/src/routes/index.ts that maps to handler 'environment.list'.",
+    "Create cms/src/plugins/rule-engine/server/src/controllers/environment.ts exporting environmentController factory with list() method that calls strapi.documents('api::environment.environment').findMany() and returns the environments array.",
+    "Register environmentController in cms/src/plugins/rule-engine/server/src/index.ts under controllers.environment.",
+    "Create unit test cms/src/plugins/rule-engine/admin/src/contexts/EnvironmentContext.test.tsx testing: provider renders children, throws outside provider, restores from localStorage, calls API on mount. Use vitest with mocked useFetchClient.",
+    "Create unit test cms/src/plugins/rule-engine/server/tests/environment.test.ts testing the environment controller's list method with mocked strapi.documents."
+  ],
+  "acceptance_criteria": [
+    "EnvironmentContext exports EnvironmentProvider and useEnvironment hook",
+    "Provider fetches environments from /rule-engine/environments on mount",
+    "Selected environment name persists to localStorage and restores on remount",
+    "Server GET /rule-engine/environments returns array of environment records",
+    "Unit tests pass for context and controller"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run build",
+    "cd /home/nuzirwan/project/rule-engine-api/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": "EnvironmentContext also exports refresh() method for manual refetch. Admin tests use .ts extension (not .tsx) to match vitest config include pattern. Context provides Environment type re-export for convenience."
+}

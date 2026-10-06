@@ -14,6 +14,7 @@
 import publishController from './controllers/publish';
 import auditController from './controllers/audit';
 import syncController from './controllers/sync';
+import environmentController from './controllers/environment';
 import routes from './routes';
 
 const PLUGIN_ID = 'rule-engine';
@@ -33,6 +34,7 @@ export default {
     publish: publishController,
     audit: auditController,
     sync: syncController,
+    environment: environmentController,
   },
 
   routes,
