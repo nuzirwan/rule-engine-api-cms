@@ -108,19 +108,38 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("GET /admin/jdms", h(a.listJdms))
 	mux.Handle("GET /admin/jdms/{id}", h(a.getJdm))
 	mux.Handle("GET /admin/connections/{key}", h(a.getConnection))
+
+	// Webhook admin endpoints (protected by operator guard with webhook.read/write RBAC):
+	if webhookStore, ok := a.deps.Admin.(WebhookAdminStore); ok {
+		wa := newWebhookAdmin(webhookStore, a.guard, a.log)
+		wa.mount(mux)
+	}
 }
 
 // requireRole is the route->required-role RBAC map (slice-f-admin-api.md §3.4).
 // A route not listed requires no specific role (any authenticated operator).
 func requireRole(r *http.Request) string {
+	path := r.URL.Path
+
+	// Webhook routes: webhook.read for GET, webhook.write for POST/PUT/DELETE.
+	if strings.HasPrefix(path, "/admin/webhooks") {
+		switch r.Method {
+		case http.MethodGet:
+			return "webhook.read"
+		case http.MethodPost, http.MethodPut, http.MethodDelete:
+			return "webhook.write"
+		}
+	}
+
+	// Flow routes.
 	switch {
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"):
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
 		return "flow.publish"
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/rollback"):
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/rollback"):
 		return "flow.publish"
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/validate"):
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/validate"):
 		return "flow.read"
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dry-run"):
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/dry-run"):
 		return "flow.read"
 	case r.Method == http.MethodGet:
 		return "flow.read"
