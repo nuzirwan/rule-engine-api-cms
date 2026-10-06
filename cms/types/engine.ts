@@ -281,3 +281,106 @@ export interface GetConnectionResponse {
   secretRef: string;
   resilience: EngineResilience;
 }
+
+// ----------------------------------------------------------------------------
+// Webhook types (FEAT-004) — admin API for webhook configuration
+// ----------------------------------------------------------------------------
+
+/** Webhook provider types supported by the engine. */
+export type WebhookProvider = 'stripe' | 'github' | 'generic';
+
+/** A single mapping entry: extracts sourceJsonPath and writes to targetContextPath. */
+export interface WebhookMappingEntry {
+  sourceJsonPath: string;
+  targetContextPath: string;
+}
+
+/** A single filter entry: extracts jsonPath and checks if value is in allowedValues. */
+export interface WebhookFilterEntry {
+  jsonPath: string;
+  allowedValues: string[];
+}
+
+/** The webhook configuration shape as stored/transmitted to the engine. */
+export interface WebhookConfig {
+  id: string;
+  name: string;
+  secretRef?: string;
+  provider: WebhookProvider;
+  flowId: string;
+  mapping?: WebhookMappingEntry[];
+  filter?: WebhookFilterEntry[];
+}
+
+/** POST /admin/webhooks body — createWebhookRequest. */
+export interface CreateWebhookRequest {
+  env: string;
+  webhookId: string;
+  name: string;
+  secretRef?: string;
+  provider: WebhookProvider;
+  flowId: string;
+  mapping?: WebhookMappingEntry[];
+  filter?: WebhookFilterEntry[];
+}
+
+/** 201 from POST /admin/webhooks. */
+export interface CreateWebhookResponse {
+  webhookId: string;
+  version: number;
+}
+
+/** A webhook summary returned by GET /admin/webhooks. */
+export interface WebhookSummary {
+  id: string;
+  name: string;
+  provider: WebhookProvider;
+  flowId: string;
+  updatedAt: string;
+}
+
+/** 200 from GET /admin/webhooks. */
+export interface ListWebhooksResponse {
+  webhooks: WebhookSummary[];
+}
+
+/** 200 from GET /admin/webhooks/{id}. */
+export interface GetWebhookResponse {
+  webhookId: string;
+  name: string;
+  secretRef?: string;
+  provider: WebhookProvider;
+  flowId: string;
+  mapping?: WebhookMappingEntry[];
+  filter?: WebhookFilterEntry[];
+  version: number;
+}
+
+/** PUT /admin/webhooks/{id} body — updateWebhookRequest. */
+export interface UpdateWebhookRequest {
+  env: string;
+  name?: string;
+  secretRef?: string;
+  provider?: WebhookProvider;
+  flowId?: string;
+  mapping?: WebhookMappingEntry[];
+  filter?: WebhookFilterEntry[];
+}
+
+/** A single entry in the webhook invocation log. */
+export interface WebhookLogEntry {
+  timestamp: string;
+  provider: WebhookProvider;
+  eventType: string;
+  status: 'received' | 'filtered' | 'processed' | 'failed';
+  flowId?: string;
+  error?: string;
+  durationMs?: number;
+}
+
+/** 200 from GET /admin/webhooks/{id}/logs. */
+export interface WebhookLogsResponse {
+  webhookId: string;
+  logs: WebhookLogEntry[];
+  total: number;
+}

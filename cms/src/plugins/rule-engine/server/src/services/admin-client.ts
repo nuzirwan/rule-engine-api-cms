@@ -18,17 +18,23 @@ import type {
   CreateFlowResponse,
   CreateJDMRequest,
   CreateJDMResponse,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
   DryRunFlowRequest,
   GetConnectionResponse,
   GetFlowResponse,
   GetJdmResponse,
+  GetWebhookResponse,
   ListConnectionsResponse,
   ListFlowsResponse,
   ListFlowVersionsResponse,
   ListJdmsResponse,
+  ListWebhooksResponse,
   SetActiveResponse,
+  UpdateWebhookRequest,
   ValidateFlowRequest,
   ValidateFlowResponse,
+  WebhookLogsResponse,
 } from '../../../../../../types/engine';
 
 /** Resolved per-call configuration (base URL + token + payload env). */
@@ -235,6 +241,65 @@ export class AdminClient {
     return this.request<GetConnectionResponse>(
       'GET',
       `/admin/connections/${encodeURIComponent(key)}`
+    );
+  }
+
+  // --- webhook endpoints (FEAT-004) ----------------------------------------
+
+  /** GET /admin/webhooks — list all webhooks. */
+  listWebhooks(): Promise<ListWebhooksResponse> {
+    return this.request<ListWebhooksResponse>('GET', '/admin/webhooks');
+  }
+
+  /** GET /admin/webhooks/{id} — get a single webhook configuration. */
+  getWebhook(id: string): Promise<GetWebhookResponse> {
+    return this.request<GetWebhookResponse>(
+      'GET',
+      `/admin/webhooks/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** POST /admin/webhooks — create a new webhook. */
+  createWebhook(
+    webhook: Omit<CreateWebhookRequest, 'env'>
+  ): Promise<CreateWebhookResponse> {
+    const body: CreateWebhookRequest = { env: this.env, ...webhook };
+    return this.request<CreateWebhookResponse>('POST', '/admin/webhooks', body);
+  }
+
+  /** PUT /admin/webhooks/{id} — update an existing webhook. */
+  updateWebhook(
+    id: string,
+    update: Omit<UpdateWebhookRequest, 'env'>
+  ): Promise<GetWebhookResponse> {
+    const body: UpdateWebhookRequest = { env: this.env, ...update };
+    return this.request<GetWebhookResponse>(
+      'PUT',
+      `/admin/webhooks/${encodeURIComponent(id)}`,
+      body
+    );
+  }
+
+  /** DELETE /admin/webhooks/{id} — delete a webhook. */
+  deleteWebhook(id: string): Promise<void> {
+    return this.request<void>(
+      'DELETE',
+      `/admin/webhooks/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** GET /admin/webhooks/{id}/logs — get webhook invocation logs. */
+  getWebhookLogs(
+    id: string,
+    opts?: { limit?: number; offset?: number }
+  ): Promise<WebhookLogsResponse> {
+    const params = new URLSearchParams();
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+    if (opts?.offset !== undefined) params.set('offset', String(opts.offset));
+    const qs = params.toString();
+    return this.request<WebhookLogsResponse>(
+      'GET',
+      `/admin/webhooks/${encodeURIComponent(id)}/logs${qs ? `?${qs}` : ''}`
     );
   }
 }

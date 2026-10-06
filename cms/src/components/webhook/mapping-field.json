@@ -1,0 +1,20 @@
+{
+  "collectionName": "components_webhook_mapping_fields",
+  "info": {
+    "displayName": "mapping-field",
+    "description": "A mapping entry for webhook payload transformation: extracts a value from the incoming payload via `sourceJsonPath` and writes it to the flow context at `targetContextPath`."
+  },
+  "options": {},
+  "attributes": {
+    "sourceJsonPath": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512
+    },
+    "targetContextPath": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512
+    }
+  }
+}

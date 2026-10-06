@@ -1,0 +1,19 @@
+{
+  "collectionName": "components_webhook_filter_fields",
+  "info": {
+    "displayName": "filter-field",
+    "description": "A filter condition for webhook events: extracts a value from the incoming payload via `jsonPath` and only passes through if the value is in `allowedValues`. Events not matching any filter are rejected."
+  },
+  "options": {},
+  "attributes": {
+    "jsonPath": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512
+    },
+    "allowedValues": {
+      "type": "json",
+      "required": true
+    }
+  }
+}
