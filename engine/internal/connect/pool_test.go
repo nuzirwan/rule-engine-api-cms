@@ -470,3 +470,190 @@ func TestPool_NewOpensZeroConnections(t *testing.T) {
 		t.Errorf("expected 3 total defs, got %d", stats.TotalDefs)
 	}
 }
+
+func TestPool_MetricsTrackOpensAndCloses(t *testing.T) {
+	conn := &mockConnector{typ: "test", lifecycle: LifecyclePooled}
+	defs := []ConnectionDef{{Key: "test-key", Type: "test"}}
+
+	pool := NewConnectionPool(
+		[]Connector{conn},
+		defs,
+		nil,
+		DefaultPoolConfig(),
+		nil,
+	)
+	pool.Start(context.Background())
+
+	// Initial metrics should be zero
+	metrics := pool.Metrics()
+	if metrics.Opens != 0 {
+		t.Errorf("expected 0 opens initially, got %d", metrics.Opens)
+	}
+	if metrics.Closes != 0 {
+		t.Errorf("expected 0 closes initially, got %d", metrics.Closes)
+	}
+
+	// Open a connection
+	_, err := pool.Get(context.Background(), "test-key")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+
+	// Verify openCount incremented
+	metrics = pool.Metrics()
+	if metrics.Opens != 1 {
+		t.Errorf("expected 1 open after Get, got %d", metrics.Opens)
+	}
+	if metrics.PoolSize != 1 {
+		t.Errorf("expected pool size 1, got %d", metrics.PoolSize)
+	}
+
+	// Second Get should not increase opens (reuse)
+	_, err = pool.Get(context.Background(), "test-key")
+	if err != nil {
+		t.Fatalf("second Get failed: %v", err)
+	}
+	metrics = pool.Metrics()
+	if metrics.Opens != 1 {
+		t.Errorf("expected still 1 open after reuse, got %d", metrics.Opens)
+	}
+
+	// Close the pool
+	err = pool.Close()
+	if err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Verify closeCount incremented
+	metrics = pool.Metrics()
+	if metrics.Closes != 1 {
+		t.Errorf("expected 1 close after Close(), got %d", metrics.Closes)
+	}
+	if metrics.PoolSize != 0 {
+		t.Errorf("expected pool size 0 after close, got %d", metrics.PoolSize)
+	}
+}
+
+func TestPool_MetricsTrackReaperCloses(t *testing.T) {
+	conn := &mockConnector{typ: "test", lifecycle: LifecyclePooled}
+	defs := []ConnectionDef{{Key: "test-key", Type: "test"}}
+
+	config := PoolConfig{
+		IdleTimeout:  50 * time.Millisecond,
+		ReapInterval: 20 * time.Millisecond,
+		MaxIdle:      10,
+	}
+
+	now := time.Now()
+	pool := NewConnectionPool(
+		[]Connector{conn},
+		defs,
+		nil,
+		config,
+		nil,
+	)
+	pool.setNowFunc(func() time.Time { return now })
+	pool.Start(context.Background())
+	defer pool.Close()
+
+	// Open a connection
+	_, err := pool.Get(context.Background(), "test-key")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+
+	metrics := pool.Metrics()
+	if metrics.Opens != 1 {
+		t.Errorf("expected 1 open, got %d", metrics.Opens)
+	}
+	if metrics.Closes != 0 {
+		t.Errorf("expected 0 closes before reap, got %d", metrics.Closes)
+	}
+
+	// Advance time past idle timeout
+	now = now.Add(100 * time.Millisecond)
+	pool.setNowFunc(func() time.Time { return now })
+
+	// Wait for reaper to run
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify closeCount incremented by reaper
+	metrics = pool.Metrics()
+	if metrics.Closes != 1 {
+		t.Errorf("expected 1 close after reap, got %d", metrics.Closes)
+	}
+	if metrics.PoolSize != 0 {
+		t.Errorf("expected pool size 0 after reap, got %d", metrics.PoolSize)
+	}
+}
+
+func TestPool_StatsReportsIdleConnections(t *testing.T) {
+	conn := &mockConnector{typ: "test", lifecycle: LifecyclePooled}
+	defs := []ConnectionDef{
+		{Key: "key1", Type: "test"},
+		{Key: "key2", Type: "test"},
+	}
+
+	pool := NewConnectionPool(
+		[]Connector{conn},
+		defs,
+		nil,
+		DefaultPoolConfig(),
+		nil,
+	)
+
+	// Use a controllable time
+	now := time.Now()
+	pool.setNowFunc(func() time.Time { return now })
+	pool.Start(context.Background())
+	defer pool.Close()
+
+	// Open connections
+	_, err := pool.Get(context.Background(), "key1")
+	if err != nil {
+		t.Fatalf("Get key1 failed: %v", err)
+	}
+	_, err = pool.Get(context.Background(), "key2")
+	if err != nil {
+		t.Fatalf("Get key2 failed: %v", err)
+	}
+
+	// Immediately after use, connections are not idle (within 1 second)
+	stats := pool.Stats()
+	if stats.OpenConnections != 2 {
+		t.Errorf("expected 2 open connections, got %d", stats.OpenConnections)
+	}
+	if stats.IdleConnections != 0 {
+		t.Errorf("expected 0 idle connections immediately after use, got %d", stats.IdleConnections)
+	}
+
+	// Advance time by 2 seconds (beyond idle cutoff of 1 second)
+	now = now.Add(2 * time.Second)
+	pool.setNowFunc(func() time.Time { return now })
+
+	// Now connections should be counted as idle
+	stats = pool.Stats()
+	if stats.OpenConnections != 2 {
+		t.Errorf("expected 2 open connections, got %d", stats.OpenConnections)
+	}
+	if stats.IdleConnections != 2 {
+		t.Errorf("expected 2 idle connections after time advance, got %d", stats.IdleConnections)
+	}
+
+	// Access one connection - it should no longer be idle
+	_, err = pool.Get(context.Background(), "key1")
+	if err != nil {
+		t.Fatalf("Get key1 again failed: %v", err)
+	}
+
+	stats = pool.Stats()
+	if stats.IdleConnections != 1 {
+		t.Errorf("expected 1 idle connection after accessing key1, got %d", stats.IdleConnections)
+	}
+
+	// Verify metrics also reports idle count
+	metrics := pool.Metrics()
+	if metrics.IdleCount != 1 {
+		t.Errorf("expected metrics IdleCount 1, got %d", metrics.IdleCount)
+	}
+}

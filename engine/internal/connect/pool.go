@@ -3,6 +3,7 @@ package connect
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nzr-rules-engine/internal/observ"
@@ -58,6 +59,10 @@ type ConnectionPool struct {
 	secrets SecretProvider
 	config  PoolConfig
 	log     observ.Logger
+
+	// metrics counters
+	openCount  atomic.Int64
+	closeCount atomic.Int64
 
 	// reaper control
 	stopReaper chan struct{}
@@ -216,6 +221,7 @@ func (p *ConnectionPool) open(ctx context.Context, def ConnectionDef) (Client, e
 	if err != nil {
 		return nil, wrapErr(classOf(err), def.Key, "", "open connection", err)
 	}
+	p.openCount.Add(1)
 	return newResilientClient(def.Key, inner, def.Resilience), nil
 }
 
@@ -330,6 +336,7 @@ func (p *ConnectionPool) reapIdle() {
 
 	for _, c := range toClose {
 		_ = c.Close()
+		p.closeCount.Add(1)
 	}
 }
 
@@ -350,6 +357,7 @@ func (p *ConnectionPool) Close() error {
 			}
 			entry.client = nil
 			entry.closed = true
+			p.closeCount.Add(1)
 		}
 		entry.mu.Unlock()
 		delete(p.entries, key)
@@ -362,6 +370,10 @@ func (p *ConnectionPool) Stats() PoolStats {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
+	now := p.now()
+	// Consider a connection idle if it hasn't been used in the last second
+	idleCutoff := now.Add(-1 * time.Second)
+
 	stats := PoolStats{
 		TotalDefs: len(p.defs),
 	}
@@ -369,6 +381,10 @@ func (p *ConnectionPool) Stats() PoolStats {
 		entry.mu.Lock()
 		if entry.client != nil && !entry.closed {
 			stats.OpenConnections++
+			// Count as idle if lastUse is older than idleCutoff
+			if entry.lastUse.Before(idleCutoff) {
+				stats.IdleConnections++
+			}
 		}
 		entry.mu.Unlock()
 	}
@@ -395,6 +411,26 @@ func (p *ConnectionPool) setNowFunc(fn func() time.Time) {
 type PoolStats struct {
 	TotalDefs       int
 	OpenConnections int
+	IdleConnections int
+}
+
+// PoolMetrics holds pool metrics counters for observability integration.
+type PoolMetrics struct {
+	Opens     int64 // Total number of connections opened
+	Closes    int64 // Total number of connections closed
+	PoolSize  int   // Current number of open connections
+	IdleCount int   // Current number of idle connections
+}
+
+// Metrics returns pool metrics for observability integration.
+func (p *ConnectionPool) Metrics() PoolMetrics {
+	stats := p.Stats()
+	return PoolMetrics{
+		Opens:     p.openCount.Load(),
+		Closes:    p.closeCount.Load(),
+		PoolSize:  stats.OpenConnections,
+		IdleCount: stats.IdleConnections,
+	}
 }
 
 // extractMinWarm extracts the minWarm setting from a connection def's pool config.
