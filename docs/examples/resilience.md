@@ -287,9 +287,16 @@ request returns immediately with `{"deduped": true}`.
 
 ---
 
-## Saga Compensation
+## Saga Compensation (Internal)
 
-Handles distributed transactions with compensation logic for rollback.
+The rule engine supports saga-style distributed transactions with compensation logic
+for rollback. This mechanism manages multi-step operations where each step can be
+undone if a later step fails.
+
+**Note:** Saga compensation is managed internally by the engine — compensation specs
+are registered programmatically via internal APIs, not through JSON flow configuration.
+When using the engine, focus on designing idempotent operations and appropriate
+`onError` handling rather than defining compensation in flow specs.
 
 ### Saga States
 
@@ -310,40 +317,13 @@ started → executing → committed
 | `compensated` | Rollback completed                           |
 | `failed`      | Compensation failed, needs manual review     |
 
-### Compensation Spec
+### Working with Sagas
 
-Define compensation operations for reversible actions:
+Instead of defining compensation in flow JSON, design flows with these patterns:
 
-```json
-{
-  "id": "reserve-inventory",
-  "type": "action",
-  "spec": {
-    "connection": "inventory-api",
-    "operation": {
-      "kind": "http",
-      "payload": {
-        "method": "POST",
-        "path": "/v1/reservations",
-        "body": { "sku": "{{item.sku}}", "qty": "{{item.quantity}}" }
-      }
-    },
-    "compensation": {
-      "connection": "inventory-api",
-      "operation": {
-        "kind": "http",
-        "payload": {
-          "method": "DELETE",
-          "path": "/v1/reservations/{{data.reservation_id}}"
-        }
-      }
-    },
-    "saveAs": "reservation"
-  }
-}
-```
-
-If a later step fails, the compensation operation executes to release the reservation.
+1. **Idempotent operations**: Use `idempotencyKeyFrom` so retries don't cause duplicates
+2. **OnError handling**: Use `onError: "continue"` for non-critical steps
+3. **External compensation**: Handle rollback in downstream services that track their own state
 
 ---
 
@@ -454,17 +434,6 @@ A resilient order processing flow:
                 }
               },
               "saveAs": "payment",
-              "compensation": {
-                "connection": "payment-api",
-                "operation": {
-                  "kind": "http",
-                  "payload": {
-                    "method": "POST",
-                    "path": "/v1/refunds",
-                    "body": { "charge_id": "{{payment.id}}" }
-                  }
-                }
-              },
               "resilience": {
                 "timeoutMs": 10000,
                 "retries": 2,
@@ -501,7 +470,7 @@ A resilient order processing flow:
 This flow demonstrates:
 - **Idempotency**: Order creation uses `X-Idempotency-Key` for dedup
 - **Per-action timeouts**: Different timeout for payment vs inventory check
-- **Compensation**: Payment has a refund compensation for rollback
+- **Retry configuration**: Critical operations have explicit retry settings
 - **OnError continue**: Notification failure doesn't abort the order
 
 ---
@@ -514,7 +483,7 @@ This flow demonstrates:
 
 3. **Use idempotency for writes** — Any operation that creates or modifies data should have an idempotency key.
 
-4. **Plan compensation operations** — For distributed transactions, define how to undo each step.
+4. **Design for idempotent rollback** — For distributed transactions, ensure downstream services can handle duplicate requests gracefully.
 
 5. **Monitor breaker state** — Watch metrics for circuit breaker opens; frequent opens indicate upstream issues.
 
