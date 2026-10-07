@@ -38,7 +38,8 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Field, Flex, Textarea } from '@strapi/design-system';
+import { Box, Button, Field, Flex, Textarea } from '@strapi/design-system';
+import { Upload, Download } from '@strapi/icons';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
@@ -319,6 +320,10 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [specDraft, setSpecDraft] = React.useState<string>('');
   const [specError, setSpecError] = React.useState<string | null>(null);
+  const [importError, setImportError] = React.useState<string | null>(null);
+
+  // File input ref for import functionality
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Seed the sidecar layout once from the first canvas build so the default
   // auto-layout positions are retained as the baseline for subsequent drags.
@@ -507,6 +512,120 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     [selectedId, edges, reserialize]
   );
 
+  // Export: serialize the current canvas to a JSON file download.
+  // Uses the engine tree format (what gets stored in DB), not the canvas format.
+  const handleExport = React.useCallback(() => {
+    const graph: CanvasGraph = {
+      nodes: nodes.map(fromFlowNode),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        branchKey: typeof e.label === 'string' ? e.label : undefined,
+      })),
+    };
+    try {
+      const { tree } = canvasToTree(graph);
+      const json = JSON.stringify(tree, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'flow-export.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // No valid tree (e.g. no trigger root) — nothing to export
+    }
+  }, [nodes, edges]);
+
+  // Import: trigger hidden file input click.
+  const handleImportClick = React.useCallback(() => {
+    setImportError(null);
+    fileInputRef.current?.click();
+  }, []);
+
+  // Import: validate and apply imported JSON flow.
+  const handleFileChange = React.useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result;
+        if (typeof text !== 'string') {
+          setImportError('Failed to read file');
+          return;
+        }
+
+        try {
+          const imported = JSON.parse(text);
+
+          // Validate structure: must have id (string) and type (string) at minimum
+          if (typeof imported !== 'object' || imported === null) {
+            setImportError('Invalid JSON: expected an object');
+            return;
+          }
+          if (typeof imported.id !== 'string' || imported.id.trim() === '') {
+            setImportError('Invalid structure: missing or invalid "id" field');
+            return;
+          }
+          if (typeof imported.type !== 'string' || imported.type.trim() === '') {
+            setImportError('Invalid structure: missing or invalid "type" field');
+            return;
+          }
+          // Validate root node is type 'trigger' (per canvasToTree requirement)
+          if (imported.type !== 'trigger') {
+            setImportError('Invalid structure: root node must be type "trigger"');
+            return;
+          }
+
+          // Success: convert imported tree to canvas and update state
+          const importedTree = imported as EngineNode;
+          const { graph, layout } = treeToCanvas(importedTree, {});
+
+          // Update sidecar layout with new positions
+          layoutRef.current = layout;
+
+          // Update nodes and edges
+          setNodes(graph.nodes.map(toFlowNode));
+          setEdges(graph.edges.map(toFlowEdge));
+
+          // Emit the imported tree to trigger onChange
+          lastEmittedRef.current = safeStringify(importedTree);
+          emit(importedTree);
+
+          // Clear any previous error
+          setImportError(null);
+        } catch (err) {
+          if (err instanceof SyntaxError) {
+            setImportError('Invalid JSON: ' + err.message);
+          } else {
+            setImportError('Import failed: ' + (err as Error).message);
+          }
+        }
+
+        // Reset file input so the same file can be re-selected
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      };
+
+      reader.onerror = () => {
+        setImportError('Failed to read file');
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      };
+
+      reader.readAsText(file);
+    },
+    [emit]
+  );
+
   const label = intlLabel?.defaultMessage ?? name;
 
   if (!parsed.ok) {
@@ -600,9 +719,49 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
           hasRadius
         >
           <Flex direction="column" alignItems="stretch" gap={3}>
+            {/* Import/Export section */}
             <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
-              Palette (drag or click)
+              Import / Export
             </div>
+            <Flex direction="row" gap={2}>
+              <Button
+                variant="secondary"
+                size="S"
+                startIcon={<Upload />}
+                onClick={handleImportClick}
+                disabled={disabled}
+              >
+                Import
+              </Button>
+              <Button
+                variant="secondary"
+                size="S"
+                startIcon={<Download />}
+                onClick={handleExport}
+                disabled={disabled}
+              >
+                Export
+              </Button>
+            </Flex>
+            {importError && (
+              <div style={{ color: '#ee5e52', fontSize: 12 }}>
+                {importError}
+              </div>
+            )}
+            {/* Hidden file input for import */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+
+            <Box paddingTop={2} style={{ borderTop: '1px solid #4a4a6a' }}>
+              <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
+                Palette (drag or click)
+              </div>
+            </Box>
             <Flex direction="row" wrap="wrap" gap={2}>
               {NODE_PALETTE.map((t) => (
                 <PaletteItem
