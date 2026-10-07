@@ -42,6 +42,19 @@ func intSetting(s map[string]any, key string) (int, bool) {
 	}
 }
 
+// boolSetting reads a bool setting by key, tolerating absent/non-bool.
+func boolSetting(s map[string]any, key string) (bool, bool) {
+	if s == nil {
+		return false, false
+	}
+	v, ok := s[key]
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	return b, ok
+}
+
 // sqlAndParams extracts the "sql" string and optional positional "params" slice
 // from an operation payload. A missing/blank sql is a Validation error. Params
 // are always passed positionally to pgx ($1..) — never string-interpolated.
