@@ -14,6 +14,7 @@ func All() []connect.Connector {
 	restAlias := newRESTConnector("http")
 	return []connect.Connector{
 		newPGConnector(),
+		newMySQLConnector(),
 		newValkeyConnector(),
 		rest,
 		restAlias,
