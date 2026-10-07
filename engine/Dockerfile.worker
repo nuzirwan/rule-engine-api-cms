@@ -1,0 +1,62 @@
+# =============================================================================
+# Stage 1: Builder — compile Go binary with CGO enabled (ZEN requires it)
+# =============================================================================
+# Use golang:1-bookworm (not a fixed minor) per project go.mod requiring go 1.26+.
+# GOTOOLCHAIN=auto (the default) allows the toolchain to upgrade as needed.
+FROM golang:1-bookworm AS builder
+
+# CGO deps: gcc + libc-dev are pre-installed on golang:bookworm, but explicit is
+# better for reproducibility per [[ci-cd-and-delivery]].
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy dependency manifests first for layer caching (less-frequently-changing
+# layers first per [[ci-cd-and-delivery]]).
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source and build with CGO (ADR-003: ZEN requires CGO).
+COPY . .
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker
+
+# =============================================================================
+# Stage 2: Runtime — minimal glibc-based image (ADR-003/R9: NOT alpine/musl)
+# =============================================================================
+FROM debian:bookworm-slim
+
+# Install CA certificates for TLS connections (data sources, etc.) and curl for
+# health checks per [[security-and-authz]]. No other runtime deps needed — the
+# binary dynamically links glibc which bookworm-slim provides.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user per [[security-and-authz]] (least privilege).
+RUN groupadd -r -g 1000 worker && useradd -r -u 1000 -g worker worker
+
+WORKDIR /app
+
+# Copy only the binary from builder (multi-stage minimizes image per
+# [[ci-cd-and-delivery]]). Use --chown to avoid an extra layer.
+COPY --from=builder --chown=worker:worker /worker /worker
+
+USER worker
+
+# Default config per [[config-and-secrets]] — all config via env at runtime.
+# These are documented defaults; actual values injected at deployment.
+ENV WORKER_ADDR=":8080"
+# WORKER_GROUP, CONFIG_DSN, CONFIG_SCHEMA intentionally unset — required at runtime.
+
+EXPOSE 8080
+
+# Health check against /healthz (liveness probe, 2s timeout).
+# Interval 30s, timeout 5s, start period 10s (allow for initial load), retries 3.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:8080/healthz || exit 1
+
+ENTRYPOINT ["/worker"]
