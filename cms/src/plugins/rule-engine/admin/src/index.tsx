@@ -125,6 +125,13 @@ export default {
             return () => <GroupsPage />;
           },
         },
+        {
+          path: 'connections',
+          Component: async () => {
+            const { ConnectionsPage } = await import('./pages/ConnectionsPage');
+            return () => <ConnectionsPage />;
+          },
+        },
       ],
     },
   ],
