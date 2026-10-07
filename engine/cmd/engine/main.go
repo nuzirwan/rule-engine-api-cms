@@ -38,6 +38,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/valkey-io/valkey-go"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"nzr-rules-engine/internal/auth"
 	"nzr-rules-engine/internal/config"
@@ -46,6 +49,7 @@ import (
 	"nzr-rules-engine/internal/decision"
 	"nzr-rules-engine/internal/envfile"
 	"nzr-rules-engine/internal/flow"
+	"nzr-rules-engine/internal/gateway"
 	"nzr-rules-engine/internal/httpapi"
 	"nzr-rules-engine/internal/observ"
 	"nzr-rules-engine/internal/scheduler"
@@ -156,16 +160,49 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 	// Parse scheduler exec timeout from env (default 5m, max 30m).
 	execTimeout := parseExecTimeout(logger)
 
+	// --- dispatch config: determines if requests run inline or route to workers ---
+	dispatchCfg, err := config.LoadDispatchConfig()
+	if err != nil {
+		return err
+	}
+	logger.Info("dispatch config loaded",
+		slog.String("mode", string(dispatchCfg.Mode)),
+		slog.String("namespace", dispatchCfg.Namespace),
+		slog.String("defaultGroup", dispatchCfg.DefaultGroup),
+	)
+
+	// --- gateway components (mode=gateway only): k8s client, registry, dispatcher ---
+	var dispatcher *gateway.Dispatcher
+	var workerRegistry *gateway.WorkerRegistry
+	if dispatchCfg.Mode == config.DispatchGateway {
+		k8sClient, kerr := buildK8sClient(logger)
+		if kerr != nil {
+			return fmt.Errorf("gateway mode requires k8s access: %w", kerr)
+		}
+
+		workerRegistry = gateway.NewRegistry(k8sClient, dispatchCfg.Namespace, obsLog)
+		workerRegistry.Watch(ctx)
+		logger.Info("worker registry started", slog.String("namespace", dispatchCfg.Namespace))
+
+		workerClient := gateway.NewWorkerClient(obsLog)
+		dispatcher = gateway.NewDispatcher(workerRegistry, workerClient, gateway.DispatchConfig{
+			RequestTimeout: dispatchCfg.RequestTimeout,
+		}, obsLog)
+		logger.Info("gateway dispatcher initialized")
+	}
+
 	srv, err := httpapi.NewServer(addr, store, interp, httpapi.Deps{
-		Conns:       registry,
-		Decide:      engine,
-		Trace:       tracer,
-		Log:         obsLog,
-		Store:       store,
-		Metrics:     metricsReg,
-		Admin:       adminStore,
-		OperAuth:    operAuth,
-		ExecTimeout: execTimeout,
+		Conns:          registry,
+		Decide:         engine,
+		Trace:          tracer,
+		Log:            obsLog,
+		Store:          store,
+		Metrics:        metricsReg,
+		Admin:          adminStore,
+		OperAuth:       operAuth,
+		ExecTimeout:    execTimeout,
+		Dispatcher:     dispatcher,
+		DispatchConfig: dispatchCfg,
 	})
 	if err != nil {
 		return err
@@ -239,6 +276,12 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 	if sched != nil {
 		sched.Stop()
 		logger.Info("scheduler stopped")
+	}
+
+	// Stop the worker registry if running in gateway mode.
+	if workerRegistry != nil {
+		workerRegistry.Close()
+		logger.Info("worker registry stopped")
 	}
 
 	return nil
@@ -411,4 +454,45 @@ func parseExecTimeout(logger *slog.Logger) time.Duration {
 		}
 	}
 	return timeout
+}
+
+// buildK8sClient creates a Kubernetes client for the gateway dispatcher.
+// It tries in-cluster config first (when running inside K8s), then falls back to
+// kubeconfig from KUBECONFIG env var or default location for local development.
+// Returns an error if neither method works (gateway mode requires K8s access).
+func buildK8sClient(logger *slog.Logger) (kubernetes.Interface, error) {
+	// Try in-cluster config first (running inside K8s pod)
+	cfg, err := rest.InClusterConfig()
+	if err == nil {
+		client, cerr := kubernetes.NewForConfig(cfg)
+		if cerr == nil {
+			logger.Info("k8s client created (in-cluster)")
+			return client, nil
+		}
+		logger.Warn("k8s client in-cluster config found but client creation failed", slog.Any("err", cerr))
+	}
+
+	// Fall back to kubeconfig (local dev)
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		// Try default location
+		home, herr := os.UserHomeDir()
+		if herr == nil {
+			kubeconfig = home + "/.kube/config"
+		}
+	}
+
+	if kubeconfig != "" {
+		cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err == nil {
+			client, cerr := kubernetes.NewForConfig(cfg)
+			if cerr == nil {
+				logger.Info("k8s client created (kubeconfig)", slog.String("kubeconfig", kubeconfig))
+				return client, nil
+			}
+			logger.Warn("k8s client kubeconfig found but client creation failed", slog.Any("err", cerr))
+		}
+	}
+
+	return nil, fmt.Errorf("no k8s config found: tried in-cluster and kubeconfig (KUBECONFIG=%s)", kubeconfig)
 }

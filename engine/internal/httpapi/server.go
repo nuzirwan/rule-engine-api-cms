@@ -16,6 +16,10 @@
 // precedence over the catch-all via ServeMux longest-pattern matching. The
 // handler maps a classified engine error to an HTTP status (Validation->400,
 // NotFound->404, Timeout->504, Upstream->502, Internal->500).
+//
+// Gateway mode: when dispatch.mode=gateway, the genericFlowHandler routes requests
+// through Dispatcher to workers instead of running flow.Interpreter inline. The API
+// remains transparent to consumers — same request/response format.
 package httpapi
 
 import (
@@ -31,7 +35,9 @@ import (
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/decision"
 	"nzr-rules-engine/internal/flow"
+	"nzr-rules-engine/internal/gateway"
 	"nzr-rules-engine/internal/observ"
+	"nzr-rules-engine/internal/worker"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -91,6 +97,19 @@ type Deps struct {
 	// ExecTimeout is the execution timeout for scheduled flow runs (used by
 	// schedule admin's /run endpoint). Defaults to 5m if zero.
 	ExecTimeout time.Duration
+
+	// Dispatcher is the gateway dispatcher for routing requests to workers when
+	// dispatch.mode=gateway. Nil when mode=inline (requests executed locally).
+	// Uses an interface to allow testing with mocks.
+	Dispatcher Dispatcher
+	// DispatchConfig holds the dispatch mode and related settings. Nil-safe — a
+	// nil DispatchConfig is treated as inline mode.
+	DispatchConfig *config.DispatchConfig
+}
+
+// Dispatcher is the interface for dispatching requests to workers.
+type Dispatcher interface {
+	Dispatch(ctx context.Context, flowID string, group string, input map[string]any) (*worker.ExecuteResponse, error)
 }
 
 // NewServer builds an *http.Server whose handler serves the config-driven routes
@@ -151,6 +170,13 @@ func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler,
 		}
 	}
 
+	// Internal execute endpoint for cross-group calls (worker→gateway→worker).
+	// Only mounted when Dispatcher is set (gateway mode). This endpoint accepts
+	// worker.ExecuteRequest format and returns worker.ExecuteResponse.
+	if deps.Dispatcher != nil {
+		mux.HandleFunc("POST /internal/execute", internalExecuteHandler(store, deps))
+	}
+
 	// The single catch-all: every other request re-resolves against LIVE config.
 	mux.HandleFunc("/", genericFlowHandler(store, interp, deps))
 
@@ -171,6 +197,10 @@ func NewHandler(store Store, interp *flow.Interpreter, deps Deps) (http.Handler,
 // the interpreter, and encodes the stitched Response. A path that matches no
 // active route is a 404. Because the route table is read per request, publishing
 // or deactivating a flow takes effect on the very next request — no restart.
+//
+// Gateway mode: when deps.DispatchConfig.Mode == gateway, the handler dispatches
+// the request to a worker via deps.Dispatcher instead of running inline. The API
+// is transparent to consumers — same request/response format.
 func genericFlowHandler(store Store, interp *flow.Interpreter, deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -221,29 +251,217 @@ func genericFlowHandler(store Store, interp *flow.Interpreter, deps Deps) http.H
 			writeError(w, status, msg)
 			return
 		}
-		c := flow.NewCtx(requestID(r), traceID(r), defaultEnv, input)
 
-		// Stamp env on ctx for per-env JDM resolution (ADR-006).
-		ctx = decision.WithEnv(ctx, defaultEnv)
-
-		// Per-request deps: template-resolving registry + branch-bridging
-		// evaluator, both closing over this request's Ctx. The pure flow core is
-		// untouched — these are edge adapters over the frozen seams.
-		runDeps := flow.Deps{
-			Conns:  newTemplatingRegistry(deps.Conns, c),
-			Decide: newBranchingEvaluator(deps.Decide),
-			Trace:  deps.Trace,
-			Log:    deps.Log,
-		}
-
-		if err := interp.Run(ctx, &fv.Tree, flow.Version{FlowID: fv.FlowID, Version: fv.Version}, c, runDeps); err != nil {
-			status, msg := statusForFlow(err)
-			writeError(w, status, msg)
+		// Check dispatch mode: gateway routes through dispatcher, inline runs locally.
+		if deps.DispatchConfig != nil && deps.DispatchConfig.Mode == config.DispatchGateway && deps.Dispatcher != nil {
+			// Gateway mode: dispatch to worker
+			handleGatewayDispatch(ctx, w, r, fv, input, deps)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, c.Response)
+		// Inline mode: execute via interpreter locally
+		handleInlineExecution(ctx, w, fv, input, interp, deps)
 	}
+}
+
+// handleGatewayDispatch dispatches the request to a worker via the gateway dispatcher.
+// It extracts the group from the flow, calls the dispatcher, and converts the
+// worker.ExecuteResponse to an HTTP response.
+func handleGatewayDispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, fv config.FlowVersion, input map[string]any, deps Deps) {
+	// Determine the group for this flow (fallback to default group)
+	group := fv.Group
+	if group == "" && deps.DispatchConfig != nil {
+		group = deps.DispatchConfig.DefaultGroup
+	}
+	if group == "" {
+		group = "default"
+	}
+
+	// Add request scope to context for trace propagation
+	reqID := requestID(r)
+	traceIDVal := traceID(r)
+	ctx = observ.WithScope(ctx, observ.RequestScope{
+		RequestID: reqID,
+		TraceID:   traceIDVal,
+	})
+
+	// Dispatch to worker
+	resp, err := deps.Dispatcher.Dispatch(ctx, fv.FlowID, group, input)
+	if err != nil {
+		status, msg := statusForDispatchError(err)
+		if deps.Log != nil {
+			deps.Log.Emit(ctx, "error", "httpapi.dispatch.failed", map[string]any{
+				"flowId": fv.FlowID,
+				"group":  group,
+				"error":  err.Error(),
+			})
+		}
+		writeError(w, status, msg)
+		return
+	}
+
+	// Convert worker.ExecuteResponse to HTTP response
+	if resp.Status == 0 {
+		resp.Status = http.StatusOK
+	}
+	writeJSON(w, resp.Status, resp.Response)
+}
+
+// handleInlineExecution runs the flow via the interpreter locally.
+func handleInlineExecution(ctx context.Context, w http.ResponseWriter, fv config.FlowVersion, input map[string]any, interp *flow.Interpreter, deps Deps) {
+	c := flow.NewCtx("", "", defaultEnv, input)
+
+	// Stamp env on ctx for per-env JDM resolution (ADR-006).
+	ctx = decision.WithEnv(ctx, defaultEnv)
+
+	// Per-request deps: template-resolving registry + branch-bridging
+	// evaluator, both closing over this request's Ctx. The pure flow core is
+	// untouched — these are edge adapters over the frozen seams.
+	runDeps := flow.Deps{
+		Conns:  newTemplatingRegistry(deps.Conns, c),
+		Decide: newBranchingEvaluator(deps.Decide),
+		Trace:  deps.Trace,
+		Log:    deps.Log,
+	}
+
+	if err := interp.Run(ctx, &fv.Tree, flow.Version{FlowID: fv.FlowID, Version: fv.Version}, c, runDeps); err != nil {
+		status, msg := statusForFlow(err)
+		writeError(w, status, msg)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, c.Response)
+}
+
+// internalExecuteHandler handles POST /internal/execute for cross-group calls.
+// Workers call this endpoint to dispatch requests to other workers through the
+// gateway. It accepts worker.ExecuteRequest and returns worker.ExecuteResponse.
+func internalExecuteHandler(store Store, deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		// Decode the ExecuteRequest from body
+		var req worker.ExecuteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			resp := worker.ExecuteResponse{
+				Status: http.StatusBadRequest,
+				Error: &worker.ErrorDetail{
+					Code:      worker.ErrCodeInvalidRequest,
+					Message:   "invalid request body",
+					RequestID: req.RequestID,
+				},
+			}
+			writeJSON(w, http.StatusBadRequest, resp)
+			return
+		}
+
+		// Resolve the flow to get the group
+		routes, err := store.ActiveRoutes(ctx, defaultEnv)
+		if err != nil {
+			resp := worker.ExecuteResponse{
+				Status: http.StatusInternalServerError,
+				Error: &worker.ErrorDetail{
+					Code:      worker.ErrCodeInternal,
+					Message:   "cannot resolve routes",
+					RequestID: req.RequestID,
+				},
+			}
+			writeJSON(w, http.StatusInternalServerError, resp)
+			return
+		}
+
+		// Find the flow by ID to get its group
+		var fv config.FlowVersion
+		var found bool
+		for _, rt := range routes {
+			if rt.FlowID == req.FlowID {
+				fv, err = store.ActiveFlow(ctx, defaultEnv, rt.Method, rt.Path)
+				if err == nil {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			resp := worker.ExecuteResponse{
+				Status: http.StatusNotFound,
+				Error: &worker.ErrorDetail{
+					Code:      worker.ErrCodeFlowNotFound,
+					Message:   "flow not found",
+					RequestID: req.RequestID,
+				},
+			}
+			writeJSON(w, http.StatusNotFound, resp)
+			return
+		}
+
+		// Determine the group
+		group := fv.Group
+		if group == "" && deps.DispatchConfig != nil {
+			group = deps.DispatchConfig.DefaultGroup
+		}
+		if group == "" {
+			group = "default"
+		}
+
+		// Add request scope to context for trace propagation
+		ctx = observ.WithScope(ctx, observ.RequestScope{
+			RequestID: req.RequestID,
+			TraceID:   req.TraceID,
+		})
+
+		// Dispatch to worker
+		resp, dispatchErr := deps.Dispatcher.Dispatch(ctx, req.FlowID, group, req.Input)
+		if dispatchErr != nil {
+			status, msg := statusForDispatchError(dispatchErr)
+			errResp := worker.ExecuteResponse{
+				Status: status,
+				Error: &worker.ErrorDetail{
+					Code:      classifyDispatchError(dispatchErr),
+					Message:   msg,
+					RequestID: req.RequestID,
+				},
+			}
+			writeJSON(w, status, errResp)
+			return
+		}
+
+		// Return the worker response as-is
+		writeJSON(w, resp.Status, resp)
+	}
+}
+
+// statusForDispatchError maps a dispatch error to an HTTP status and safe message.
+func statusForDispatchError(err error) (int, string) {
+	var dispatchErr *gateway.DispatchError
+	if errors.As(err, &dispatchErr) {
+		switch dispatchErr.Code {
+		case gateway.ErrCodeWorkerNotFound:
+			return http.StatusServiceUnavailable, "worker not found"
+		case gateway.ErrCodeWorkerNotReady:
+			return http.StatusServiceUnavailable, "worker not ready"
+		case gateway.ErrCodeBreakerOpen:
+			return http.StatusServiceUnavailable, "circuit breaker open"
+		case gateway.ErrCodeTimeout:
+			return http.StatusGatewayTimeout, "worker timeout"
+		case gateway.ErrCodeUpstream:
+			return http.StatusBadGateway, "worker error"
+		case gateway.ErrCodeValidation:
+			return http.StatusBadRequest, "validation error"
+		case gateway.ErrCodeNotFound:
+			return http.StatusNotFound, "not found"
+		}
+	}
+	return http.StatusInternalServerError, "internal error"
+}
+
+// classifyDispatchError returns the error code for a dispatch error.
+func classifyDispatchError(err error) string {
+	var dispatchErr *gateway.DispatchError
+	if errors.As(err, &dispatchErr) {
+		return dispatchErr.Code
+	}
+	return worker.ErrCodeInternal
 }
 
 // matchRoute finds the active route whose method matches and whose stored path
