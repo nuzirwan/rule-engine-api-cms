@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Admin UI components for version history, comparison, preview, and rollback. Create the VersionHistory panel (collapsible, shows all versions with badges, pagination), VersionDiff modal (JSON diff of two versions with visual highlighting), VersionPreview modal (read-only flow canvas), and integrate rollback action with confirmation modal. Follow SyncPanel/AuditViewer patterns for state management and design-system usage.",
+  "status": "completed",
+  "steps": [
+    "1. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/types.ts: define VersionSummary, FlowVersionsResponse, RollbackResponse interfaces mirroring engine types (keep local to admin bundle per AuditViewer pattern).",
+    "2. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/VersionItem.tsx: single version row component showing version number, createdAt (relative time), createdBy, validation status badge (success/warning), active badge. Include 'View' button, 'Compare' checkbox, 'Rollback' button (disabled if active). Follow EntryCard pattern from AuditViewer.",
+    "3. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/index.tsx: main panel following SyncPanel pattern. FetchState union for loading/error/ok. useFetchClient to GET /rule-engine/flows/:flowId/versions. Render collapsible Box with header 'Version History'. Show version count summary. Table with VersionItem rows. Handle pagination (show first 10, 'Load more' button). Track selectedVersions[] for comparison (max 2).",
+    "4. Create cms/src/plugins/rule-engine/admin/src/components/VersionDiff/index.tsx: modal component. Accept two version trees as props. Compute JSON diff between them (use simple recursive diff, highlight additions/deletions/changes). Show side-by-side view with left=older, right=newer. Use <pre> with syntax highlighting (green=added, red=removed, yellow=changed). Include fixtures diff section if fixtures differ.",
+    "5. Create cms/src/plugins/rule-engine/admin/src/components/VersionPreview/index.tsx: modal component. Accept flowId and version as props. Fetch full flow detail (may need to add getFlowVersion endpoint or use existing getFlow with version param). Render FlowCanvasField in read-only mode (disabled=true) showing the flow tree at that version. Show validation status/errors from version metadata.",
+    "6. Add rollback functionality to VersionHistory: 'Rollback to this version' button triggers confirmation Modal ('Rollback flow [name] to version [n]? The active version will change from [current] to [n].'). On confirm, POST /rule-engine/flows/:id/rollback with { version }. Show success/error toast. Refresh version list after rollback.",
+    "7. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/VersionHistory.test.ts: unit tests following EnvironmentManager.test.ts pattern (type exports, validation logic, endpoint targeting). Test types shape, test version comparison selection logic, test rollback confirmation flow.",
+    "8. Create cms/src/plugins/rule-engine/admin/src/components/VersionDiff/diff.ts and diff.test.ts: pure diff logic (no React). Function jsonDiff(a, b) returns {path, type:'added'|'removed'|'changed', oldValue?, newValue}[]. Unit test the diff function with various tree shapes.",
+    "9. Create FlowDetailPage at cms/src/plugins/rule-engine/admin/src/pages/FlowDetailPage.tsx: page that accepts flowId param, shows flow info header, and embeds the VersionHistory panel. Register route in admin/src/index.tsx at path '/flows/:flowId'."
+  ],
+  "acceptance_criteria": [
+    "VersionHistory panel shows all versions with version number, date, actor, status badges",
+    "Active version is highlighted with a distinct badge",
+    "Selecting two versions enables 'Compare' button which opens VersionDiff modal",
+    "VersionDiff shows JSON diff with visual highlighting (green/red/yellow)",
+    "Clicking 'View' on a version opens VersionPreview modal with read-only flow canvas",
+    "Rollback button opens confirmation modal, successful rollback shows toast and refreshes list",
+    "Build succeeds: npm run build",
+    "Tests pass: npm run test"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/flow-versioning-ui/cms && npm run build && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": "All 9 steps implemented. Components: VersionHistory panel (collapsible, paginated, comparison selection), VersionItem row, VersionDiff modal (jsonDiff pure logic with green/red/yellow highlighting), VersionPreview modal (read-only FlowCanvasField), FlowDetailPage route at /flows/:flowId. Route registered in admin/src/index.tsx. 61 new unit tests (30 VersionHistory + 31 diff). Build and all 235 tests pass. One test fix: createdAt ISO test used getTime() instead of toISOString() comparison since engine timestamps use Z without milliseconds."
+}

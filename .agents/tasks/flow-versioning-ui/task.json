@@ -1,0 +1,8 @@
+{
+  "task_id": "task-flow-versioning-ui",
+  "task_description": "Add version history UI to the rule-engine CMS plugin (Strapi 5) so operators can view flow versions, compare changes, preview a version, and rollback.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null,
+  "completed_at": "2025-01-07T09:04:00Z"
+}

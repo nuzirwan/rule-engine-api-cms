@@ -88,6 +88,20 @@ export default {
       },
       exact: true,
     },
+    {
+      path: '/flows/:flowId',
+      Component: async () => {
+        const React = await import('react');
+        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
+        const { FlowDetailPage } = await import('./pages/FlowDetailPage');
+        return () => (
+          <EnvironmentProvider>
+            <FlowDetailPage />
+          </EnvironmentProvider>
+        );
+      },
+      exact: true,
+    },
   ],
 
   // Lazily load admin translations if/when they are added; none are shipped in

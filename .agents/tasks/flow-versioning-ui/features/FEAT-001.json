@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Server-side version history endpoints and types. Add the flow controller with two routes: GET /rule-engine/flows/:id/versions (proxy to engine listFlowVersions) and POST /rule-engine/flows/:id/rollback (proxy to engine rollbackFlow). The AdminClient already has these methods; this FEAT adds the CMS proxy layer so the admin UI can call them through Strapi's admin auth.",
+  "status": "completed",
+  "steps": [
+    "1. Create cms/src/plugins/rule-engine/server/src/controllers/flow.ts following sync.ts pattern: factory with strapi + fetchImpl injection, createClient() helper, handleApiError() helper. Implement getVersions(ctx) calling client.listFlowVersions(ctx.params.id), and rollback(ctx) calling client.rollbackFlow(ctx.params.id, ctx.request.body.version).",
+    "2. Register the flow controller in cms/src/plugins/rule-engine/server/src/index.ts: import flowController and add to controllers object as 'flow'.",
+    "3. Add two routes to cms/src/plugins/rule-engine/server/src/routes/index.ts: GET /flows/:id/versions handler 'flow.getVersions', POST /flows/:id/rollback handler 'flow.rollback'.",
+    "4. Create cms/src/plugins/rule-engine/server/tests/flow.test.ts following sync.test.ts pattern: use nock + httpFetch shim, test getVersions returns versions list, test rollback calls engine and returns new active version, test error handling for 404/5xx."
+  ],
+  "acceptance_criteria": [
+    "GET /rule-engine/flows/:id/versions returns { flowId, versions: [...] } from engine",
+    "POST /rule-engine/flows/:id/rollback with { version } body returns { flowId, activeVersion, action }",
+    "503 returned for engine unavailable (5xx), 404 echoed for missing flow",
+    "All tests in flow.test.ts pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/flow-versioning-ui/cms && npm run test"
+  ],
+  "blocked_reason": null,
+  "findings": "Flow controller implemented with getVersions and rollback methods. Routes registered at GET /flows/:id/versions and POST /flows/:id/rollback. Types ListFlowVersionsResponse, VersionSummary, and SetActiveResponse from cms/types/engine.ts are used by the controller. FEAT-002 can import these types for the UI components."
+}

@@ -100,6 +100,25 @@ export default {
           policies: [],
         },
       },
+      // --- Flow versioning routes (FEAT-001 flow-versioning-ui) ---
+      {
+        // GET /flows/:id/versions — list all versions for a flow.
+        method: 'GET',
+        path: '/flows/:id/versions',
+        handler: 'flow.getVersions',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /flows/:id/rollback — rollback to a specific version.
+        method: 'POST',
+        path: '/flows/:id/rollback',
+        handler: 'flow.rollback',
+        config: {
+          policies: [],
+        },
+      },
     ],
   },
 };
