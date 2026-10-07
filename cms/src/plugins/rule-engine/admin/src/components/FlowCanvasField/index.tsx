@@ -77,6 +77,9 @@ const DND_MIME = 'application/x-rule-engine-node';
 /** Height for the canvas — 75vh (3/4 of viewport height). */
 const CANVAS_HEIGHT = 'calc(75vh - 120px)';
 
+/** Width for the entire flow editor — 75vw (3/4 of viewport width). */
+const EDITOR_WIDTH = 'calc(75vw)';
+
 /**
  * Custom node component that displays the node type as a title/label.
  * ReactFlow's default node doesn't show labels, so we need a custom one.
@@ -463,21 +466,32 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
   return (
     <Field.Root name={name} hint={hint} error={error} required={required}>
       <Field.Label>{label}</Field.Label>
-      <Flex ref={ref} direction="row" alignItems="stretch" gap={2} style={{ width: '100%' }}>
-        {/* @xyflow/react v12 needs its parent to have an explicit, non-zero MEASURED
-            width AND height. In a flex row the default min-width is `auto`, so a
-            `flex:1` child can collapse to the intrinsic (near-zero) width of the
-            canvas and break the pointer/zoom math that drag relies on. `minWidth:0`
-            plus a concrete `flexBasis` give the child a real measured width, and the
-            inner div pins width/height to 100% so ReactFlow measures a non-zero box. */}
+      <Flex
+        ref={ref}
+        direction="row"
+        alignItems="stretch"
+        gap={3}
+        style={{ width: EDITOR_WIDTH, maxWidth: '100%' }}
+      >
+        {/* Canvas container: 75% of the editor width. ReactFlow needs explicit
+            measured dimensions. position:relative contains the absolute-positioned
+            Controls/MiniMap. overflow:hidden prevents canvas internals from bleeding
+            into the palette panel. */}
         <Box
-          style={{ flex: '1 1 0%', minWidth: 0, height: CANVAS_HEIGHT, minHeight: 500 }}
+          style={{
+            width: '75%',
+            height: CANVAS_HEIGHT,
+            minHeight: 500,
+            position: 'relative',
+            overflow: 'hidden',
+          }}
           hasRadius
           borderColor="neutral200"
           borderWidth="1px"
+          background="neutral0"
         >
           <div
-            style={{ width: '100%', height: '100%', minWidth: 480 }}
+            style={{ width: '100%', height: '100%' }}
             onDragOver={onDragOver}
             onDrop={onDrop}
           >
@@ -499,10 +513,25 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
             </ReactFlow>
           </div>
         </Box>
-        <Box style={{ width: 280 }} padding={2} background="neutral100" hasRadius>
-          <Flex direction="column" alignItems="stretch" gap={2}>
-            <Typography variant="sigma">Palette (drag or click)</Typography>
-            <Flex direction="row" wrap="wrap" gap={1}>
+
+        {/* Palette panel: 25% of the editor width, with scrollable content. */}
+        <Box
+          style={{
+            width: '25%',
+            minWidth: 200,
+            height: CANVAS_HEIGHT,
+            minHeight: 500,
+            overflowY: 'auto',
+          }}
+          padding={3}
+          background="neutral100"
+          hasRadius
+        >
+          <Flex direction="column" alignItems="stretch" gap={3}>
+            <Typography variant="sigma" textColor="neutral800">
+              Palette (drag or click)
+            </Typography>
+            <Flex direction="row" wrap="wrap" gap={2}>
               {NODE_PALETTE.map((t) => (
                 <PaletteItem
                   key={t}
@@ -513,9 +542,13 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
                 />
               ))}
             </Flex>
-            <Typography variant="sigma">
-              {selectedId ? `Spec · ${selectedId}` : 'Select a node to edit its spec'}
-            </Typography>
+
+            <Box paddingTop={2} borderColor="neutral200" borderWidth="1px 0 0 0">
+              <Typography variant="sigma" textColor="neutral800">
+                {selectedId ? `Node Spec · ${selectedId}` : 'Select a node to edit'}
+              </Typography>
+            </Box>
+
             {selectedId ? (
               <Field.Root error={specError ?? undefined}>
                 <Textarea
@@ -523,11 +556,16 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
                   value={specDraft}
                   disabled={disabled}
                   onChange={onSpecChange}
-                  rows={14}
+                  rows={12}
+                  style={{ fontFamily: 'monospace', fontSize: 12 }}
                 />
                 <Field.Error />
               </Field.Root>
-            ) : null}
+            ) : (
+              <Typography variant="omega" textColor="neutral600">
+                Click a node on the canvas to edit its spec JSON.
+              </Typography>
+            )}
           </Flex>
         </Box>
       </Flex>

@@ -28,6 +28,9 @@ const DEBOUNCE_MS = 300;
 /** Height for the editor — 75vh (3/4 of viewport height). */
 const EDITOR_HEIGHT = 'calc(75vh - 120px)';
 
+/** Width for the editor — 75vw (3/4 of viewport width). */
+const EDITOR_WIDTH = 'calc(75vw)';
+
 interface InputProps {
   name: string;
   value?: unknown;
@@ -118,7 +121,12 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
           ref={ref}
           direction="column"
           alignItems="stretch"
-          style={{ height: EDITOR_HEIGHT, minHeight: 500, width: '100%', minWidth: 480 }}
+          style={{
+            height: EDITOR_HEIGHT,
+            minHeight: 500,
+            width: EDITOR_WIDTH,
+            maxWidth: '100%',
+          }}
         >
           <div style={{ flex: '1 1 0%', minHeight: 0, width: '100%', height: '100%' }}>
             <JdmConfigProvider>
