@@ -1,0 +1,23 @@
+{
+  "collectionName": "components_connection_breaker_policies",
+  "info": {
+    "displayName": "breaker-policy",
+    "description": "Circuit breaker settings for connection resilience. Maps to engine resilience.go Breaker struct: FailureThreshold, FailureRatio, OpenTimeout."
+  },
+  "options": {},
+  "attributes": {
+    "failureThreshold": {
+      "type": "integer",
+      "min": 1
+    },
+    "failureRatio": {
+      "type": "float",
+      "min": 0,
+      "max": 1
+    },
+    "openTimeoutMs": {
+      "type": "integer",
+      "min": 1000
+    }
+  }
+}
