@@ -32,6 +32,13 @@ type Registry interface {
 	SecretProvider() SecretProvider
 }
 
+// ConnectorLookup is the optional interface a registry may satisfy to expose
+// connector factories by type. Used by the test-connection endpoint to open an
+// ephemeral client without going through the defs table.
+type ConnectorLookup interface {
+	Connector(typ string) (Connector, bool)
+}
+
 // Client is a single pooled connection to one source. Execute honors the ctx
 // deadline and the connection's resilience policy.
 type Client interface {

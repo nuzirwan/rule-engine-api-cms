@@ -100,6 +100,7 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("POST /admin/flows/dry-run", h(a.dryRunFlow))
 	mux.Handle("POST /admin/jdms", h(a.createJDM))
 	mux.Handle("POST /admin/connections", h(a.createConnection))
+	mux.Handle("POST /admin/connections/test", h(a.testConnection))
 	mux.Handle("GET /admin/connections", h(a.listConnections))
 	mux.Handle("GET /admin/audit/{type}/{id}", h(a.auditTrail))
 	// Read endpoints for CMS sync:

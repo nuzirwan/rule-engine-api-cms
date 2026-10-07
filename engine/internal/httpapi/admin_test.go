@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -492,4 +493,173 @@ func TestAdminGetConnectionRedacts(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("get connection not found status = %d want 404", rec.Code)
 	}
+}
+
+// ---- Test Connection endpoint tests ----
+
+// fakeConnector is a mock Connector for testing testConnection handler.
+type fakeConnector struct {
+	typ        string
+	openErr    error
+	openClient connect.Client
+}
+
+func (f *fakeConnector) Type() string                     { return f.typ }
+func (f *fakeConnector) Lifecycle() connect.Lifecycle     { return connect.LifecyclePooled }
+func (f *fakeConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
+func (f *fakeConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	return f.openClient, nil
+}
+
+// fakeClient is a mock Client for testing testConnection handler.
+type fakeClient struct {
+	executeErr error
+}
+
+func (f *fakeClient) Execute(ctx context.Context, op connect.Operation) (any, error) {
+	return nil, f.executeErr
+}
+func (f *fakeClient) Close() error { return nil }
+
+// fakeConnectorLookup is a mock ConnectorLookup for testing testConnection handler.
+type fakeConnectorLookup struct {
+	connectors map[string]connect.Connector
+}
+
+func (f *fakeConnectorLookup) Connector(typ string) (connect.Connector, bool) {
+	c, ok := f.connectors[typ]
+	return c, ok
+}
+
+// fakeTestConnRegistry wraps fakeConnectorLookup to satisfy connect.Registry.
+type fakeTestConnRegistry struct {
+	*fakeConnectorLookup
+}
+
+func (f *fakeTestConnRegistry) Client(ctx context.Context, key string) (connect.Client, error) {
+	return nil, nil
+}
+func (f *fakeTestConnRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error {
+	return nil
+}
+func (f *fakeTestConnRegistry) HealthCheck(ctx context.Context) error { return nil }
+func (f *fakeTestConnRegistry) Close() error                          { return nil }
+func (f *fakeTestConnRegistry) SecretProvider() connect.SecretProvider {
+	return connect.NewEnvSecretProvider()
+}
+
+// newAdminTestHandlerWithConns builds a handler with a mock connector registry.
+func newAdminTestHandlerWithConns(t *testing.T, store AdminStore, conns connect.Registry) http.Handler {
+	t.Helper()
+	deps := Deps{Admin: store, OperAuth: allowOperator{}, Conns: conns}
+	h, err := NewHandler(
+		fakeStore{routes: []config.RouteInfo{}},
+		flow.New(),
+		deps,
+	)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	return h
+}
+
+// TestAdminTestConnection tests the POST /admin/connections/test endpoint.
+func TestAdminTestConnection(t *testing.T) {
+	// Test case: missing type -> 400
+	t.Run("missing type", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test", `{"settings":{"host":"localhost"}}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("missing type status = %d want 400 (body %s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	// Test case: unknown type -> 400
+	t.Run("unknown type", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test", `{"type":"unknown"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("unknown type status = %d want 400 (body %s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	// Test case: successful connection
+	t.Run("successful connection", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		client := &fakeClient{executeErr: nil}
+		connector := &fakeConnector{typ: "postgres", openClient: client}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"postgres": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test", `{"type":"postgres","settings":{"host":"localhost"},"secret":"password123"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("successful connection status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if !out.Success {
+			t.Fatalf("expected success=true, got false with error: %s", out.Error)
+		}
+		if out.Message != "Connection successful" {
+			t.Fatalf("expected message 'Connection successful', got: %s", out.Message)
+		}
+	})
+
+	// Test case: connection open fails
+	t.Run("connection open fails", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		connector := &fakeConnector{typ: "postgres", openErr: errors.New("connection refused")}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"postgres": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test", `{"type":"postgres","settings":{"host":"localhost"}}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("failed connection status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if out.Success {
+			t.Fatal("expected success=false, got true")
+		}
+		if out.Error == "" {
+			t.Fatal("expected error message, got empty")
+		}
+	})
+
+	// Test case: ping fails
+	t.Run("ping fails", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		client := &fakeClient{executeErr: errors.New("ping failed")}
+		connector := &fakeConnector{typ: "postgres", openClient: client}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"postgres": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test", `{"type":"postgres","settings":{"host":"localhost"}}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ping failed status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if out.Success {
+			t.Fatal("expected success=false, got true")
+		}
+		if out.Error != "ping failed" {
+			t.Fatalf("expected error 'ping failed', got: %s", out.Error)
+		}
+	})
 }

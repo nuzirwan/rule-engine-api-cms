@@ -256,3 +256,13 @@ func (r *registry) closeAllLocked() error {
 // opKindPing is the health-probe operation kind each driver recognizes as a
 // cheap liveness check (SELECT 1 for postgres, a HEAD/GET for rest).
 const opKindPing = "ping"
+
+// Connector returns the connector factory for the given connection type.
+// This is used by the test-connection endpoint to open an ephemeral client
+// without going through the defs table.
+func (r *registry) Connector(typ string) (Connector, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.byType[typ]
+	return c, ok
+}

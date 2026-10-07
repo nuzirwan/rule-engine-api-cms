@@ -463,3 +463,84 @@ func (a *Admin) getConnection(w http.ResponseWriter, r *http.Request) {
 		"resilience": def.Resilience,
 	})
 }
+
+// ---- POST /admin/connections/test -> Test connection (ephemeral) ----
+
+// testConnectionRequest is the wire shape for testing a connection without
+// persisting it. The secret is passed in plaintext (never stored, only used
+// transiently for the test).
+type testConnectionRequest struct {
+	Type     string         `json:"type"`
+	Settings map[string]any `json:"settings,omitempty"`
+	Secret   string         `json:"secret,omitempty"`
+}
+
+// testConnectionResponse is the wire shape for the test connection result.
+type testConnectionResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+func (a *Admin) testConnection(w http.ResponseWriter, r *http.Request) {
+	var req testConnectionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Type == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: type is required")
+		return
+	}
+
+	// Look up the connector by type from the registry.
+	lookup, ok := a.deps.Conns.(connect.ConnectorLookup)
+	if !ok || a.deps.Conns == nil {
+		writeError(w, http.StatusInternalServerError, "connector registry unavailable")
+		return
+	}
+	connector, found := lookup.Connector(req.Type)
+	if !found {
+		writeError(w, http.StatusBadRequest, "unknown connection type: "+req.Type)
+		return
+	}
+
+	// Build a temporary ConnectionDef for the test.
+	def := connect.ConnectionDef{
+		Key:      "_test",
+		Type:     req.Type,
+		Settings: req.Settings,
+	}
+
+	// If a secret is provided, inject it via context.
+	ctx := r.Context()
+	if req.Secret != "" {
+		ctx = connect.WithSecret(ctx, connect.NewPlainSecret(req.Secret))
+	}
+
+	// Open the connector to get a client.
+	client, err := connector.Open(ctx, def)
+	if err != nil {
+		writeJSON(w, http.StatusOK, testConnectionResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+	defer client.Close()
+
+	// Run a health check (ping).
+	_, err = client.Execute(ctx, connect.Operation{Kind: "ping"})
+	if err != nil {
+		writeJSON(w, http.StatusOK, testConnectionResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, testConnectionResponse{
+		Success: true,
+		Message: "Connection successful",
+	})
+}

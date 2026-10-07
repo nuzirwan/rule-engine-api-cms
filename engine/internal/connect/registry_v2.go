@@ -162,3 +162,13 @@ func (r *registryV2) SecretProvider() SecretProvider {
 func UseConnectorPool() bool {
 	return os.Getenv("USE_CONNECTOR_POOL") == "true"
 }
+
+// Connector returns the connector factory for the given connection type.
+// This is used by the test-connection endpoint to open an ephemeral client
+// without going through the defs table.
+func (r *registryV2) Connector(typ string) (Connector, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.byType[typ]
+	return c, ok
+}

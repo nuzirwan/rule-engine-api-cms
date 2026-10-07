@@ -28,6 +28,11 @@ type Secret struct {
 // NewSecret wraps raw bytes in a redacting Secret.
 func NewSecret(v []byte) Secret { return Secret{v: v} }
 
+// NewPlainSecret wraps a plaintext string in a redacting Secret. This is used
+// by the test-connection endpoint which receives the password in the request
+// body (never stored, only used transiently).
+func NewPlainSecret(value string) Secret { return Secret{v: []byte(value)} }
+
 // String redacts the value so a Secret is safe to interpolate into a log line.
 func (s Secret) String() string { return "***" }
 
