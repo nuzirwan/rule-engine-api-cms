@@ -54,21 +54,22 @@ type Interpreter struct {
 // taxonomy and the walk never panics on them.
 func New() *Interpreter {
 	return &Interpreter{handlers: map[NodeType]NodeHandler{
-		TypeTrigger:   triggerHandler{},
-		TypeAction:    actionHandler{},
-		TypeCondition: conditionHandler{},
-		TypeSet:       setHandler{},
-		TypeResponse:  responseHandler{},
-		TypeSwitch:    switchHandler{},
-		TypeSequence:  deferredHandler{name: "sequence"},
-		TypeParallel:  parallelHandler{},
-		TypeForEach:   forEachHandler{},
-		TypeDecision:  decisionHandler{},
-		TypeLogger:    loggerHandler{},
-		TypeFilter:    filterHandler{},
-		TypeFind:      findHandler{},
-		TypeMap:       mapHandler{},
-		TypeReduce:    reduceHandler{},
+		TypeTrigger:        triggerHandler{},
+		TypeMessageTrigger: messageTriggerHandler{},
+		TypeAction:         actionHandler{},
+		TypeCondition:      conditionHandler{},
+		TypeSet:            setHandler{},
+		TypeResponse:       responseHandler{},
+		TypeSwitch:         switchHandler{},
+		TypeSequence:       deferredHandler{name: "sequence"},
+		TypeParallel:       parallelHandler{},
+		TypeForEach:        forEachHandler{},
+		TypeDecision:       decisionHandler{},
+		TypeLogger:         loggerHandler{},
+		TypeFilter:         filterHandler{},
+		TypeFind:           findHandler{},
+		TypeMap:            mapHandler{},
+		TypeReduce:         reduceHandler{},
 	}}
 }
 

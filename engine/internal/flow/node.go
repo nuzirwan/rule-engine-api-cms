@@ -17,21 +17,22 @@ type NodeType string
 
 // The node type constants (lld-contracts.md).
 const (
-	TypeTrigger   NodeType = "trigger"
-	TypeAction    NodeType = "action"
-	TypeCondition NodeType = "condition"
-	TypeSwitch    NodeType = "switch"
-	TypeSequence  NodeType = "sequence"
-	TypeParallel  NodeType = "parallel"
-	TypeForEach   NodeType = "forEach"
-	TypeDecision  NodeType = "decision"
-	TypeSet       NodeType = "set"
-	TypeLogger    NodeType = "logger"
-	TypeResponse  NodeType = "response"
-	TypeFilter    NodeType = "filter"
-	TypeFind      NodeType = "find"
-	TypeMap       NodeType = "map"
-	TypeReduce    NodeType = "reduce"
+	TypeTrigger        NodeType = "trigger"
+	TypeMessageTrigger NodeType = "messageTrigger"
+	TypeAction         NodeType = "action"
+	TypeCondition      NodeType = "condition"
+	TypeSwitch         NodeType = "switch"
+	TypeSequence       NodeType = "sequence"
+	TypeParallel       NodeType = "parallel"
+	TypeForEach        NodeType = "forEach"
+	TypeDecision       NodeType = "decision"
+	TypeSet            NodeType = "set"
+	TypeLogger         NodeType = "logger"
+	TypeResponse       NodeType = "response"
+	TypeFilter         NodeType = "filter"
+	TypeFind           NodeType = "find"
+	TypeMap            NodeType = "map"
+	TypeReduce         NodeType = "reduce"
 )
 
 // Node is one node in the flow tree. Control nodes carry Children; leaves do not.

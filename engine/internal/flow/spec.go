@@ -53,6 +53,21 @@ type TriggerSpec struct {
 	Input  TriggerInput `json:"input"`
 }
 
+// MessageTriggerSpec is the entrypoint for message-driven flows. When a message
+// arrives via ConsumerManager, it drives a flow execution with the message as
+// input. Implements at-least-once semantics: ack after the flow's required
+// writes commit, seek-back on failure (handled by the consumer implementation).
+type MessageTriggerSpec struct {
+	// ConnectionKey identifies the consumer connection in the registry.
+	ConnectionKey string `json:"connectionKey"`
+	// Topic is the topic/queue to consume from.
+	Topic string `json:"topic"`
+	// FlowID is the flow this trigger belongs to (informational).
+	FlowID string `json:"flowId"`
+	// DeadLetterTopic is the optional topic for messages that fail after retries.
+	DeadLetterTopic string `json:"deadLetterTopic,omitempty"`
+}
+
 // OnError selects how an action failure is handled: "fail" (default) aborts the
 // walk; "continue" records the failure and keeps walking (R3).
 type OnError string
@@ -212,19 +227,20 @@ type LoggerSpec struct {
 // specValidators drives DisallowUnknownFields validation per node type. Every
 // node type has an entry so an unknown field in any spec is rejected cleanly.
 var specValidators = map[NodeType]func(json.RawMessage) error{
-	TypeTrigger:   func(r json.RawMessage) error { _, e := parseSpec[TriggerSpec](r); return e },
-	TypeAction:    func(r json.RawMessage) error { _, e := parseSpec[ActionSpec](r); return e },
-	TypeCondition: func(r json.RawMessage) error { _, e := parseSpec[ConditionSpec](r); return e },
-	TypeSwitch:    func(r json.RawMessage) error { _, e := parseSpec[SwitchSpec](r); return e },
-	TypeSequence:  func(r json.RawMessage) error { _, e := parseSpec[SequenceSpec](r); return e },
-	TypeParallel:  func(r json.RawMessage) error { _, e := parseSpec[ParallelSpec](r); return e },
-	TypeForEach:   func(r json.RawMessage) error { _, e := parseSpec[ForEachSpec](r); return e },
-	TypeDecision:  func(r json.RawMessage) error { _, e := parseSpec[DecisionSpec](r); return e },
-	TypeFilter:    func(r json.RawMessage) error { _, e := parseSpec[FilterSpec](r); return e },
-	TypeFind:      func(r json.RawMessage) error { _, e := parseSpec[FindSpec](r); return e },
-	TypeMap:       func(r json.RawMessage) error { _, e := parseSpec[MapSpec](r); return e },
-	TypeReduce:    func(r json.RawMessage) error { _, e := parseSpec[ReduceSpec](r); return e },
-	TypeSet:       func(r json.RawMessage) error { _, e := parseSpec[SetSpec](r); return e },
-	TypeLogger:    func(r json.RawMessage) error { _, e := parseSpec[LoggerSpec](r); return e },
-	TypeResponse:  func(r json.RawMessage) error { _, e := parseSpec[ResponseSpec](r); return e },
+	TypeTrigger:        func(r json.RawMessage) error { _, e := parseSpec[TriggerSpec](r); return e },
+	TypeMessageTrigger: func(r json.RawMessage) error { _, e := parseSpec[MessageTriggerSpec](r); return e },
+	TypeAction:         func(r json.RawMessage) error { _, e := parseSpec[ActionSpec](r); return e },
+	TypeCondition:      func(r json.RawMessage) error { _, e := parseSpec[ConditionSpec](r); return e },
+	TypeSwitch:         func(r json.RawMessage) error { _, e := parseSpec[SwitchSpec](r); return e },
+	TypeSequence:       func(r json.RawMessage) error { _, e := parseSpec[SequenceSpec](r); return e },
+	TypeParallel:       func(r json.RawMessage) error { _, e := parseSpec[ParallelSpec](r); return e },
+	TypeForEach:        func(r json.RawMessage) error { _, e := parseSpec[ForEachSpec](r); return e },
+	TypeDecision:       func(r json.RawMessage) error { _, e := parseSpec[DecisionSpec](r); return e },
+	TypeFilter:         func(r json.RawMessage) error { _, e := parseSpec[FilterSpec](r); return e },
+	TypeFind:           func(r json.RawMessage) error { _, e := parseSpec[FindSpec](r); return e },
+	TypeMap:            func(r json.RawMessage) error { _, e := parseSpec[MapSpec](r); return e },
+	TypeReduce:         func(r json.RawMessage) error { _, e := parseSpec[ReduceSpec](r); return e },
+	TypeSet:            func(r json.RawMessage) error { _, e := parseSpec[SetSpec](r); return e },
+	TypeLogger:         func(r json.RawMessage) error { _, e := parseSpec[LoggerSpec](r); return e },
+	TypeResponse:       func(r json.RawMessage) error { _, e := parseSpec[ResponseSpec](r); return e },
 }
