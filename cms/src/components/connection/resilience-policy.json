@@ -2,7 +2,7 @@
   "collectionName": "components_connection_resilience_policies",
   "info": {
     "displayName": "resilience-policy",
-    "description": "Author-facing resilience policy in human units (design §3.3.2). The transform (FEAT-003) converts timeoutMs -> Go-cased ns `Timeout` and retry.maxAttempts -> `Retry.MaxAttempts`."
+    "description": "Author-facing resilience policy in human units (design §3.3.2). The transform converts timeoutMs -> Go-cased ns Timeout, retry fields -> Retry struct, and breaker fields -> Breaker struct."
   },
   "options": {},
   "attributes": {
@@ -14,6 +14,11 @@
       "type": "component",
       "repeatable": false,
       "component": "connection.retry-policy"
+    },
+    "breaker": {
+      "type": "component",
+      "repeatable": false,
+      "component": "connection.breaker-policy"
     }
   }
 }

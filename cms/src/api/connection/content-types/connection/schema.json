@@ -18,7 +18,7 @@
     },
     "type": {
       "type": "enumeration",
-      "enum": ["postgres", "valkey", "rest"],
+      "enum": ["postgres", "valkey", "rest", "mysql", "http", "kafka", "rabbitmq"],
       "required": true
     },
     "settings": {
@@ -26,7 +26,10 @@
       "components": [
         "connection.postgres-settings",
         "connection.rest-settings",
-        "connection.valkey-settings"
+        "connection.valkey-settings",
+        "connection.mysql-settings",
+        "connection.kafka-settings",
+        "connection.rabbitmq-settings"
       ]
     },
     "secretRef": {

@@ -1,0 +1,30 @@
+{
+  "collectionName": "components_connection_rabbitmq_settings",
+  "info": {
+    "displayName": "rabbitmq-settings",
+    "description": "Credential-free rabbitmq connection settings (design §3.3.1). URL is the AMQP connection URL. Auth credentials from Connection `secretRef`."
+  },
+  "options": {},
+  "attributes": {
+    "url": {
+      "type": "string",
+      "required": true
+    },
+    "queue": {
+      "type": "string"
+    },
+    "exchange": {
+      "type": "string"
+    },
+    "routingKey": {
+      "type": "string"
+    },
+    "prefetch": {
+      "type": "integer",
+      "default": 10
+    },
+    "maxRetries": {
+      "type": "integer"
+    }
+  }
+}

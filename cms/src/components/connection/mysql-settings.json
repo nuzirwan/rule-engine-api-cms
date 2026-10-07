@@ -1,0 +1,32 @@
+{
+  "collectionName": "components_connection_mysql_settings",
+  "info": {
+    "displayName": "mysql-settings",
+    "description": "Credential-free mysql connection settings (design §3.3.1). Password comes from the Connection `secretRef`. NO dsn."
+  },
+  "options": {},
+  "attributes": {
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "default": 3306
+    },
+    "database": {
+      "type": "string"
+    },
+    "user": {
+      "type": "string"
+    },
+    "maxOpenConns": {
+      "type": "integer"
+    },
+    "maxIdleConns": {
+      "type": "integer"
+    },
+    "connMaxLifetime": {
+      "type": "string"
+    }
+  }
+}

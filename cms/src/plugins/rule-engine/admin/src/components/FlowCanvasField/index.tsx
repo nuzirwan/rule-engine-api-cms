@@ -119,6 +119,7 @@ if (typeof document !== 'undefined') {
 /** The engine Node taxonomy the palette offers (design §4.2 / HLD §3). */
 export const NODE_PALETTE = [
   'trigger',
+  'messageTrigger',
   'action',
   'condition',
   'switch',
@@ -129,6 +130,10 @@ export const NODE_PALETTE = [
   'set',
   'logger',
   'response',
+  'filter',
+  'find',
+  'map',
+  'reduce',
 ] as const;
 
 const EMPTY_TREE: EngineNode = { id: 'trigger', type: 'trigger', spec: {} };
