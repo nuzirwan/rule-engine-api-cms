@@ -12,6 +12,7 @@ import (
 	"nzr-rules-engine/internal/connect"
 	"nzr-rules-engine/internal/flow"
 	"nzr-rules-engine/internal/observ"
+	"nzr-rules-engine/internal/scheduler"
 )
 
 // This file is the control-plane HTTP surface (slice-f-admin-api.md §2): a THIN
@@ -114,12 +115,38 @@ func (a *Admin) mount(mux *http.ServeMux) {
 		wa := newWebhookAdmin(webhookStore, a.guard, a.log)
 		wa.mount(mux)
 	}
+
+	// Schedule admin endpoints (protected by operator guard with schedule.read/write RBAC):
+	if schedStore, ok := a.deps.Admin.(ScheduleAdminStore); ok {
+		if flowStore, ok2 := a.deps.Admin.(scheduler.FlowResolver); ok2 {
+			sa := newScheduleAdmin(
+				schedStore,
+				flowStore,
+				a.interp,
+				flow.Deps{Conns: a.deps.Conns, Decide: a.deps.Decide, Trace: a.deps.Trace, Log: a.deps.Log},
+				a.deps.ExecTimeout,
+				a.guard,
+				a.log,
+			)
+			sa.mount(mux)
+		}
+	}
 }
 
 // requireRole is the route->required-role RBAC map (slice-f-admin-api.md §3.4).
 // A route not listed requires no specific role (any authenticated operator).
 func requireRole(r *http.Request) string {
 	path := r.URL.Path
+
+	// Schedule routes: schedule.read for GET, schedule.write for POST/PUT/DELETE.
+	if strings.HasPrefix(path, "/admin/schedules") {
+		switch r.Method {
+		case http.MethodGet:
+			return "schedule.read"
+		case http.MethodPost, http.MethodPut, http.MethodDelete:
+			return "schedule.write"
+		}
+	}
 
 	// Webhook routes: webhook.read for GET, webhook.write for POST/PUT/DELETE.
 	if strings.HasPrefix(path, "/admin/webhooks") {

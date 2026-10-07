@@ -24,6 +24,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"nzr-rules-engine/internal/auth"
 	"nzr-rules-engine/internal/config"
@@ -86,6 +87,9 @@ type Deps struct {
 	// RATE_LIMIT_BURST, RATE_LIMIT_BY_TOKEN. A zero-valued config (RPS ≤ 0)
 	// disables rate limiting — the zero value is safe for tests.
 	RateLimit RateLimitConfig
+	// ExecTimeout is the execution timeout for scheduled flow runs (used by
+	// schedule admin's /run endpoint). Defaults to 5m if zero.
+	ExecTimeout time.Duration
 }
 
 // NewServer builds an *http.Server whose handler serves the config-driven routes

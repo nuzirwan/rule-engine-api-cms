@@ -48,6 +48,7 @@ import (
 	"nzr-rules-engine/internal/flow"
 	"nzr-rules-engine/internal/httpapi"
 	"nzr-rules-engine/internal/observ"
+	"nzr-rules-engine/internal/scheduler"
 	"nzr-rules-engine/migrations"
 )
 
@@ -151,18 +152,59 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 
 	// --- interpreter + HTTP edge (config-driven router + ops endpoints) ---
 	interp := flow.New()
+
+	// Parse scheduler exec timeout from env (default 5m, max 30m).
+	execTimeout := parseExecTimeout(logger)
+
 	srv, err := httpapi.NewServer(addr, store, interp, httpapi.Deps{
-		Conns:    registry,
-		Decide:   engine,
-		Trace:    tracer,
-		Log:      obsLog,
-		Store:    store,
-		Metrics:  metricsReg,
-		Admin:    adminStore,
-		OperAuth: operAuth,
+		Conns:       registry,
+		Decide:      engine,
+		Trace:       tracer,
+		Log:         obsLog,
+		Store:       store,
+		Metrics:     metricsReg,
+		Admin:       adminStore,
+		OperAuth:    operAuth,
+		ExecTimeout: execTimeout,
 	})
 	if err != nil {
 		return err
+	}
+
+	// --- scheduler (config-store mode only): a background goroutine that polls
+	// enabled schedules and fires flows on their cron schedule. Uses the same
+	// Valkey connection for distributed locking if available. ---
+	var sched *scheduler.Scheduler
+	if adminStore != nil {
+		if schedStore, ok := adminStore.(config.ScheduleStore); ok {
+			if flowStore, ok2 := adminStore.(scheduler.FlowResolver); ok2 {
+				var locker scheduler.DistributedLocker
+				if valkeyAddr := os.Getenv("VALKEY_ADDR"); valkeyAddr != "" {
+					// Reuse an existing valkey client or create a new one for locking.
+					vkClient, verr := valkey.NewClient(valkey.ClientOption{InitAddress: []string{valkeyAddr}, DisableCache: true})
+					if verr != nil {
+						logger.Warn("scheduler: failed to create valkey locker client", slog.Any("err", verr))
+					} else {
+						locker = scheduler.NewValkeyLocker(vkClient, obsLog)
+						defer vkClient.Close()
+					}
+				}
+
+				sched = scheduler.New(scheduler.Config{
+					Store:        schedStore,
+					FlowStore:    flowStore,
+					Executor:     interp,
+					FlowDeps:     flow.Deps{Conns: registry, Decide: engine, Trace: tracer, Log: obsLog},
+					Locker:       locker,
+					Log:          obsLog,
+					Env:          "",
+					ExecTimeout:  execTimeout,
+					PollInterval: 30 * time.Second,
+				})
+				sched.Start(ctx)
+				logger.Info("scheduler started", slog.Bool("distributed_lock", locker != nil))
+			}
+		}
 	}
 
 	// Serve in the background; a non-graceful listen failure aborts the process.
@@ -192,6 +234,13 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 		return serr
 	}
 	logger.Info("http server drained")
+
+	// Stop the scheduler after the HTTP server is drained.
+	if sched != nil {
+		sched.Stop()
+		logger.Info("scheduler stopped")
+	}
+
 	return nil
 }
 
@@ -345,4 +394,21 @@ type jdmLoader struct {
 // LoadJDM implements decision.JDMLoader.
 func (l jdmLoader) LoadJDM(ctx context.Context, env, jdmID string) ([]byte, int, error) {
 	return l.store.GetJDM(ctx, env, jdmID)
+}
+
+// parseExecTimeout reads SCHEDULER_EXEC_TIMEOUT from env, defaults to 5m, max 30m.
+func parseExecTimeout(logger *slog.Logger) time.Duration {
+	timeout := 5 * time.Minute
+	if v := os.Getenv("SCHEDULER_EXEC_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			logger.Warn("invalid SCHEDULER_EXEC_TIMEOUT, using default 5m", slog.String("value", v), slog.Any("err", err))
+		} else if d > 30*time.Minute {
+			logger.Warn("SCHEDULER_EXEC_TIMEOUT exceeds max 30m, capping", slog.String("value", v))
+			timeout = 30 * time.Minute
+		} else if d > 0 {
+			timeout = d
+		}
+	}
+	return timeout
 }
