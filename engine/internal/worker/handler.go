@@ -3,9 +3,13 @@ package worker
 import (
 	"encoding/json"
 	"net/http"
+	"nzr-rules-engine/internal/observ"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Handler provides HTTP endpoints for the worker binary.
@@ -29,6 +33,11 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 // handleExecute processes POST /execute requests.
 func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	start := time.Now()
+
+	// Extract trace context from incoming headers using W3C trace context propagation.
+	// This allows the worker span to be properly parented to the gateway span.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 
 	// Decode the request first.
 	var req ExecuteRequest
@@ -85,9 +94,46 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 		traceID = headerTraceID
 	}
 
+	// Get OTel trace ID if extracted from context, prefer it over header.
+	if otelTraceID := observ.TraceIDFromContext(ctx); otelTraceID != "" {
+		traceID = otelTraceID
+	}
+
+	// Set up request scope in context for logging.
+	ctx = observ.WithScope(ctx, observ.RequestScope{
+		RequestID: reqID,
+		TraceID:   traceID,
+		FlowID:    req.FlowID,
+	})
+
+	// Start a tracing span for the worker execute operation.
+	tracer := h.worker.Tracer()
+	var span observ.Span
+	if tracer != nil {
+		ctx, span = tracer.StartSpan(ctx, "worker.execute", map[string]any{
+			"flow_id":    req.FlowID,
+			"group":      h.worker.GroupID(),
+			"request_id": reqID,
+		})
+	} else {
+		span = nopSpan{}
+	}
+	defer func() {
+		span.End(nil)
+	}()
+
 	// Execute the flow.
 	response, err := h.worker.Execute(ctx, req.FlowID, reqID, traceID, req.Input)
+	duration := time.Since(start)
+
 	if err != nil {
+		// Record metrics for failed request.
+		if m := h.worker.Metrics(); m != nil {
+			m.ObserveRequest(h.worker.GroupID(), req.FlowID, "error", duration)
+		}
+
+		span.Set("error", err.Error())
+
 		// Classify the error for the response.
 		code, status := classifyError(err)
 		writeJSON(w, status, ExecuteResponse{
@@ -101,12 +147,25 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record metrics for successful request.
+	if m := h.worker.Metrics(); m != nil {
+		m.ObserveRequest(h.worker.GroupID(), req.FlowID, "ok", duration)
+	}
+
+	span.Set("status", http.StatusOK)
+
 	// Success response.
 	writeJSON(w, http.StatusOK, ExecuteResponse{
 		Status:   http.StatusOK,
 		Response: response,
 	})
 }
+
+// nopSpan is a no-op Span implementation used when no tracer is available.
+type nopSpan struct{}
+
+func (nopSpan) End(err error)          {}
+func (nopSpan) Set(attr string, v any) {}
 
 // handleHealthz handles GET /healthz (liveness probe).
 // Always returns 200 OK if the process is running.

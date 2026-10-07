@@ -1,0 +1,175 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-isolation
+  namespace: flow-workers
+  labels:
+    app: flow-worker
+spec:
+  # Select all flow-worker pods
+  podSelector:
+    matchLabels:
+      app: flow-worker
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # Ingress rules: only allow traffic from the engine gateway
+  ingress:
+    - from:
+        # Allow traffic from engine pods (gateway)
+        - podSelector:
+            matchLabels:
+              app: engine
+        # Allow traffic from the same namespace for health checks
+        - podSelector:
+            matchLabels:
+              app: flow-worker
+      ports:
+        - protocol: TCP
+          port: 8080
+
+  # Egress rules: workers can only reach PostgreSQL and the engine
+  egress:
+    # Allow DNS resolution (required for service discovery)
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow traffic to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres-engine
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow traffic back to the engine (for callbacks, config reload)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: engine
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+
+    # Allow traffic to Valkey/Redis for caching
+    - to:
+        - podSelector:
+            matchLabels:
+              app: valkey
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: engine-gateway-policy
+  namespace: flow-workers
+  labels:
+    app: engine
+spec:
+  # Select engine gateway pods
+  podSelector:
+    matchLabels:
+      app: engine
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # Ingress rules: accept traffic from ingress controller and workers
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow traffic from workers (health reports, callbacks)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: flow-worker
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+
+  # Egress rules: engine can reach workers, PostgreSQL, Valkey, and Kubernetes API
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow traffic to workers
+    - to:
+        - podSelector:
+            matchLabels:
+              app: flow-worker
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow traffic to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres-engine
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow traffic to Valkey/Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: valkey
+      ports:
+        - protocol: TCP
+          port: 6379
+
+    # Allow traffic to Kubernetes API (for scaling operations)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443

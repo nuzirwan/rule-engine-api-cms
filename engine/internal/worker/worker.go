@@ -33,6 +33,7 @@ type Worker struct {
 	store   config.WorkerStore
 	tracer  observ.Tracer
 	log     observ.Logger
+	metrics *WorkerMetrics
 
 	// Mutable state protected by mu. The atomic swap pattern (LoadGroup builds a
 	// new state, then swaps) ensures in-flight requests are not interrupted.
@@ -64,6 +65,7 @@ type Config struct {
 	Store   config.WorkerStore
 	Tracer  observ.Tracer
 	Log     observ.Logger
+	Metrics *WorkerMetrics
 }
 
 // New creates a Worker for the given group. The worker is not ready until
@@ -75,6 +77,7 @@ func New(cfg Config) *Worker {
 		store:   cfg.Store,
 		tracer:  cfg.Tracer,
 		log:     cfg.Log,
+		metrics: cfg.Metrics,
 	}
 }
 
@@ -163,6 +166,17 @@ func (w *Worker) LoadGroup(ctx context.Context) error {
 	// Mark ready after the first successful load.
 	w.ready.Store(1)
 
+	// Emit metrics after successful load.
+	if w.metrics != nil {
+		w.metrics.SetConfigVersion(w.groupID, group.Version)
+		w.metrics.SetFlowsLoaded(w.groupID, len(flows))
+		w.metrics.SetJDMsLoaded(w.groupID, len(jdmBytes))
+		// Set connections active (1 for each connection key since pools are initialized).
+		for _, connKey := range group.Connections {
+			w.metrics.SetConnectionsActive(w.groupID, connKey, 1)
+		}
+	}
+
 	if w.log != nil {
 		w.log.Emit(ctx, LevelInfo, "group loaded", map[string]any{
 			"group":       w.groupID,
@@ -239,6 +253,12 @@ func (w *Worker) connectionsHealthy() bool {
 
 // GroupID returns the worker's assigned group ID.
 func (w *Worker) GroupID() string { return w.groupID }
+
+// Metrics returns the worker's metrics instance (may be nil).
+func (w *Worker) Metrics() *WorkerMetrics { return w.metrics }
+
+// Tracer returns the worker's tracer instance (may be nil).
+func (w *Worker) Tracer() observ.Tracer { return w.tracer }
 
 // LoadedVersion returns the currently loaded group version, or 0 if not loaded.
 func (w *Worker) LoadedVersion() int {

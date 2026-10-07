@@ -11,17 +11,17 @@ import (
 
 // mockConnector is a test connector that tracks Open calls.
 type mockConnector struct {
-	typ         string
-	openCount   atomic.Int32
-	openErr     error
-	openDelay   time.Duration
-	lifecycle   Lifecycle
+	typ          string
+	openCount    atomic.Int32
+	openErr      error
+	openDelay    time.Duration
+	lifecycle    Lifecycle
 	capabilities Capability
 }
 
-func (m *mockConnector) Type() string                                        { return m.typ }
-func (m *mockConnector) Lifecycle() Lifecycle                                { return m.lifecycle }
-func (m *mockConnector) Capabilities() Capability                            { return m.capabilities }
+func (m *mockConnector) Type() string             { return m.typ }
+func (m *mockConnector) Lifecycle() Lifecycle     { return m.lifecycle }
+func (m *mockConnector) Capabilities() Capability { return m.capabilities }
 func (m *mockConnector) Open(ctx context.Context, def ConnectionDef) (Client, error) {
 	if m.openDelay > 0 {
 		time.Sleep(m.openDelay)
@@ -174,7 +174,7 @@ func TestPool_IdleReaperClosesIdleConnections(t *testing.T) {
 		config,
 		nil,
 	)
-	pool.nowFunc = func() time.Time { return now }
+	pool.setNowFunc(func() time.Time { return now })
 	pool.Start(context.Background())
 	defer pool.Close()
 
@@ -192,7 +192,7 @@ func TestPool_IdleReaperClosesIdleConnections(t *testing.T) {
 
 	// Advance time past idle timeout
 	now = now.Add(100 * time.Millisecond)
-	pool.nowFunc = func() time.Time { return now }
+	pool.setNowFunc(func() time.Time { return now })
 
 	// Wait for reaper to run
 	time.Sleep(50 * time.Millisecond)
@@ -239,7 +239,7 @@ func TestPool_MinWarmPreventedFromReaping(t *testing.T) {
 		config,
 		nil,
 	)
-	pool.nowFunc = func() time.Time { return now }
+	pool.setNowFunc(func() time.Time { return now })
 	pool.Start(context.Background())
 	defer pool.Close()
 
@@ -253,7 +253,7 @@ func TestPool_MinWarmPreventedFromReaping(t *testing.T) {
 
 	// Advance time past idle timeout
 	now = now.Add(100 * time.Millisecond)
-	pool.nowFunc = func() time.Time { return now }
+	pool.setNowFunc(func() time.Time { return now })
 
 	// Wait for reaper to run
 	time.Sleep(50 * time.Millisecond)

@@ -26,6 +26,7 @@ type WorkerClient struct {
 	mu         sync.RWMutex
 	cfg        BreakerConfig
 	log        observ.Logger
+	metrics    *GatewayMetrics
 }
 
 // NewWorkerClient creates a WorkerClient with connection pooling configured.
@@ -59,6 +60,19 @@ func NewWorkerClientWithConfig(log observ.Logger, cfg BreakerConfig) *WorkerClie
 	return c
 }
 
+// NewWorkerClientWithMetrics creates a WorkerClient with custom breaker config and metrics.
+func NewWorkerClientWithMetrics(log observ.Logger, cfg BreakerConfig, metrics *GatewayMetrics) *WorkerClient {
+	c := NewWorkerClient(log)
+	c.cfg = cfg
+	c.metrics = metrics
+	return c
+}
+
+// SetMetrics sets the gateway metrics for circuit breaker state reporting.
+func (c *WorkerClient) SetMetrics(m *GatewayMetrics) {
+	c.metrics = m
+}
+
 // Execute sends an ExecuteRequest to the worker endpoint and returns the response.
 // It wraps the HTTP call with a circuit breaker for the worker's group.
 // Trace headers (X-Request-Id, X-Trace-Id, traceparent) are propagated from context.
@@ -70,6 +84,10 @@ func (c *WorkerClient) Execute(ctx context.Context, group, endpoint string, req 
 	resp, err := breaker.Execute(func() (*worker.ExecuteResponse, error) {
 		return c.doExecute(ctx, endpoint, req)
 	})
+
+	// Update circuit breaker state metric after each request.
+	c.updateBreakerStateMetric(group, breaker)
+
 	if err != nil {
 		// Check if breaker is open
 		if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
@@ -86,6 +104,53 @@ func (c *WorkerClient) Execute(ctx context.Context, group, endpoint string, req 
 		return resp, err
 	}
 	return resp, nil
+}
+
+// updateBreakerStateMetric updates the circuit breaker state metric for a group.
+func (c *WorkerClient) updateBreakerStateMetric(group string, breaker *gobreaker.CircuitBreaker[*worker.ExecuteResponse]) {
+	if c.metrics == nil {
+		return
+	}
+
+	state := breaker.State()
+	var stateInt int
+	switch state {
+	case gobreaker.StateClosed:
+		stateInt = CircuitStateClosed
+	case gobreaker.StateHalfOpen:
+		stateInt = CircuitStateHalfOpen
+	case gobreaker.StateOpen:
+		stateInt = CircuitStateOpen
+	}
+	c.metrics.SetCircuitBreakerState(group, stateInt)
+}
+
+// GetBreakerStates returns the current circuit breaker states for all groups.
+// This can be used for health checks or diagnostics.
+func (c *WorkerClient) GetBreakerStates() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	states := make(map[string]string, len(c.breakers))
+	for group, breaker := range c.breakers {
+		states[group] = breaker.State().String()
+	}
+	return states
+}
+
+// SyncBreakerStateMetrics updates metrics for all circuit breakers.
+// Call this periodically (e.g., every 10s) to keep metrics fresh.
+func (c *WorkerClient) SyncBreakerStateMetrics() {
+	if c.metrics == nil {
+		return
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for group, breaker := range c.breakers {
+		c.updateBreakerStateMetric(group, breaker)
+	}
 }
 
 // getBreaker returns the circuit breaker for the group, creating one if needed.
@@ -210,26 +275,9 @@ func (c *WorkerClient) doExecute(ctx context.Context, endpoint string, req *work
 }
 
 // propagateTraceHeaders copies trace headers from context to the outgoing request.
-// It uses the observ package's scope and trace utilities.
+// It uses the centralized InjectTraceContext for W3C trace context propagation.
 func (c *WorkerClient) propagateTraceHeaders(ctx context.Context, req *http.Request) {
-	// Get request scope from context
-	if scope, ok := observ.ScopeFrom(ctx); ok {
-		if scope.RequestID != "" {
-			req.Header.Set("X-Request-Id", scope.RequestID)
-		}
-		if scope.TraceID != "" {
-			req.Header.Set("X-Trace-Id", scope.TraceID)
-		}
-	}
-
-	// Get OTel trace ID if available
-	if traceID := observ.TraceIDFromContext(ctx); traceID != "" {
-		req.Header.Set("X-Trace-Id", traceID)
-		// Also set W3C traceparent for OTel propagation
-		// Format: 00-{trace_id}-{span_id}-{flags}
-		// We set a minimal version without span_id since we don't have it here
-		req.Header.Set("traceparent", fmt.Sprintf("00-%s-0000000000000000-01", traceID))
-	}
+	InjectTraceContext(ctx, req)
 }
 
 // classifyHTTPStatus maps HTTP status codes to error codes.
