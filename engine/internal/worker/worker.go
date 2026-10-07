@@ -257,6 +257,9 @@ func (w *Worker) GroupID() string { return w.groupID }
 // Metrics returns the worker's metrics instance (may be nil).
 func (w *Worker) Metrics() *WorkerMetrics { return w.metrics }
 
+// Tracer returns the worker's tracer instance (may be nil).
+func (w *Worker) Tracer() observ.Tracer { return w.tracer }
+
 // LoadedVersion returns the currently loaded group version, or 0 if not loaded.
 func (w *Worker) LoadedVersion() int {
 	w.mu.RLock()

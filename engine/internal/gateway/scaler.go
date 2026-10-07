@@ -27,6 +27,7 @@ type ScalerConfig struct {
 	Namespace      string
 	Store          GroupReader
 	Log            observ.Logger
+	Tracer         observ.Tracer
 	Metrics        *GatewayMetrics
 	StartupTimeout time.Duration
 }
@@ -40,6 +41,7 @@ type Scaler struct {
 	namespace      string
 	store          GroupReader
 	log            observ.Logger
+	tracer         observ.Tracer
 	metrics        *GatewayMetrics
 	startupTimeout time.Duration
 }
@@ -55,6 +57,7 @@ func NewScaler(cfg ScalerConfig) *Scaler {
 		namespace:      cfg.Namespace,
 		store:          cfg.Store,
 		log:            cfg.Log,
+		tracer:         cfg.Tracer,
 		metrics:        cfg.Metrics,
 		startupTimeout: timeout,
 	}
@@ -66,10 +69,19 @@ func NewScaler(cfg ScalerConfig) *Scaler {
 //   - dynamic: scale to at least 1 replica if currently at 0, wait for ready
 //   - ephemeral: not supported yet (returns error)
 func (s *Scaler) EnsureReady(ctx context.Context, group string) error {
+	// Start a tracing span for the ensure_ready operation.
+	ctx, span := StartScaleSpan(ctx, s.tracer, "ensure_ready", group)
+	defer func() {
+		span.End(nil)
+	}()
+
 	cfg, err := s.store.GetGroup(ctx, "", group)
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("get group config: %w", err)
 	}
+
+	span.Set("scaling_mode", string(cfg.Scaling.Mode))
 
 	switch cfg.Scaling.Mode {
 	case config.ScalingModeStatic:
@@ -79,9 +91,11 @@ func (s *Scaler) EnsureReady(ctx context.Context, group string) error {
 		return s.ensureDynamicDeployment(ctx, group)
 
 	case config.ScalingModeEphemeral:
+		span.Set("error", "ephemeral_not_supported")
 		return ErrEphemeralNotSupported
 
 	default:
+		span.Set("error", "unknown_scaling_mode")
 		return fmt.Errorf("unknown scaling mode: %s", cfg.Scaling.Mode)
 	}
 }
@@ -144,10 +158,17 @@ func (s *Scaler) ensureDynamicDeployment(ctx context.Context, group string) erro
 
 // ScaleUp sets the deployment replicas to at least the given minimum.
 func (s *Scaler) ScaleUp(ctx context.Context, group string, minReplicas int32) error {
+	// Start a tracing span for the scale_up operation.
+	ctx, span := StartScaleSpan(ctx, s.tracer, "up", group)
+	defer func() {
+		span.End(nil)
+	}()
+
 	deploymentName := "worker-" + group
 
 	deployment, err := s.k8s.AppsV1().Deployments(s.namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("get deployment %s: %w", deploymentName, err)
 	}
 
@@ -155,6 +176,9 @@ func (s *Scaler) ScaleUp(ctx context.Context, group string, minReplicas int32) e
 	if deployment.Spec.Replicas != nil {
 		currentReplicas = *deployment.Spec.Replicas
 	}
+
+	span.Set("current_replicas", int(currentReplicas))
+	span.Set("target_replicas", int(minReplicas))
 
 	// Only scale up if current < minimum.
 	if currentReplicas >= minReplicas {
@@ -169,6 +193,7 @@ func (s *Scaler) ScaleUp(ctx context.Context, group string, minReplicas int32) e
 	deployment.Spec.Replicas = &minReplicas
 	_, err = s.k8s.AppsV1().Deployments(s.namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("update deployment %s replicas: %w", deploymentName, err)
 	}
 
@@ -179,16 +204,26 @@ func (s *Scaler) ScaleUp(ctx context.Context, group string, minReplicas int32) e
 // ScaleDown allows the deployment to scale to 0 (removes any minimum override).
 // For dynamic mode, this sets replicas to 0. For static mode, this is a no-op.
 func (s *Scaler) ScaleDown(ctx context.Context, group string) error {
+	// Start a tracing span for the scale_down operation.
+	ctx, span := StartScaleSpan(ctx, s.tracer, "down", group)
+	defer func() {
+		span.End(nil)
+	}()
+
 	cfg, err := s.store.GetGroup(ctx, "", group)
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("get group config: %w", err)
 	}
+
+	span.Set("scaling_mode", string(cfg.Scaling.Mode))
 
 	// Static groups don't scale to 0.
 	if cfg.Scaling.Mode == config.ScalingModeStatic {
 		s.logEvent(ctx, "debug", "scaler.scale_down_noop", group, map[string]any{
 			"reason": "static mode",
 		})
+		span.Set("noop", true)
 		return nil
 	}
 
@@ -196,6 +231,7 @@ func (s *Scaler) ScaleDown(ctx context.Context, group string) error {
 
 	deployment, err := s.k8s.AppsV1().Deployments(s.namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("get deployment %s: %w", deploymentName, err)
 	}
 
@@ -206,6 +242,7 @@ func (s *Scaler) ScaleDown(ctx context.Context, group string) error {
 
 	_, err = s.k8s.AppsV1().Deployments(s.namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
+		span.Set("error", err.Error())
 		return fmt.Errorf("update deployment %s replicas to 0: %w", deploymentName, err)
 	}
 

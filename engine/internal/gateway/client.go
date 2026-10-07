@@ -275,26 +275,9 @@ func (c *WorkerClient) doExecute(ctx context.Context, endpoint string, req *work
 }
 
 // propagateTraceHeaders copies trace headers from context to the outgoing request.
-// It uses the observ package's scope and trace utilities.
+// It uses the centralized InjectTraceContext for W3C trace context propagation.
 func (c *WorkerClient) propagateTraceHeaders(ctx context.Context, req *http.Request) {
-	// Get request scope from context
-	if scope, ok := observ.ScopeFrom(ctx); ok {
-		if scope.RequestID != "" {
-			req.Header.Set("X-Request-Id", scope.RequestID)
-		}
-		if scope.TraceID != "" {
-			req.Header.Set("X-Trace-Id", scope.TraceID)
-		}
-	}
-
-	// Get OTel trace ID if available
-	if traceID := observ.TraceIDFromContext(ctx); traceID != "" {
-		req.Header.Set("X-Trace-Id", traceID)
-		// Also set W3C traceparent for OTel propagation
-		// Format: 00-{trace_id}-{span_id}-{flags}
-		// We set a minimal version without span_id since we don't have it here
-		req.Header.Set("traceparent", fmt.Sprintf("00-%s-0000000000000000-01", traceID))
-	}
+	InjectTraceContext(ctx, req)
 }
 
 // classifyHTTPStatus maps HTTP status codes to error codes.
