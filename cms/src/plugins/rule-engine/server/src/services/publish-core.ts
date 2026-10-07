@@ -20,8 +20,14 @@ import {
   runPublishSequence,
 } from './validation';
 import {
+  GroupEntry,
+  ScheduleEntry,
+  WebhookEntry,
   connectionToEnginePayload,
+  groupToEnginePayload,
   jdmToEnginePayload,
+  scheduleToEnginePayload,
+  webhookToEnginePayload,
 } from './publish-transform';
 import {
   collectReferences,
@@ -205,4 +211,189 @@ export async function runConnectionPublish(
     return { created: true };
   }
   return { created: false };
+}
+
+// ----------------------------------------------------------------------------
+// Webhook / Schedule / Group publish (FEAT-001).
+//
+// Webhook is a two-step create+publish like flows. Schedule is mutable CRUD
+// (GET -> 404 ? create : update). Group is a single idempotent PUT upsert. Each
+// loads the populated Strapi doc, builds the payload via a PURE transform (which
+// may throw TransformError BEFORE any admin call), and writes back the sync
+// status onto the CMS doc.
+// ----------------------------------------------------------------------------
+
+/** Map a loaded Webhook document to the transform's WebhookEntry shape. */
+export function toWebhookEntry(doc: any): WebhookEntry {
+  return {
+    webhookId: doc.webhookId,
+    name: doc.name,
+    secretRef: doc.secretRef ?? null,
+    provider: doc.provider,
+    // flowId is a relation; its value is the related flow's flowId uid.
+    flowId: typeof doc.flowId === 'object' && doc.flowId !== null ? doc.flowId.flowId : doc.flowId,
+    mapping: doc.mapping ?? null,
+    filter: doc.filter ?? null,
+  };
+}
+
+/** Map a loaded Schedule document to the transform's ScheduleEntry shape. */
+export function toScheduleEntry(doc: any): ScheduleEntry {
+  return {
+    scheduleId: doc.scheduleId,
+    name: doc.name,
+    schedule: doc.schedule,
+    timezone: doc.timezone ?? null,
+    flowId: typeof doc.flowId === 'object' && doc.flowId !== null ? doc.flowId.flowId : doc.flowId,
+    input: doc.input ?? null,
+    enabled: doc.enabled ?? null,
+  };
+}
+
+/** Map a loaded Group document to the transform's GroupEntry shape. */
+export function toGroupEntry(doc: any): GroupEntry {
+  return {
+    groupId: doc.groupId,
+    name: doc.name,
+    description: doc.description ?? null,
+    enabled: doc.enabled ?? null,
+    scalingMode: doc.scalingMode,
+    minReplicas: doc.minReplicas,
+    maxReplicas: doc.maxReplicas,
+    scaleDownDelaySeconds: doc.scaleDownDelaySeconds ?? null,
+    startupTimeoutSeconds: doc.startupTimeoutSeconds ?? null,
+    resources: doc.resources ?? null,
+    connections: Array.isArray(doc.connections)
+      ? doc.connections.map((c: any) => ({ key: c.key }))
+      : null,
+  };
+}
+
+/**
+ * Push a single published Webhook to the engine: POST /admin/webhooks (create,
+ * returns {id,version}) then POST /admin/webhooks/{id}/publish to activate. On
+ * success writes back {engineVersion, lastSyncStatus:'synced'}; on AdminApiError
+ * writes {lastSyncStatus:'failed'} and rethrows. TransformError (empty flowId)
+ * throws BEFORE any admin call.
+ */
+export async function runWebhookPublish(
+  strapi: any,
+  documentId: string
+): Promise<{ engineVersion: number }> {
+  const doc = await strapi
+    .documents('api::webhook.webhook')
+    .findOne({ documentId, populate: ['flowId', 'mapping', 'filter', 'environment'] });
+  if (!doc) {
+    throw new Error(`webhook document ${documentId} not found`);
+  }
+
+  // Build the payload FIRST so a TransformError aborts before any HTTP.
+  const payload = webhookToEnginePayload(toWebhookEntry(doc));
+  const client = clientForEntry(doc);
+
+  try {
+    const created = await client.createWebhook(payload);
+    await client.publishWebhook(created.id, created.version);
+    await strapi
+      .documents('api::webhook.webhook')
+      .update({
+        documentId,
+        data: { engineVersion: created.version, lastSyncStatus: 'synced' },
+      })
+      .catch(() => {});
+    return { engineVersion: created.version };
+  } catch (err) {
+    if (err instanceof AdminApiError) {
+      await strapi
+        .documents('api::webhook.webhook')
+        .update({ documentId, data: { lastSyncStatus: 'failed' } })
+        .catch(() => {});
+    }
+    throw err;
+  }
+}
+
+/**
+ * Push a single Schedule to the engine. Schedules are mutable CRUD: GET the
+ * engine schedule and, on 404, create; otherwise update. The transform validates
+ * the cron + IANA timezone and throws BEFORE any admin call on a bad value. On
+ * success writes back lastSyncStatus='synced' (+ lastRun/nextRun when returned);
+ * on AdminApiError writes 'failed' and rethrows.
+ */
+export async function runSchedulePublish(
+  strapi: any,
+  documentId: string
+): Promise<{ created: boolean }> {
+  const doc = await strapi
+    .documents('api::schedule.schedule')
+    .findOne({ documentId, populate: ['flowId', 'environment'] });
+  if (!doc) {
+    throw new Error(`schedule document ${documentId} not found`);
+  }
+
+  // Build the payload FIRST so a bad cron/timezone aborts before any HTTP.
+  const payload = scheduleToEnginePayload(toScheduleEntry(doc));
+  const client = clientForEntry(doc);
+
+  try {
+    let created = false;
+    let result: any;
+    try {
+      await client.getSchedule(payload.id);
+    } catch (err) {
+      if (err instanceof AdminApiError && err.status === 404) {
+        result = await client.createSchedule(payload);
+        created = true;
+      } else {
+        throw err;
+      }
+    }
+    if (!created) {
+      const { id: _id, ...update } = payload;
+      result = await client.updateSchedule(payload.id, update);
+    }
+
+    const data: Record<string, unknown> = { lastSyncStatus: 'synced' };
+    if (result?.lastRun != null) data.lastRun = result.lastRun;
+    if (result?.nextRun != null) data.nextRun = result.nextRun;
+    await strapi
+      .documents('api::schedule.schedule')
+      .update({ documentId, data })
+      .catch(() => {});
+
+    return { created };
+  } catch (err) {
+    if (err instanceof AdminApiError) {
+      await strapi
+        .documents('api::schedule.schedule')
+        .update({ documentId, data: { lastSyncStatus: 'failed' } })
+        .catch(() => {});
+    }
+    throw err;
+  }
+}
+
+/**
+ * Push a single Group to the engine via PUT /admin/groups/{id} (idempotent
+ * upsert). The transform flattens CMS fields to the nested ScalingConfig,
+ * converting seconds -> Go duration strings and connections -> string[] of keys,
+ * and throws TransformError (maxReplicas<minReplicas / static minReplicas<1)
+ * BEFORE any admin call.
+ */
+export async function runGroupPublish(
+  strapi: any,
+  documentId: string
+): Promise<{ groupId: string }> {
+  const doc = await strapi
+    .documents('api::group.group')
+    .findOne({ documentId, populate: ['connections', 'resources', 'environment'] });
+  if (!doc) {
+    throw new Error(`group document ${documentId} not found`);
+  }
+
+  // Build the payload FIRST so a validation TransformError aborts before any HTTP.
+  const { groupId, body } = groupToEnginePayload(toGroupEntry(doc));
+  const client = clientForEntry(doc);
+  await client.upsertGroup(groupId, body);
+  return { groupId };
 }

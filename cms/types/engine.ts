@@ -325,22 +325,42 @@ export interface WebhookConfig {
   filter?: WebhookFilterEntry[];
 }
 
-/** POST /admin/webhooks body — createWebhookRequest. */
+/**
+ * POST /admin/webhooks body — createWebhookRequest.
+ *
+ * The engine Go struct (webhook_admin.go `createWebhookRequest`) uses a
+ * top-level `id` (NOT `webhookId`) and MAP-shaped `mapping`/`filter`:
+ *   mapping  map[string]string   — { [sourceJsonPath]: targetContextPath }
+ *   filter   map[string][]string — { [jsonPath]: allowedValues }
+ */
 export interface CreateWebhookRequest {
   env: string;
-  webhookId: string;
+  id: string;
   name: string;
   secretRef?: string;
   provider: WebhookProvider;
   flowId: string;
-  mapping?: WebhookMappingEntry[];
-  filter?: WebhookFilterEntry[];
+  mapping?: Record<string, string>;
+  filter?: Record<string, string[]>;
 }
 
 /** 201 from POST /admin/webhooks. */
 export interface CreateWebhookResponse {
-  webhookId: string;
+  id: string;
   version: number;
+}
+
+/** POST /admin/webhooks/{id}/publish body — publishWebhookRequest. */
+export interface PublishWebhookRequest {
+  env: string;
+  version: number;
+}
+
+/** 200 from POST /admin/webhooks/{id}/publish. */
+export interface PublishWebhookResponse {
+  webhookId: string;
+  activeVersion: number;
+  action: string;
 }
 
 /** A webhook summary returned by GET /admin/webhooks. */
@@ -396,6 +416,76 @@ export interface WebhookLogsResponse {
   webhookId: string;
   logs: WebhookLogEntry[];
   total: number;
+}
+
+// ============================================================================
+// Group Types (FEAT-001) — worker group scaling policy + connection pool
+// ============================================================================
+//
+// Reconciled to the engine Go structs (config/group.go, admin_groups.go):
+//   * PUT /admin/groups/{id} body is FLAT (`env` top-level); id comes from the
+//     URL path, NOT the body.
+//   * `scaling` is NESTED (config.ScalingConfig): the field is `mode` (NOT
+//     scalingMode) and durations (`scaleDownDelay`/`startupTimeout`) are Go
+//     duration STRINGS (e.g. "5m", "30s"), not integers.
+
+/** Scaling mode — mirrors engine config.ScalingMode. */
+export type ScalingMode = 'static' | 'dynamic' | 'ephemeral';
+
+/** Kubernetes resource requests/limits — mirrors engine config.Resources. */
+export interface EngineResourceLimits {
+  cpuRequest?: string;
+  cpuLimit?: string;
+  memoryRequest?: string;
+  memoryLimit?: string;
+}
+
+/** Nested scaling config — mirrors engine config.ScalingConfig. */
+export interface ScalingConfig {
+  mode: ScalingMode;
+  minReplicas: number;
+  maxReplicas: number;
+  /** Go duration string, e.g. "5m". */
+  scaleDownDelay?: string;
+  /** Go duration string, e.g. "30s". */
+  startupTimeout?: string;
+  resources?: EngineResourceLimits;
+}
+
+/** PUT /admin/groups/{id} body — putGroupRequest. Flat; id from the URL path. */
+export interface GroupPutRequest {
+  env?: string;
+  name: string;
+  description?: string;
+  connections?: string[];
+  scaling: ScalingConfig;
+  enabled?: boolean;
+  reason?: string;
+}
+
+/** The full group shape returned by GET /admin/groups/{id} — mirrors config.Group. */
+export interface EngineGroup {
+  id: string;
+  name: string;
+  description?: string;
+  version: number;
+  connections: string[];
+  scaling: ScalingConfig;
+  enabled: boolean;
+}
+
+/** A group summary row returned by GET /admin/groups — mirrors config.GroupSummary. */
+export interface GroupSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  version: number;
+  updatedAt: string;
+}
+
+/** 200 from GET /admin/groups. */
+export interface ListGroupsResponse {
+  groups: GroupSummary[];
 }
 
 // ============================================================================

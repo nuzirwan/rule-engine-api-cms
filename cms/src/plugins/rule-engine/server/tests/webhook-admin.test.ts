@@ -99,20 +99,32 @@ describe('AdminClient webhook methods', () => {
   });
 
   describe('createWebhook', () => {
-    it('posts to /admin/webhooks with env', async () => {
+    it('posts to /admin/webhooks with top-level `id` and MAP-shaped mapping/filter', async () => {
+      let seen: any;
       engine()
-        .post('/admin/webhooks', (body) => body.env === 'test' && body.webhookId === 'wh-new')
-        .reply(201, { webhookId: 'wh-new', version: 1 });
+        .post('/admin/webhooks', (body) => {
+          seen = body;
+          return body.env === 'test' && body.id === 'wh-new';
+        })
+        .reply(201, { id: 'wh-new', version: 1 });
 
       const client = makeClient();
       const result = await client.createWebhook({
-        webhookId: 'wh-new',
+        id: 'wh-new',
         name: 'New Webhook',
+        secretRef: 'env:WH_SECRET',
         provider: 'generic',
         flowId: 'handler-flow',
+        mapping: { '$.data.id': 'payment_id' },
+        filter: { '$.type': ['payment_intent.succeeded'] },
       });
 
-      expect(result).toMatchObject({ webhookId: 'wh-new', version: 1 });
+      // Contract: top-level `id` (NOT webhookId), object-shaped mapping/filter.
+      expect(seen).not.toHaveProperty('webhookId');
+      expect(seen.id).toBe('wh-new');
+      expect(seen.mapping).toEqual({ '$.data.id': 'payment_id' });
+      expect(seen.filter).toEqual({ '$.type': ['payment_intent.succeeded'] });
+      expect(result).toMatchObject({ id: 'wh-new', version: 1 });
     });
 
     it('throws AdminApiError for 400', async () => {
@@ -120,8 +132,36 @@ describe('AdminClient webhook methods', () => {
 
       const client = makeClient();
       await expect(
-        client.createWebhook({ webhookId: '', name: '', provider: 'generic', flowId: '' })
+        client.createWebhook({ id: '', name: '', provider: 'generic', flowId: '' })
       ).rejects.toMatchObject({
+        status: 400,
+        recoverable: false,
+      });
+    });
+  });
+
+  describe('publishWebhook', () => {
+    it('posts to /admin/webhooks/{id}/publish with {env,version}', async () => {
+      let seen: any;
+      engine()
+        .post('/admin/webhooks/wh-1/publish', (body) => {
+          seen = body;
+          return true;
+        })
+        .reply(200, { webhookId: 'wh-1', activeVersion: 3, action: 'publish' });
+
+      const client = makeClient();
+      const result = await client.publishWebhook('wh-1', 3);
+
+      expect(seen).toEqual({ env: 'test', version: 3 });
+      expect(result).toMatchObject({ webhookId: 'wh-1', activeVersion: 3, action: 'publish' });
+    });
+
+    it('throws AdminApiError for 400 (version required)', async () => {
+      engine().post('/admin/webhooks/wh-1/publish').reply(400, { error: 'version is required' });
+
+      const client = makeClient();
+      await expect(client.publishWebhook('wh-1', 0)).rejects.toMatchObject({
         status: 400,
         recoverable: false,
       });

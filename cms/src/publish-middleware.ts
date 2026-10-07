@@ -15,6 +15,9 @@ import {
   persistFlowWriteBack,
   runJdmPublish,
   runConnectionPublish,
+  runWebhookPublish,
+  runSchedulePublish,
+  runGroupPublish,
 } from './plugins/rule-engine/server/src/services/publish-core';
 import { PublishBlockedError } from './plugins/rule-engine/server/src/services/validation';
 import { TransformError } from './plugins/rule-engine/server/src/services/publish-transform';
@@ -23,6 +26,9 @@ const PUBLISHABLE = new Set([
   'api::flow.flow',
   'api::jdm.jdm',
   'api::connection.connection',
+  'api::webhook.webhook',
+  'api::schedule.schedule',
+  'api::group.group',
 ]);
 
 export function buildPublishMiddleware(strapi: any) {
@@ -84,6 +90,48 @@ export function buildPublishMiddleware(strapi: any) {
           throw new Error(`connection publish blocked (transform): ${(err as Error).message}`);
         }
         throw new Error(`connection publish failed: ${(err as Error).message}`);
+      }
+      return next();
+    }
+
+    // --- Webhook: two-step create+publish on the engine. ---
+    if (context.uid === 'api::webhook.webhook') {
+      try {
+        await runWebhookPublish(strapi, documentId);
+      } catch (err) {
+        if (err instanceof TransformError) {
+          throw new Error(`webhook publish blocked (transform): ${(err as Error).message}`);
+        }
+        throw new Error(`webhook publish failed: ${(err as Error).message}`);
+      }
+      return next();
+    }
+
+    // --- Schedule: mutable CRUD reconcile (create on 404, else update). ---
+    //     NOTE: schedule has draftAndPublish:false, so this branch is latent
+    //     until the content-type is flipped; it is intentionally added for
+    //     parity so a future flip "just works". Do NOT flip the schema here.
+    if (context.uid === 'api::schedule.schedule') {
+      try {
+        await runSchedulePublish(strapi, documentId);
+      } catch (err) {
+        if (err instanceof TransformError) {
+          throw new Error(`schedule publish blocked (transform): ${(err as Error).message}`);
+        }
+        throw new Error(`schedule publish failed: ${(err as Error).message}`);
+      }
+      return next();
+    }
+
+    // --- Group: idempotent PUT upsert on the engine. ---
+    if (context.uid === 'api::group.group') {
+      try {
+        await runGroupPublish(strapi, documentId);
+      } catch (err) {
+        if (err instanceof TransformError) {
+          throw new Error(`group publish blocked (transform): ${(err as Error).message}`);
+        }
+        throw new Error(`group publish failed: ${(err as Error).message}`);
       }
       return next();
     }

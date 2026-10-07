@@ -4,8 +4,13 @@ import {
   TransformError,
   connectionToEnginePayload,
   flowToEnginePayload,
+  groupToEnginePayload,
+  isValidCron,
+  isValidTimezone,
   jdmToEnginePayload,
   resilienceToEngine,
+  scheduleToEnginePayload,
+  webhookToEnginePayload,
 } from '../src/services/publish-transform';
 import {
   fmcOrderByIdFlow,
@@ -159,5 +164,168 @@ describe('§6.1 connectionToEnginePayload', () => {
     const conn = { key: 'k', type: 'postgres', settings, secretRef: '', resilience: null };
     expect(() => connectionToEnginePayload(conn, '')).toThrow(TransformError);
     expect(() => connectionToEnginePayload(conn, '')).toThrow(key);
+  });
+});
+
+// §6.1 — FEAT-001 transforms: webhook array->map, group seconds->duration-string
+// + id-strip + connections->keys, and the cron/timezone validators.
+describe('§6.1 webhookToEnginePayload', () => {
+  const base = {
+    webhookId: 'wh-stripe',
+    name: 'Stripe Payment',
+    secretRef: 'env:STRIPE_SECRET',
+    provider: 'stripe' as const,
+    flowId: 'payment-flow',
+  };
+
+  it('maps webhookId->id and arrays to MAP-shaped mapping/filter', () => {
+    const payload = webhookToEnginePayload({
+      ...base,
+      mapping: [
+        { sourceJsonPath: '$.data.object.id', targetContextPath: 'payment_id' },
+        { sourceJsonPath: '$.data.object.amount', targetContextPath: 'amount' },
+      ],
+      filter: [{ jsonPath: '$.type', allowedValues: ['payment_intent.succeeded', 'charge.refunded'] }],
+    });
+
+    expect(payload.id).toBe('wh-stripe');
+    expect(payload).not.toHaveProperty('webhookId');
+    expect(payload.mapping).toEqual({
+      '$.data.object.id': 'payment_id',
+      '$.data.object.amount': 'amount',
+    });
+    expect(payload.filter).toEqual({ '$.type': ['payment_intent.succeeded', 'charge.refunded'] });
+    expect(payload.secretRef).toBe('env:STRIPE_SECRET');
+  });
+
+  it('omits mapping/filter/secretRef when absent/empty', () => {
+    const payload = webhookToEnginePayload({ ...base, secretRef: null, mapping: [], filter: null });
+    expect(payload).not.toHaveProperty('mapping');
+    expect(payload).not.toHaveProperty('filter');
+    expect(payload).not.toHaveProperty('secretRef');
+  });
+
+  it('throws TransformError when flowId is empty', () => {
+    expect(() => webhookToEnginePayload({ ...base, flowId: '' })).toThrow(TransformError);
+  });
+});
+
+describe('§6.1 groupToEnginePayload', () => {
+  const base = {
+    groupId: 'orders',
+    name: 'Orders Group',
+    scalingMode: 'dynamic' as const,
+    minReplicas: 1,
+    maxReplicas: 5,
+    scaleDownDelaySeconds: 300,
+    startupTimeoutSeconds: 30,
+  };
+
+  it('nests scaling with mode, seconds->Go duration strings', () => {
+    const { groupId, body } = groupToEnginePayload(base);
+    expect(groupId).toBe('orders');
+    expect(body.scaling.mode).toBe('dynamic');
+    expect(body.scaling.minReplicas).toBe(1);
+    expect(body.scaling.maxReplicas).toBe(5);
+    expect(body.scaling.scaleDownDelay).toBe('300s');
+    expect(body.scaling.startupTimeout).toBe('30s');
+    // field is `mode`, not scalingMode.
+    expect(body.scaling).not.toHaveProperty('scalingMode');
+  });
+
+  it('strips Strapi id/__component from the resources component', () => {
+    const { body } = groupToEnginePayload({
+      ...base,
+      resources: {
+        id: 42,
+        __component: 'config.resource-limits',
+        cpuRequest: '100m',
+        cpuLimit: '500m',
+        memoryRequest: '128Mi',
+        memoryLimit: '512Mi',
+      },
+    });
+    expect(body.scaling.resources).toEqual({
+      cpuRequest: '100m',
+      cpuLimit: '500m',
+      memoryRequest: '128Mi',
+      memoryLimit: '512Mi',
+    });
+    expect(body.scaling.resources).not.toHaveProperty('id');
+    expect(body.scaling.resources).not.toHaveProperty('__component');
+  });
+
+  it('collapses the connections relation to a string[] of keys', () => {
+    const { body } = groupToEnginePayload({
+      ...base,
+      connections: [{ key: 'fmc-pg' }, { key: 'redis-cache' }],
+    });
+    expect(body.connections).toEqual(['fmc-pg', 'redis-cache']);
+  });
+
+  it('throws TransformError when maxReplicas < minReplicas', () => {
+    expect(() => groupToEnginePayload({ ...base, minReplicas: 5, maxReplicas: 2 })).toThrow(
+      TransformError
+    );
+  });
+
+  it('throws TransformError when static mode has minReplicas < 1', () => {
+    expect(() =>
+      groupToEnginePayload({ ...base, scalingMode: 'static', minReplicas: 0, maxReplicas: 3 })
+    ).toThrow(TransformError);
+  });
+});
+
+describe('§6.1 scheduleToEnginePayload + cron/timezone validators', () => {
+  const base = {
+    scheduleId: 'nightly',
+    name: 'Nightly Job',
+    schedule: '0 0 * * *',
+    timezone: 'Asia/Jakarta',
+    flowId: 'cleanup-flow',
+  };
+
+  it('maps the schedule, defaulting an empty timezone to UTC', () => {
+    const payload = scheduleToEnginePayload({ ...base, timezone: null });
+    expect(payload.id).toBe('nightly');
+    expect(payload.timezone).toBe('UTC');
+    expect(payload.schedule).toBe('0 0 * * *');
+    expect(payload.flowId).toBe('cleanup-flow');
+  });
+
+  it('throws on empty flowId, invalid cron, and non-IANA timezone', () => {
+    expect(() => scheduleToEnginePayload({ ...base, flowId: '' })).toThrow(TransformError);
+    expect(() => scheduleToEnginePayload({ ...base, schedule: 'not-a-cron' })).toThrow(TransformError);
+    expect(() => scheduleToEnginePayload({ ...base, schedule: '0 0 * *' })).toThrow(TransformError);
+    expect(() => scheduleToEnginePayload({ ...base, timezone: 'Mars/Phobos ' })).not.toThrow();
+    expect(() => scheduleToEnginePayload({ ...base, timezone: 'not a zone' })).toThrow(TransformError);
+  });
+
+  it('isValidCron accepts 5-field, @aliases, and @every', () => {
+    expect(isValidCron('0 0 * * *')).toBe(true);
+    expect(isValidCron('*/5 * * * *')).toBe(true);
+    expect(isValidCron('0 9-17 * * 1-5')).toBe(true);
+    expect(isValidCron('@daily')).toBe(true);
+    expect(isValidCron('@midnight')).toBe(true);
+    expect(isValidCron('@every 1h30m')).toBe(true);
+    expect(isValidCron('@every 30s')).toBe(true);
+  });
+
+  it('isValidCron rejects malformed expressions', () => {
+    expect(isValidCron('')).toBe(false);
+    expect(isValidCron('0 0 * *')).toBe(false); // 4 fields
+    expect(isValidCron('0 0 * * * *')).toBe(false); // 6 fields
+    expect(isValidCron('@bogus')).toBe(false);
+    expect(isValidCron('@every notaduration')).toBe(false);
+    expect(isValidCron('abc def ghi jkl mno')).toBe(false);
+  });
+
+  it('isValidTimezone accepts UTC and Region/City, rejects junk', () => {
+    expect(isValidTimezone('UTC')).toBe(true);
+    expect(isValidTimezone('Asia/Jakarta')).toBe(true);
+    expect(isValidTimezone('America/Argentina/Salta')).toBe(true);
+    expect(isValidTimezone('')).toBe(false);
+    expect(isValidTimezone('not a zone')).toBe(false);
+    expect(isValidTimezone('Jakarta')).toBe(false);
   });
 });

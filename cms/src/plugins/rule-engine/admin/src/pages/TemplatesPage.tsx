@@ -10,7 +10,8 @@
 //   * Layouts.Root/Header/Content for page structure
 
 import * as React from 'react';
-import { useFetchClient, Link as RouterLink } from '@strapi/admin/strapi-admin';
+import { useFetchClient } from '@strapi/admin/strapi-admin';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
   Button,

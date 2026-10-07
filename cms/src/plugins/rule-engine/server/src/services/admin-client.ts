@@ -22,18 +22,23 @@ import type {
   CreateWebhookRequest,
   CreateWebhookResponse,
   DryRunFlowRequest,
+  EngineGroup,
   GetConnectionResponse,
   GetFlowResponse,
   GetJdmResponse,
   GetScheduleResponse,
   GetWebhookResponse,
+  GroupPutRequest,
   ListConnectionsResponse,
   ListFlowsResponse,
   ListFlowVersionsResponse,
+  ListGroupsResponse,
   ListJdmsResponse,
   ListScheduleRunsResponse,
   ListSchedulesResponse,
   ListWebhooksResponse,
+  PublishWebhookRequest,
+  PublishWebhookResponse,
   SetActiveResponse,
   TriggerScheduleRunResponse,
   UpdateScheduleRequest,
@@ -265,12 +270,22 @@ export class AdminClient {
     );
   }
 
-  /** POST /admin/webhooks — create a new webhook. */
+  /** POST /admin/webhooks — create a new webhook (returns {id,version}); does NOT activate. */
   createWebhook(
     webhook: Omit<CreateWebhookRequest, 'env'>
   ): Promise<CreateWebhookResponse> {
     const body: CreateWebhookRequest = { env: this.env, ...webhook };
     return this.request<CreateWebhookResponse>('POST', '/admin/webhooks', body);
+  }
+
+  /** POST /admin/webhooks/{id}/publish — activate a webhook version (two-step like flows). */
+  publishWebhook(id: string, version: number): Promise<PublishWebhookResponse> {
+    const body: PublishWebhookRequest = { env: this.env, version };
+    return this.request<PublishWebhookResponse>(
+      'POST',
+      `/admin/webhooks/${encodeURIComponent(id)}/publish`,
+      body
+    );
   }
 
   /** PUT /admin/webhooks/{id} — update an existing webhook. */
@@ -370,6 +385,42 @@ export class AdminClient {
     return this.request<ListScheduleRunsResponse>(
       'GET',
       `/admin/schedules/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  // --- group endpoints (FEAT-001) ------------------------------------------
+
+  /** GET /admin/groups — list all groups (summaries, no scaling). */
+  listGroups(): Promise<ListGroupsResponse> {
+    return this.request<ListGroupsResponse>('GET', '/admin/groups');
+  }
+
+  /** GET /admin/groups/{id} — get the full group (nested scaling, connections[]). */
+  getGroup(id: string): Promise<EngineGroup> {
+    return this.request<EngineGroup>(
+      'GET',
+      `/admin/groups/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** PUT /admin/groups/{id} — create or update a group. id from the URL path; env stamped into the body. */
+  upsertGroup(
+    groupId: string,
+    group: Omit<GroupPutRequest, 'env'>
+  ): Promise<EngineGroup> {
+    const body: GroupPutRequest = { env: this.env, ...group };
+    return this.request<EngineGroup>(
+      'PUT',
+      `/admin/groups/${encodeURIComponent(groupId)}`,
+      body
+    );
+  }
+
+  /** DELETE /admin/groups/{id} — delete a group. */
+  deleteGroup(id: string): Promise<void> {
+    return this.request<void>(
+      'DELETE',
+      `/admin/groups/${encodeURIComponent(id)}`
     );
   }
 }
