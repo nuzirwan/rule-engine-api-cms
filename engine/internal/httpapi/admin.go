@@ -57,7 +57,7 @@ var knownMethods = map[string]bool{
 }
 
 // knownAuditTypes bounds {type} on GET /admin/audit/{type}/{id}.
-var knownAuditTypes = map[string]bool{"flow": true, "jdm": true, "connection": true}
+var knownAuditTypes = map[string]bool{"flow": true, "jdm": true, "connection": true, "group": true}
 
 // Admin is the control-plane surface. It holds the admin method-set, the
 // interpreter + deps for validate/dry-run, the operator-auth guard, and the
@@ -109,6 +109,14 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("GET /admin/jdms/{id}", h(a.getJdm))
 	mux.Handle("GET /admin/connections/{key}", h(a.getConnection))
 
+	// Group CRUD endpoints:
+	mux.Handle("PUT /admin/groups/{id}", h(a.HandlePutGroup))
+	mux.Handle("GET /admin/groups/{id}", h(a.HandleGetGroup))
+	mux.Handle("GET /admin/groups", h(a.HandleListGroups))
+	mux.Handle("DELETE /admin/groups/{id}", h(a.HandleDeleteGroup))
+	// Internal endpoint for worker hot-reload polling (group version):
+	mux.Handle("GET /internal/groups/{id}/version", h(a.HandleGetGroupVersion))
+
 	// Webhook admin endpoints (protected by operator guard with webhook.read/write RBAC):
 	if webhookStore, ok := a.deps.Admin.(WebhookAdminStore); ok {
 		wa := newWebhookAdmin(webhookStore, a.guard, a.log)
@@ -128,6 +136,16 @@ func requireRole(r *http.Request) string {
 			return "webhook.read"
 		case http.MethodPost, http.MethodPut, http.MethodDelete:
 			return "webhook.write"
+		}
+	}
+
+	// Group routes: group.read for GET, group.write for PUT/DELETE.
+	if strings.HasPrefix(path, "/admin/groups") || strings.HasPrefix(path, "/internal/groups") {
+		switch r.Method {
+		case http.MethodGet:
+			return "group.read"
+		case http.MethodPut, http.MethodDelete:
+			return "group.write"
 		}
 	}
 

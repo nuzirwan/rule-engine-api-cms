@@ -1,0 +1,39 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Implement GroupStore methods in pgstore_group.go (CRUD with audit capture) and Admin API handlers in admin_groups.go (PUT/GET/LIST/DELETE groups, GET version endpoint). HandlePutGroup must handle connections array and increment groups.version on connection changes (grill finding #2).",
+  "status": "completed",
+  "steps": [
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/pgstore_group.go with GroupStore receiver methods on *PgStore.",
+    "Implement GetGroup(ctx, env, groupID) (Group, error): query groups table joined with group_connections, return NotFound if missing.",
+    "Implement GetGroupVersion(ctx, env, groupID) (int, error): lightweight query returning only groups.version for hot-reload polling.",
+    "Implement ListGroups(ctx, env) ([]GroupSummary, error): query groups table ordered by name.",
+    "Implement UpsertGroup(ctx, env string, group *Group, changedBy, reason string) error: validate with ValidateGroup first, use withTx, capture pre-mutation state with getGroupAuditData BEFORE update (critical for rollback), INSERT or UPDATE groups row with version=version+1, replace connections in group_connections, record audit in group_audit with old_data and new_data.",
+    "Implement DeleteGroup(ctx, env, groupID, changedBy, reason string) error: reject if groupID=='default' (cannot delete default group), check flow_versions for any rows with group_id=groupID and reject with 409 if flows are assigned, capture pre-mutation state, DELETE from groups (CASCADE deletes group_connections), record audit.",
+    "Implement replaceGroupConnections(ctx, tx, groupID string, connections []string, changedBy, reason string) error: get current connections, skip if unchanged, DELETE all existing, INSERT new connections, INCREMENT groups.version (critical for hot-reload detection of connection-only changes), record in group_connections_audit.",
+    "Implement getGroupAuditData(ctx, tx, groupID string) (json.RawMessage, error): fetch group + connections and marshal as GroupAuditData.",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/httpapi/admin_groups.go with handler functions.",
+    "Implement HandlePutGroup: decode request with name, connections[], scaling, call ValidateGroup, call store.UpsertGroup, return 200 with group.",
+    "Implement HandleGetGroup: get groupID from r.PathValue, call store.GetGroup, return 200 with group.",
+    "Implement HandleListGroups: call store.ListGroups, return 200 with {groups: [...]}.",
+    "Implement HandleDeleteGroup: check flows assigned via store method, return 409 if flows exist, check if default group and return 403, call store.DeleteGroup, return 204.",
+    "Implement HandleGetGroupVersion: get groupID from r.PathValue, call store.GetGroupVersion, return 200 with {version: N}.",
+    "Update /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/httpapi/admin.go to register group routes: PUT /admin/groups/{id}, GET /admin/groups/{id}, GET /admin/groups, DELETE /admin/groups/{id}, GET /internal/groups/{id}/version."
+  ],
+  "acceptance_criteria": [
+    "go build ./... passes from engine/ directory",
+    "go test ./internal/config/... ./internal/httpapi/... passes",
+    "UpsertGroup captures pre-mutation state BEFORE update for accurate rollback",
+    "Connection changes increment groups.version (for hot-reload detection)",
+    "DeleteGroup refuses to delete 'default' group with 403",
+    "DeleteGroup refuses when flows are assigned with 409",
+    "HandlePutGroup uses shared ValidateGroup function",
+    "GET /internal/groups/{id}/version endpoint exists for worker hot-reload polling"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go test ./internal/config/... ./internal/httpapi/..."
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented pgstore_group.go with GetGroup, GetGroupVersion, ListGroups, UpsertGroup, DeleteGroup, replaceGroupConnections (with version bump), getGroupAuditData, and CountFlowsByGroup. Implemented admin_groups.go with HandlePutGroup (uses ValidateGroup for parity), HandleGetGroup, HandleListGroups, HandleDeleteGroup (403 for default, 409 for flows assigned), and HandleGetGroupVersion. Updated admin.go to register routes and RBAC. All acceptance criteria met."
+}
