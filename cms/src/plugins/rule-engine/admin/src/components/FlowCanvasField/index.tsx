@@ -134,6 +134,7 @@ export const NODE_PALETTE = [
   'find',
   'map',
   'reduce',
+  'load',
 ] as const;
 
 const EMPTY_TREE: EngineNode = { id: 'trigger', type: 'trigger', spec: {} };
