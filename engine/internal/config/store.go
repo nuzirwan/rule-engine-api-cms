@@ -62,6 +62,7 @@ type FlowVersion struct {
 	Version  int           `json:"version"`
 	Method   string        `json:"method"`
 	Path     string        `json:"path"`
+	Group    string        `json:"group,omitempty"` // group_id from flow_versions; empty if ungrouped
 	Tree     flow.Node     `json:"tree"`
 	Fixtures []FlowFixture `json:"fixtures,omitempty"`
 }

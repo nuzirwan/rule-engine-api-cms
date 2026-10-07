@@ -17,6 +17,7 @@ type GroupAdminStore interface {
 	UpsertGroup(ctx context.Context, env string, group *config.Group, changedBy, reason string) error
 	DeleteGroup(ctx context.Context, env, groupID, changedBy, reason string) error
 	CountFlowsByGroup(ctx context.Context, env, groupID string) (int, error)
+	UpdateFlowGroup(ctx context.Context, env, flowID, groupID, changedBy, reason string) error
 }
 
 // compile-time assertion that *config.PgStore satisfies GroupAdminStore.
@@ -242,4 +243,67 @@ func (a *Admin) HandleGetGroupVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"version": version})
+}
+
+// ---- PATCH /admin/flows/{id} -> UpdateFlowGroup ----
+
+// patchFlowRequest is the wire shape for patching a flow (currently: group assignment only).
+type patchFlowRequest struct {
+	Env    string  `json:"env,omitempty"`
+	Group  *string `json:"group"` // Pointer to detect explicit null (unassign) vs omission
+	Reason string  `json:"reason,omitempty"`
+}
+
+// HandlePatchFlow updates a flow's group assignment. The group field can be:
+// - a group ID string to assign the flow to that group
+// - an empty string "" or null to unassign the flow from any group
+// Changes are recorded in flow_group_audit.
+func (a *Admin) HandlePatchFlow(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStore(w) {
+		return
+	}
+	flowID := r.PathValue("id")
+	if flowID == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing flow id")
+		return
+	}
+
+	var req patchFlowRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !a.checkEnv(w, req.Env) {
+		return
+	}
+
+	// If group field was not provided at all, nothing to patch.
+	if req.Group == nil {
+		writeError(w, http.StatusBadRequest, "invalid request: group field is required")
+		return
+	}
+
+	ctx := a.auditCtx(r.Context())
+	gs, ok := a.store.(GroupAdminStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "group store not available")
+		return
+	}
+
+	changedBy := "admin"
+	if op, ok := auth.OperatorFrom(ctx); ok {
+		changedBy = op.Subject
+	}
+
+	// UpdateFlowGroup handles empty string as "unassign from group".
+	groupID := *req.Group
+	if err := gs.UpdateFlowGroup(ctx, a.env, flowID, groupID, changedBy, req.Reason); err != nil {
+		a.fail(w, ctx, "admin.patchFlow", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flowId": flowID,
+		"group":  groupID,
+	})
 }

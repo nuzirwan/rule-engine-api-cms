@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Update FlowVersion struct to include Group field, and add flow_group_audit capture when flow.group_id changes (grill finding #9). Modify existing flow store to track group assignment changes.",
+  "status": "completed",
+  "steps": [
+    "Update /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/store.go: add Group string field to FlowVersion struct with json tag 'group'.",
+    "Update PgStore.resolveFlowFromDB in /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/pgstore.go to also SELECT fv.group_id and populate FlowVersion.Group.",
+    "Add method CountFlowsByGroup(ctx, env, groupID string) (int, error) to PgStore: SELECT COUNT(*) FROM flow_versions WHERE group_id = $1 AND (flow_id, version) IN (SELECT object_id, version FROM active_pointers WHERE object_type='flow').",
+    "Add method UpdateFlowGroup(ctx, env, flowID, groupID, changedBy, reason string) error to PgStore: get current group_id from active flow version, capture in flow_group_audit (old_group, new_group), UPDATE flow_versions SET group_id = $1 WHERE flow_id = $2 AND version = (active version).",
+    "Add admin handler HandlePatchFlow in admin_groups.go or admin_handlers.go for PATCH /admin/flows/{id} that accepts {group: string} and calls UpdateFlowGroup.",
+    "Wire PATCH /admin/flows/{id} route in admin.go."
+  ],
+  "acceptance_criteria": [
+    "go build ./... passes from engine/ directory",
+    "go test ./internal/config/... passes",
+    "FlowVersion struct has Group string field",
+    "Resolved flows include group_id from database",
+    "flow_group_audit captures old_group and new_group on assignment change",
+    "CountFlowsByGroup returns count of active flows in a group",
+    "PATCH /admin/flows/{id} endpoint allows group assignment"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go test ./internal/config/..."
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented FEAT-004: (1) Added Group string field to FlowVersion struct in store.go with json tag 'group,omitempty'. (2) Updated resolveFlowFromDB in pgstore.go to SELECT fv.group_id and populate FlowVersion.Group. (3) Updated GetFlowVersion in pgstore_admin.go to also include group_id. (4) CountFlowsByGroup already existed from FEAT-003. (5) Added UpdateFlowGroup method to pgstore_group.go that gets active version, captures old_group, updates flow_versions.group_id, and inserts flow_group_audit record with old_group/new_group. (6) Added HandlePatchFlow handler in admin_groups.go for PATCH /admin/flows/{id} accepting {group: string, reason: string}. (7) Wired PATCH /admin/flows/{id} route in admin.go with flow.write RBAC. All acceptance criteria met."
+}

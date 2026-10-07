@@ -109,6 +109,9 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("GET /admin/jdms/{id}", h(a.getJdm))
 	mux.Handle("GET /admin/connections/{key}", h(a.getConnection))
 
+	// Flow group assignment endpoint:
+	mux.Handle("PATCH /admin/flows/{id}", h(a.HandlePatchFlow))
+
 	// Group CRUD endpoints:
 	mux.Handle("PUT /admin/groups/{id}", h(a.HandlePutGroup))
 	mux.Handle("GET /admin/groups/{id}", h(a.HandleGetGroup))
@@ -163,6 +166,8 @@ func requireRole(r *http.Request) string {
 		return "flow.read"
 	case r.Method == http.MethodPost:
 		return "flow.write"
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, "/admin/flows/"):
+		return "flow.write" // PATCH /admin/flows/{id} for group assignment
 	default:
 		return ""
 	}

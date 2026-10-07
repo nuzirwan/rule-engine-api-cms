@@ -1,0 +1,7 @@
+{
+  "task_id": "task-dynamic-grouped-workers-phase1",
+  "task_description": "Implement Phase 1 of Dynamic Grouped Flow Workers: data model, group CRUD, and CMS content types. No gateway mode or K8s workers - dispatch.mode stays inline.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
+  "blocked_reason": null
+}

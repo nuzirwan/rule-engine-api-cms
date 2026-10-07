@@ -182,10 +182,11 @@ func (s *PgStore) resolveFlowFromDB(ctx context.Context, env, method, path strin
 
 	var treeRaw []byte
 	var method2, path2 string
+	var groupID *string
 	err = pool.QueryRow(ctx,
-		`SELECT fv.tree, f.method, f.path
+		`SELECT fv.tree, f.method, f.path, fv.group_id
 		   FROM flow_versions fv JOIN flows f ON f.id = fv.flow_id
-		  WHERE fv.flow_id=$1 AND fv.version=$2`, flowID, version).Scan(&treeRaw, &method2, &path2)
+		  WHERE fv.flow_id=$1 AND fv.version=$2`, flowID, version).Scan(&treeRaw, &method2, &path2, &groupID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return FlowVersion{}, newErr(NotFound, "flow version body missing for "+flowID)
 	}
@@ -203,14 +204,18 @@ func (s *PgStore) resolveFlowFromDB(ctx context.Context, env, method, path strin
 		return FlowVersion{}, err
 	}
 
-	return FlowVersion{
+	fv := FlowVersion{
 		FlowID:   flowID,
 		Version:  version,
 		Method:   method2,
 		Path:     path2,
 		Tree:     tree,
 		Fixtures: fixtures,
-	}, nil
+	}
+	if groupID != nil {
+		fv.Group = *groupID
+	}
+	return fv, nil
 }
 
 // loadFixtures reads the fixtures that travel with a flow version.
