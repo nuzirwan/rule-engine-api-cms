@@ -38,7 +38,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Field, Flex, Textarea, Typography } from '@strapi/design-system';
+import { Box, Field, Flex, Textarea } from '@strapi/design-system';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
@@ -53,6 +53,69 @@ import {
   type LayoutMap,
 } from './serialize';
 
+/**
+ * Custom CSS to make ReactFlow dark-mode compatible. Injected once.
+ * Targets the canvas background, controls, and minimap.
+ */
+const DARK_MODE_STYLES = `
+  .react-flow {
+    background: #212134 !important;
+  }
+  .react-flow__background {
+    background: #212134 !important;
+  }
+  .react-flow__background pattern circle {
+    fill: #4a4a6a !important;
+  }
+  .react-flow__controls {
+    background: #32324d !important;
+    border: 1px solid #4a4a6a !important;
+    border-radius: 4px;
+  }
+  .react-flow__controls-button {
+    background: #32324d !important;
+    border-bottom: 1px solid #4a4a6a !important;
+    fill: #ffffff !important;
+  }
+  .react-flow__controls-button:hover {
+    background: #4945ff !important;
+  }
+  .react-flow__controls-button svg {
+    fill: #ffffff !important;
+  }
+  .react-flow__minimap {
+    background: #32324d !important;
+    border: 1px solid #4a4a6a !important;
+    border-radius: 4px;
+  }
+  .react-flow__minimap-mask {
+    fill: #4945ff33 !important;
+  }
+  .react-flow__minimap-node {
+    fill: #4945ff !important;
+    stroke: none !important;
+  }
+  .react-flow__edge-path {
+    stroke: #8e8ea9 !important;
+  }
+  .react-flow__edge.selected .react-flow__edge-path {
+    stroke: #4945ff !important;
+  }
+  .react-flow__attribution {
+    display: none !important;
+  }
+`;
+
+// Inject dark mode styles once
+if (typeof document !== 'undefined') {
+  const styleId = 'flow-canvas-dark-mode';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = DARK_MODE_STYLES;
+    document.head.appendChild(style);
+  }
+}
 /** The engine Node taxonomy the palette offers (design §4.2 / HLD §3). */
 export const NODE_PALETTE = [
   'trigger',
@@ -83,6 +146,7 @@ const EDITOR_WIDTH = 'calc(75vw)';
 /**
  * Custom node component that displays the node type as a title/label.
  * ReactFlow's default node doesn't show labels, so we need a custom one.
+ * Uses CSS variables for dark mode compatibility.
  */
 function LabeledNode({ data, selected }: NodeProps) {
   const nodeData = data as { nodeType?: string; label?: string };
@@ -92,17 +156,18 @@ function LabeledNode({ data, selected }: NodeProps) {
       style={{
         padding: '10px 16px',
         borderRadius: 6,
-        border: selected ? '2px solid #4945ff' : '1px solid #dcdce4',
-        background: selected ? '#f0f0ff' : '#ffffff',
+        border: selected ? '2px solid #4945ff' : '1px solid #666',
+        background: selected ? '#4945ff22' : '#32324d',
+        color: '#ffffff',
         fontSize: 12,
         fontWeight: 500,
         minWidth: 100,
         textAlign: 'center',
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: '#666' }} />
+      <Handle type="target" position={Position.Top} style={{ background: '#4945ff' }} />
       <div>{label}</div>
-      <Handle type="source" position={Position.Bottom} style={{ background: '#666' }} />
+      <Handle type="source" position={Position.Bottom} style={{ background: '#4945ff' }} />
     </div>
   );
 }
@@ -112,8 +177,7 @@ const nodeTypes = { default: LabeledNode, labeled: LabeledNode };
 
 /**
  * Draggable palette item — uses a plain <div> with native HTML5 drag instead of
- * Strapi's Button (which may interfere with drag events). Styled to look like
- * the palette buttons but fully supports draggable.
+ * Strapi's Button (which may interfere with drag events). Dark-mode compatible.
  */
 function PaletteItem({
   nodeType,
@@ -134,8 +198,9 @@ function PaletteItem({
       style={{
         padding: '6px 12px',
         borderRadius: 4,
-        border: '1px solid #dcdce4',
-        background: disabled ? '#f6f6f9' : '#ffffff',
+        border: '1px solid #4945ff',
+        background: disabled ? '#32324d' : '#212134',
+        color: '#ffffff',
         fontSize: 12,
         cursor: disabled ? 'not-allowed' : 'grab',
         userSelect: 'none',
@@ -505,11 +570,12 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
               onSelectionChange={onSelectionChange}
               nodesDraggable={!disabled}
               nodesConnectable={!disabled}
+              deleteKeyCode={disabled ? null : ['Backspace', 'Delete']}
               fitView
             >
-              <Background />
+              <Background color="#4a4a6a" gap={16} />
               <Controls />
-              <MiniMap />
+              <MiniMap nodeColor="#4945ff" maskColor="#4945ff33" />
             </ReactFlow>
           </div>
         </Box>
@@ -522,15 +588,15 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
             height: CANVAS_HEIGHT,
             minHeight: 500,
             overflowY: 'auto',
+            background: '#212134',
           }}
           padding={3}
-          background="neutral100"
           hasRadius
         >
           <Flex direction="column" alignItems="stretch" gap={3}>
-            <Typography variant="sigma" textColor="neutral800">
+            <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
               Palette (drag or click)
-            </Typography>
+            </div>
             <Flex direction="row" wrap="wrap" gap={2}>
               {NODE_PALETTE.map((t) => (
                 <PaletteItem
@@ -543,10 +609,10 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
               ))}
             </Flex>
 
-            <Box paddingTop={2} borderColor="neutral200" borderWidth="1px 0 0 0">
-              <Typography variant="sigma" textColor="neutral800">
+            <Box paddingTop={2} style={{ borderTop: '1px solid #4a4a6a' }}>
+              <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
                 {selectedId ? `Node Spec · ${selectedId}` : 'Select a node to edit'}
-              </Typography>
+              </div>
             </Box>
 
             {selectedId ? (
@@ -562,9 +628,9 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
                 <Field.Error />
               </Field.Root>
             ) : (
-              <Typography variant="omega" textColor="neutral600">
-                Click a node on the canvas to edit its spec JSON.
-              </Typography>
+              <div style={{ color: '#a5a5ba', fontSize: 12 }}>
+                Click a node on the canvas to edit its spec JSON. Press Delete or Backspace to remove selected nodes.
+              </div>
             )}
           </Flex>
         </Box>
