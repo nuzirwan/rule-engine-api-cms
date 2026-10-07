@@ -25,6 +25,9 @@ import { EditorSkeleton } from '../EditorSkeleton';
 const EMPTY_GRAPH: DecisionGraphType = { nodes: [], edges: [] };
 const DEBOUNCE_MS = 300;
 
+/** Height for the editor — 75vh (3/4 of viewport height). */
+const EDITOR_HEIGHT = 'calc(75vh - 120px)';
+
 interface InputProps {
   name: string;
   value?: unknown;
@@ -97,7 +100,7 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
     return (
       <Field.Root name={name} hint={hint} error={error} required={required}>
         <Field.Label>{label}</Field.Label>
-        <EditorSkeleton height={520} label="Initializing decision editor…" />
+        <EditorSkeleton height={600} label="Initializing decision editor…" />
       </Field.Root>
     );
   }
@@ -115,7 +118,7 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
           ref={ref}
           direction="column"
           alignItems="stretch"
-          style={{ height: 520, width: '100%', minWidth: 480 }}
+          style={{ height: EDITOR_HEIGHT, minHeight: 500, width: '100%', minWidth: 480 }}
         >
           <div style={{ flex: '1 1 0%', minHeight: 0, width: '100%', height: '100%' }}>
             <JdmConfigProvider>

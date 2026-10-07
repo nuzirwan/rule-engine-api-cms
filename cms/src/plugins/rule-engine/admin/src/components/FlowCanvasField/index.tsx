@@ -28,14 +28,17 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   useReactFlow,
+  Handle,
+  Position,
   type Connection,
   type Edge,
   type Node,
   type NodeChange,
   type EdgeChange,
+  type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Button, Field, Flex, Textarea, Typography } from '@strapi/design-system';
+import { Box, Field, Flex, Textarea, Typography } from '@strapi/design-system';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
@@ -70,6 +73,76 @@ const DEBOUNCE_MS = 300;
 
 /** dataTransfer MIME type carrying the palette node type across a drag. */
 const DND_MIME = 'application/x-rule-engine-node';
+
+/** Height for the canvas — 75vh (3/4 of viewport height). */
+const CANVAS_HEIGHT = 'calc(75vh - 120px)';
+
+/**
+ * Custom node component that displays the node type as a title/label.
+ * ReactFlow's default node doesn't show labels, so we need a custom one.
+ */
+function LabeledNode({ data, selected }: NodeProps) {
+  const nodeData = data as { nodeType?: string; label?: string };
+  const label = nodeData.label || nodeData.nodeType || 'node';
+  return (
+    <div
+      style={{
+        padding: '10px 16px',
+        borderRadius: 6,
+        border: selected ? '2px solid #4945ff' : '1px solid #dcdce4',
+        background: selected ? '#f0f0ff' : '#ffffff',
+        fontSize: 12,
+        fontWeight: 500,
+        minWidth: 100,
+        textAlign: 'center',
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ background: '#666' }} />
+      <div>{label}</div>
+      <Handle type="source" position={Position.Bottom} style={{ background: '#666' }} />
+    </div>
+  );
+}
+
+/** Map of custom node types for ReactFlow. */
+const nodeTypes = { default: LabeledNode, labeled: LabeledNode };
+
+/**
+ * Draggable palette item — uses a plain <div> with native HTML5 drag instead of
+ * Strapi's Button (which may interfere with drag events). Styled to look like
+ * the palette buttons but fully supports draggable.
+ */
+function PaletteItem({
+  nodeType,
+  disabled,
+  onDragStart,
+  onClick,
+}: {
+  nodeType: string;
+  disabled?: boolean;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      draggable={!disabled}
+      onDragStart={onDragStart}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        padding: '6px 12px',
+        borderRadius: 4,
+        border: '1px solid #dcdce4',
+        background: disabled ? '#f6f6f9' : '#ffffff',
+        fontSize: 12,
+        cursor: disabled ? 'not-allowed' : 'grab',
+        userSelect: 'none',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {nodeType}
+    </div>
+  );
+}
 
 /** Build a fresh @xyflow/react Node for a palette type at the given position. */
 function makeFlowNode(nodeType: string, position: { x: number; y: number }): Node {
@@ -382,7 +455,7 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     return (
       <Field.Root name={name} hint={hint} error={error} required={required}>
         <Field.Label>{label}</Field.Label>
-        <EditorSkeleton height={560} label="Initializing flow canvas…" />
+        <EditorSkeleton height={600} label="Initializing flow canvas…" />
       </Field.Root>
     );
   }
@@ -398,7 +471,7 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
             plus a concrete `flexBasis` give the child a real measured width, and the
             inner div pins width/height to 100% so ReactFlow measures a non-zero box. */}
         <Box
-          style={{ flex: '1 1 0%', minWidth: 0, height: 560 }}
+          style={{ flex: '1 1 0%', minWidth: 0, height: CANVAS_HEIGHT, minHeight: 500 }}
           hasRadius
           borderColor="neutral200"
           borderWidth="1px"
@@ -411,6 +484,7 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
             <ReactFlow
               nodes={nodes}
               edges={edges}
+              nodeTypes={nodeTypes}
               onNodesChange={disabled ? undefined : onNodesChange}
               onEdgesChange={disabled ? undefined : onEdgesChange}
               onConnect={disabled ? undefined : onConnect}
@@ -427,20 +501,16 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
         </Box>
         <Box style={{ width: 280 }} padding={2} background="neutral100" hasRadius>
           <Flex direction="column" alignItems="stretch" gap={2}>
-            <Typography variant="sigma">Palette</Typography>
+            <Typography variant="sigma">Palette (drag or click)</Typography>
             <Flex direction="row" wrap="wrap" gap={1}>
               {NODE_PALETTE.map((t) => (
-                <Button
+                <PaletteItem
                   key={t}
-                  size="S"
-                  variant="tertiary"
+                  nodeType={t}
                   disabled={disabled}
-                  draggable={!disabled}
                   onDragStart={onPaletteDragStart(t)}
                   onClick={() => addNode(t)}
-                >
-                  {t}
-                </Button>
+                />
               ))}
             </Flex>
             <Typography variant="sigma">
