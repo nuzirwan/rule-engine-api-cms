@@ -19,6 +19,11 @@ spec:
         group: {{.Group}}
     spec:
       serviceAccountName: {{.ServiceAccount}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: worker
         image: {{.WorkerImage}}
@@ -40,6 +45,12 @@ spec:
           limits:
             cpu: {{.CPULimit}}
             memory: {{.MemoryLimit}}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
         livenessProbe:
           httpGet:
             path: /healthz

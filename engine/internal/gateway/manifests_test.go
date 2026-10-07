@@ -120,6 +120,120 @@ func TestManifestGenerator_GenerateDeployment_Defaults(t *testing.T) {
 	}
 }
 
+func TestManifestGenerator_GenerateDeployment_SecurityContext(t *testing.T) {
+	gen, err := NewManifestGenerator()
+	if err != nil {
+		t.Fatalf("NewManifestGenerator() error: %v", err)
+	}
+
+	cfg := ManifestConfig{
+		Group:       "secure-test",
+		Namespace:   "flow-workers",
+		WorkerImage: "worker:v1.0.0",
+	}
+
+	yamlBytes, err := gen.GenerateDeployment(cfg)
+	if err != nil {
+		t.Fatalf("GenerateDeployment() error: %v", err)
+	}
+
+	// Verify YAML is valid.
+	var parsed map[string]any
+	if err := yaml.Unmarshal(yamlBytes, &parsed); err != nil {
+		t.Fatalf("generated YAML is invalid: %v", err)
+	}
+
+	yamlStr := string(yamlBytes)
+
+	// Verify pod-level security context.
+	if !strings.Contains(yamlStr, "runAsNonRoot: true") {
+		t.Error("expected runAsNonRoot: true in pod securityContext")
+	}
+	if !strings.Contains(yamlStr, "runAsUser: 1000") {
+		t.Error("expected runAsUser: 1000 in pod securityContext")
+	}
+	if !strings.Contains(yamlStr, "runAsGroup: 1000") {
+		t.Error("expected runAsGroup: 1000 in pod securityContext")
+	}
+	if !strings.Contains(yamlStr, "fsGroup: 1000") {
+		t.Error("expected fsGroup: 1000 in pod securityContext")
+	}
+
+	// Verify container-level security context.
+	if !strings.Contains(yamlStr, "readOnlyRootFilesystem: true") {
+		t.Error("expected readOnlyRootFilesystem: true in container securityContext")
+	}
+	if !strings.Contains(yamlStr, "allowPrivilegeEscalation: false") {
+		t.Error("expected allowPrivilegeEscalation: false in container securityContext")
+	}
+	if !strings.Contains(yamlStr, "- ALL") {
+		t.Error("expected capabilities drop ALL in container securityContext")
+	}
+
+	// Verify structure via parsed YAML.
+	spec, ok := parsed["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec to be a map")
+	}
+
+	template, ok := spec["template"].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec.template to be a map")
+	}
+
+	podSpec, ok := template["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec.template.spec to be a map")
+	}
+
+	// Check pod-level securityContext exists.
+	podSecCtx, ok := podSpec["securityContext"].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec.template.spec.securityContext to be a map")
+	}
+
+	if podSecCtx["runAsNonRoot"] != true {
+		t.Errorf("expected runAsNonRoot=true, got %v", podSecCtx["runAsNonRoot"])
+	}
+	if podSecCtx["runAsUser"] != 1000 {
+		t.Errorf("expected runAsUser=1000, got %v", podSecCtx["runAsUser"])
+	}
+
+	// Check container-level securityContext exists.
+	containers, ok := podSpec["containers"].([]any)
+	if !ok || len(containers) == 0 {
+		t.Fatal("expected at least one container")
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatal("expected container to be a map")
+	}
+
+	containerSecCtx, ok := container["securityContext"].(map[string]any)
+	if !ok {
+		t.Fatal("expected container securityContext to be a map")
+	}
+
+	if containerSecCtx["readOnlyRootFilesystem"] != true {
+		t.Errorf("expected readOnlyRootFilesystem=true, got %v", containerSecCtx["readOnlyRootFilesystem"])
+	}
+	if containerSecCtx["allowPrivilegeEscalation"] != false {
+		t.Errorf("expected allowPrivilegeEscalation=false, got %v", containerSecCtx["allowPrivilegeEscalation"])
+	}
+
+	caps, ok := containerSecCtx["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("expected capabilities to be a map")
+	}
+	drop, ok := caps["drop"].([]any)
+	if !ok || len(drop) == 0 {
+		t.Fatal("expected capabilities.drop to be a non-empty list")
+	}
+	if drop[0] != "ALL" {
+		t.Errorf("expected capabilities.drop to contain ALL, got %v", drop)
+	}
+}
+
 func TestManifestGenerator_GenerateService(t *testing.T) {
 	gen, err := NewManifestGenerator()
 	if err != nil {

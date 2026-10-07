@@ -1,0 +1,83 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: flow-workers-alerts
+  namespace: monitoring
+  labels:
+    app: flow-workers
+    prometheus: k8s
+    role: alert-rules
+spec:
+  groups:
+    - name: flow-workers
+      rules:
+        # Critical: Worker group has no running instances
+        - alert: WorkerGroupDown
+          expr: sum by (group) (up{job="flow-worker"}) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Worker group {{ $labels.group }} is down"
+            description: "No running instances for worker group {{ $labels.group }} for more than 1 minute."
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#WorkerGroupDown"
+
+        # Warning: High error rate in worker group
+        - alert: WorkerHighErrorRate
+          expr: |
+            (
+              sum by (group) (rate(gateway_dispatch_total{status="error"}[5m]))
+              /
+              sum by (group) (rate(gateway_dispatch_total[5m]))
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate for worker group {{ $labels.group }}"
+            description: "Worker group {{ $labels.group }} has error rate above 10% for more than 5 minutes. Current: {{ $value | printf \"%.2f\" }}%"
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#WorkerHighErrorRate"
+
+        # Warning: Cold starts are taking too long
+        - alert: WorkerColdStartSlow
+          expr: histogram_quantile(0.95, sum by (group, le) (rate(gateway_cold_start_duration_seconds_bucket[5m]))) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Slow cold starts for worker group {{ $labels.group }}"
+            description: "95th percentile cold start duration for group {{ $labels.group }} exceeds 10 seconds. Current: {{ $value | printf \"%.1f\" }}s"
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#WorkerColdStartSlow"
+
+        # Critical: Circuit breaker is open (rejecting requests)
+        - alert: GatewayCircuitOpen
+          expr: gateway_circuit_breaker_state == 2
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Circuit breaker open for worker group {{ $labels.group }}"
+            description: "Circuit breaker for group {{ $labels.group }} has been open (rejecting requests) for more than 1 minute."
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#GatewayCircuitOpen"
+
+        # Warning: Request queue is growing (cold start taking too long)
+        - alert: GatewayQueueBacklog
+          expr: gateway_queue_length > 100
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Request queue backlog for worker group {{ $labels.group }}"
+            description: "Gateway queue for group {{ $labels.group }} has over 100 pending requests. Workers may be slow to start."
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#GatewayQueueBacklog"
+
+        # Warning: High dispatch latency
+        - alert: GatewayHighLatency
+          expr: histogram_quantile(0.99, sum by (group, le) (rate(gateway_dispatch_duration_seconds_bucket[5m]))) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High dispatch latency for worker group {{ $labels.group }}"
+            description: "99th percentile dispatch latency for group {{ $labels.group }} exceeds 2 seconds."
+            runbook_url: "https://wiki.example.com/runbooks/flow-workers#GatewayHighLatency"
