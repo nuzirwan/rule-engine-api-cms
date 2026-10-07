@@ -3,7 +3,6 @@ package connect
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -166,7 +165,6 @@ func TestRegistryV2_HealthCheckNoOpenConnections(t *testing.T) {
 }
 
 func TestRegistryV2_HealthCheckProbesOpenConnections(t *testing.T) {
-	var pingCount atomic.Int32
 	conn := &mockConnector{typ: "test", lifecycle: LifecyclePooled}
 	defs := []ConnectionDef{{Key: "test-key", Type: "test"}}
 
@@ -177,23 +175,10 @@ func TestRegistryV2_HealthCheckProbesOpenConnections(t *testing.T) {
 	defer r.Close()
 
 	// Open a connection first
-	client, err := r.Client(context.Background(), "test-key")
+	_, err = r.Client(context.Background(), "test-key")
 	if err != nil {
 		t.Fatalf("Client failed: %v", err)
 	}
-
-	// Track ping calls on the mock client
-	if mc, ok := client.(*resilientClient); ok {
-		if inner, ok := mc.inner.(*mockPoolClient); ok {
-			// HealthCheck should execute a ping
-			_ = inner // just to use the variable
-		}
-	}
-
-	// Intercept Execute to count pings
-	originalClient := client
-	_ = originalClient
-	_ = pingCount
 
 	// HealthCheck should probe the open connection
 	err = r.HealthCheck(context.Background())
