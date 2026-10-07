@@ -1,12 +1,11 @@
-// WebhooksPage — basic webhook management page (FEAT-004 / FEAT-002). Lists
-// webhooks with their name, provider, flowId, and sync status, and offers a
-// per-row Publish/Sync action that pushes the webhook to the engine via the
-// plugin route POST /rule-engine/webhooks/:id/publish.
+// GroupsPage — basic worker-group management page (FEAT-002). Lists groups with
+// their scaling mode, replica range, enabled flag, and offers a per-row
+// Publish/Sync action that pushes the group to the engine via the plugin route
+// POST /rule-engine/groups/:id/publish.
 //
-// FEAT-002: migrated off the deprecated @strapi/design-system HeaderLayout/
-// ContentLayout to Layouts.* from '@strapi/admin/strapi-admin' (matches
-// SyncPage.tsx) — the previous imports no longer exist in @strapi/design-system
-// and broke the admin build once this page was bundled.
+// Follows the WebhooksPage / SyncPage pattern: Layouts.* from
+// '@strapi/admin/strapi-admin', @strapi/design-system Table, useFetchClient.
+// Editing is delegated to the Strapi content manager (no custom editor here).
 
 import * as React from 'react';
 import {
@@ -27,76 +26,70 @@ import {
 import { Plus, ArrowClockwise } from '@strapi/icons';
 import { Layouts, useFetchClient } from '@strapi/admin/strapi-admin';
 
-interface WebhookEntry {
+interface GroupEntry {
   id: number;
   documentId: string;
-  webhookId: string;
+  groupId: string;
   name: string;
-  provider: 'stripe' | 'github' | 'generic';
-  flowId?: { flowId: string } | null;
-  lastSyncStatus: 'none' | 'synced' | 'failed';
+  enabled: boolean;
+  scalingMode: 'static' | 'dynamic' | 'ephemeral';
+  minReplicas: number;
+  maxReplicas: number;
 }
 
-const providerBadgeVariant: Record<string, 'primary' | 'secondary' | 'alternative'> = {
-  stripe: 'primary',
-  github: 'secondary',
-  generic: 'alternative',
+const modeBadgeVariant: Record<string, 'primary' | 'secondary' | 'alternative'> = {
+  static: 'secondary',
+  dynamic: 'primary',
+  ephemeral: 'alternative',
 };
 
-const statusBadgeVariant: Record<string, 'success' | 'danger' | 'neutral'> = {
-  synced: 'success',
-  failed: 'danger',
-  none: 'neutral',
-};
-
-export interface WebhooksPageProps {
+export interface GroupsPageProps {
   /** Base URL path for the content manager (defaults to /admin/content-manager) */
   contentManagerBasePath?: string;
 }
 
-export const WebhooksPage: React.FC<WebhooksPageProps> = ({
+export const GroupsPage: React.FC<GroupsPageProps> = ({
   contentManagerBasePath = '/admin/content-manager',
 }) => {
   const { get, post } = useFetchClient();
-  const [webhooks, setWebhooks] = React.useState<WebhookEntry[]>([]);
+  const [groups, setGroups] = React.useState<GroupEntry[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [publishingId, setPublishingId] = React.useState<string | null>(null);
   const [publishError, setPublishError] = React.useState<string | null>(null);
 
-  const fetchWebhooks = React.useCallback(async () => {
+  const fetchGroups = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await get('/api/webhooks?populate=flowId');
+      const response = await get('/api/groups');
       const data = response.data?.data ?? [];
-      setWebhooks(data);
+      setGroups(data);
     } catch (err) {
-      setError((err as Error).message || 'Failed to load webhooks');
+      setError((err as Error).message || 'Failed to load groups');
     } finally {
       setLoading(false);
     }
   }, [get]);
 
   React.useEffect(() => {
-    fetchWebhooks();
-  }, [fetchWebhooks]);
+    fetchGroups();
+  }, [fetchGroups]);
 
   const handleRowClick = (documentId: string) => {
-    // Navigate to the content manager edit page for this webhook
-    window.location.href = `${contentManagerBasePath}/collection-types/api::webhook.webhook/${documentId}`;
+    window.location.href = `${contentManagerBasePath}/collection-types/api::group.group/${documentId}`;
   };
 
   const handleCreate = () => {
-    window.location.href = `${contentManagerBasePath}/collection-types/api::webhook.webhook/create`;
+    window.location.href = `${contentManagerBasePath}/collection-types/api::group.group/create`;
   };
 
-  const handlePublish = async (webhookId: string) => {
-    setPublishingId(webhookId);
+  const handlePublish = async (groupId: string) => {
+    setPublishingId(groupId);
     setPublishError(null);
     try {
-      await post(`/rule-engine/webhooks/${encodeURIComponent(webhookId)}/publish`, {});
-      await fetchWebhooks();
+      await post(`/rule-engine/groups/${encodeURIComponent(groupId)}/publish`, {});
+      await fetchGroups();
     } catch (err) {
       const body = (err as any)?.response?.data;
       setPublishError(body?.error ?? (err as Error).message ?? 'Publish failed');
@@ -108,20 +101,20 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
   return (
     <Layouts.Root>
       <Layouts.Header
-        title="Webhooks"
-        subtitle="Manage webhook configurations for external event sources"
+        title="Groups"
+        subtitle="Manage worker groups with shared scaling policy and connection pool"
         primaryAction={
           <Flex gap={2}>
             <Button
               variant="secondary"
               startIcon={<ArrowClockwise />}
-              onClick={fetchWebhooks}
+              onClick={fetchGroups}
               disabled={loading}
             >
               Refresh
             </Button>
             <Button startIcon={<Plus />} onClick={handleCreate}>
-              Create Webhook
+              Create Group
             </Button>
           </Flex>
         }
@@ -130,7 +123,7 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
         <Box padding={4}>
           {loading && (
             <Flex justifyContent="center" padding={8}>
-              <Loader>Loading webhooks...</Loader>
+              <Loader>Loading groups...</Loader>
             </Flex>
           )}
 
@@ -146,35 +139,35 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
             </Box>
           )}
 
-          {!loading && !error && webhooks.length === 0 && (
+          {!loading && !error && groups.length === 0 && (
             <EmptyStateLayout
-              content="No webhooks configured yet. Create one to start receiving external events."
+              content="No groups configured yet. Create one to define a scaling policy."
               action={
                 <Button startIcon={<Plus />} onClick={handleCreate}>
-                  Create Webhook
+                  Create Group
                 </Button>
               }
             />
           )}
 
-          {!loading && !error && webhooks.length > 0 && (
-            <Table colCount={6} rowCount={webhooks.length + 1}>
+          {!loading && !error && groups.length > 0 && (
+            <Table colCount={6} rowCount={groups.length + 1}>
               <Thead>
                 <Tr>
                   <Th>
-                    <Typography variant="sigma">Webhook ID</Typography>
+                    <Typography variant="sigma">Group ID</Typography>
                   </Th>
                   <Th>
                     <Typography variant="sigma">Name</Typography>
                   </Th>
                   <Th>
-                    <Typography variant="sigma">Provider</Typography>
+                    <Typography variant="sigma">Mode</Typography>
                   </Th>
                   <Th>
-                    <Typography variant="sigma">Flow</Typography>
+                    <Typography variant="sigma">Replicas</Typography>
                   </Th>
                   <Th>
-                    <Typography variant="sigma">Sync Status</Typography>
+                    <Typography variant="sigma">Enabled</Typography>
                   </Th>
                   <Th>
                     <Typography variant="sigma">Actions</Typography>
@@ -182,35 +175,35 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
                 </Tr>
               </Thead>
               <Tbody>
-                {webhooks.map((webhook) => (
-                  <Tr key={webhook.documentId}>
-                    <Td onClick={() => handleRowClick(webhook.documentId)} style={{ cursor: 'pointer' }}>
-                      <Typography>{webhook.webhookId}</Typography>
+                {groups.map((group) => (
+                  <Tr key={group.documentId}>
+                    <Td onClick={() => handleRowClick(group.documentId)} style={{ cursor: 'pointer' }}>
+                      <Typography>{group.groupId}</Typography>
                     </Td>
-                    <Td onClick={() => handleRowClick(webhook.documentId)} style={{ cursor: 'pointer' }}>
-                      <Typography fontWeight="bold">{webhook.name}</Typography>
+                    <Td onClick={() => handleRowClick(group.documentId)} style={{ cursor: 'pointer' }}>
+                      <Typography fontWeight="bold">{group.name}</Typography>
                     </Td>
                     <Td>
-                      <Badge variant={providerBadgeVariant[webhook.provider] || 'alternative'}>
-                        {webhook.provider}
+                      <Badge variant={modeBadgeVariant[group.scalingMode] || 'alternative'}>
+                        {group.scalingMode}
                       </Badge>
                     </Td>
                     <Td>
-                      <Typography textColor={webhook.flowId ? undefined : 'neutral500'}>
-                        {webhook.flowId?.flowId || '—'}
+                      <Typography>
+                        {group.minReplicas}–{group.maxReplicas}
                       </Typography>
                     </Td>
                     <Td>
-                      <Badge variant={statusBadgeVariant[webhook.lastSyncStatus] || 'neutral'}>
-                        {webhook.lastSyncStatus}
+                      <Badge variant={group.enabled ? 'success' : 'neutral'}>
+                        {group.enabled ? 'enabled' : 'disabled'}
                       </Badge>
                     </Td>
                     <Td>
                       <Button
                         variant="secondary"
                         size="S"
-                        onClick={() => handlePublish(webhook.webhookId)}
-                        loading={publishingId === webhook.webhookId}
+                        onClick={() => handlePublish(group.groupId)}
+                        loading={publishingId === group.groupId}
                         disabled={publishingId !== null}
                       >
                         Publish
@@ -227,4 +220,4 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
   );
 };
 
-export default WebhooksPage;
+export default GroupsPage;

@@ -17,6 +17,7 @@ import syncController from './controllers/sync';
 import environmentController from './controllers/environment';
 import flowController from './controllers/flow';
 import templateController from './controllers/template';
+import entityPublishController from './controllers/entity-publish';
 import routes from './routes';
 
 const PLUGIN_ID = 'rule-engine';
@@ -39,6 +40,7 @@ export default {
     environment: environmentController,
     flow: flowController,
     template: templateController,
+    'entity-publish': entityPublishController,
   },
 
   routes,

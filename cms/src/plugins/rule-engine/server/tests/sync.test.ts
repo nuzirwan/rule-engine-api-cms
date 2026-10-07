@@ -30,6 +30,9 @@ function makeStrapi(cmsData: {
   flows?: { flowId: string; documentId: string; environmentName?: string; environmentId?: string }[];
   jdms?: { jdmId: string; documentId: string; environmentName?: string; environmentId?: string }[];
   connections?: { key: string; documentId: string; environmentName?: string; environmentId?: string }[];
+  webhooks?: { webhookId: string; documentId: string; name?: string; provider?: string; environmentName?: string; environmentId?: string }[];
+  schedules?: { scheduleId: string; documentId: string; name?: string; schedule?: string; enabled?: boolean; environmentName?: string; environmentId?: string }[];
+  groups?: { groupId: string; documentId: string; name?: string; enabled?: boolean; environmentName?: string; environmentId?: string }[];
   environments?: { documentId: string; name: string; adminApiBaseUrl?: string; operatorTokenRef?: string; payloadEnv?: string }[];
 }) {
   return {
@@ -95,6 +98,73 @@ function makeStrapi(cmsData: {
           update: vi.fn().mockResolvedValue({ documentId: 'updated-doc' }),
         };
       }
+      if (uid === 'api::webhook.webhook') {
+        return {
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let webhooks = cmsData.webhooks ?? [];
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              webhooks = webhooks.filter(w => w.environmentId === envId);
+            }
+            return Promise.resolve(
+              webhooks.map((w) => ({
+                webhookId: w.webhookId,
+                documentId: w.documentId,
+                name: w.name,
+                provider: w.provider,
+                environment: w.environmentId ? { name: w.environmentName, documentId: w.environmentId } : null,
+              }))
+            );
+          }),
+          create: vi.fn().mockResolvedValue({ documentId: 'new-webhook-doc' }),
+          update: vi.fn().mockResolvedValue({ documentId: 'updated-webhook-doc' }),
+        };
+      }
+      if (uid === 'api::schedule.schedule') {
+        return {
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let schedules = cmsData.schedules ?? [];
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              schedules = schedules.filter(s => s.environmentId === envId);
+            }
+            return Promise.resolve(
+              schedules.map((s) => ({
+                scheduleId: s.scheduleId,
+                documentId: s.documentId,
+                name: s.name,
+                schedule: s.schedule,
+                enabled: s.enabled,
+                environment: s.environmentId ? { name: s.environmentName, documentId: s.environmentId } : null,
+              }))
+            );
+          }),
+          create: vi.fn().mockResolvedValue({ documentId: 'new-schedule-doc' }),
+          update: vi.fn().mockResolvedValue({ documentId: 'updated-schedule-doc' }),
+        };
+      }
+      if (uid === 'api::group.group') {
+        return {
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let groups = cmsData.groups ?? [];
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              groups = groups.filter(g => g.environmentId === envId);
+            }
+            return Promise.resolve(
+              groups.map((g) => ({
+                groupId: g.groupId,
+                documentId: g.documentId,
+                name: g.name,
+                enabled: g.enabled,
+                environment: g.environmentId ? { name: g.environmentName, documentId: g.environmentId } : null,
+              }))
+            );
+          }),
+          create: vi.fn().mockResolvedValue({ documentId: 'new-group-doc' }),
+          update: vi.fn().mockResolvedValue({ documentId: 'updated-group-doc' }),
+        };
+      }
       if (uid === 'api::environment.environment') {
         return {
           findMany: vi.fn().mockResolvedValue(cmsData.environments ?? []),
@@ -117,6 +187,17 @@ function makeStrapi(cmsData: {
 /** Build a nock scope that requires the Bearer token on every call. */
 function engine() {
   return nock(BASE, { reqheaders: { authorization: `Bearer ${TOKEN}` } });
+}
+
+/**
+ * Stub the FEAT-002 engine list endpoints (webhooks/schedules/groups) with empty
+ * results. syncStatus and importAll now fan out to all six list endpoints, so a
+ * test that only cares about flows/jdms/connections still needs these mocked.
+ */
+function stubEmptyExtras() {
+  engine().get('/admin/webhooks').reply(200, { webhooks: [] });
+  engine().get('/admin/schedules').reply(200, { schedules: [] });
+  engine().get('/admin/groups').reply(200, { groups: [] });
 }
 
 // -----------------------------------------------------------------------
@@ -148,6 +229,7 @@ describe('sync controller', () => {
       });
       engine().get('/admin/jdms').reply(200, { jdms: [] });
       engine().get('/admin/connections').reply(200, { connections: [] });
+      stubEmptyExtras();
 
       const strapi = makeStrapi({
         flows: [
@@ -205,6 +287,7 @@ describe('sync controller', () => {
       });
       engine().get('/admin/jdms').reply(200, { jdms: [] });
       engine().get('/admin/connections').reply(200, { connections: [] });
+      stubEmptyExtras();
 
       const strapi = makeStrapi({
         flows: [
@@ -233,6 +316,57 @@ describe('sync controller', () => {
       });
     });
 
+    it('returns webhook/schedule/group diff sections alongside flows', async () => {
+      engine().get('/admin/flows').reply(200, { flows: [] });
+      engine().get('/admin/jdms').reply(200, { jdms: [] });
+      engine().get('/admin/connections').reply(200, { connections: [] });
+      engine().get('/admin/webhooks').reply(200, {
+        webhooks: [
+          { id: 'wh-a', name: 'A', provider: 'stripe', flowId: 'flow-a', updatedAt: '2024-01-01' },
+          { id: 'wh-b', name: 'B', provider: 'github', flowId: 'flow-b', updatedAt: '2024-01-02' },
+        ],
+      });
+      engine().get('/admin/schedules').reply(200, {
+        schedules: [
+          { id: 'sched-a', name: 'SA', schedule: '@daily', timezone: 'UTC', flowId: 'flow-a', input: {}, enabled: true, createdAt: '', updatedAt: '' },
+        ],
+      });
+      engine().get('/admin/groups').reply(200, {
+        groups: [
+          { id: 'grp-a', name: 'GA', enabled: true, version: 1, updatedAt: '2024-01-01' },
+          { id: 'grp-b', name: 'GB', enabled: false, version: 1, updatedAt: '2024-01-02' },
+        ],
+      });
+
+      const strapi = makeStrapi({
+        webhooks: [{ webhookId: 'wh-a', documentId: 'wdoc-a' }],
+        schedules: [{ scheduleId: 'sched-c', documentId: 'sdoc-c' }],
+        groups: [{ groupId: 'grp-b', documentId: 'gdoc-b' }],
+      });
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx();
+      await ctrl.syncStatus(ctx);
+
+      expect(ctx.body).toMatchObject({
+        webhooks: {
+          synced: [{ id: 'wh-a' }],
+          localOnly: [],
+          engineOnly: [{ id: 'wh-b' }],
+        },
+        schedules: {
+          synced: [],
+          localOnly: [{ id: 'sched-c' }],
+          engineOnly: [{ id: 'sched-a' }],
+        },
+        groups: {
+          synced: [{ id: 'grp-b' }],
+          localOnly: [],
+          engineOnly: [{ id: 'grp-a' }],
+        },
+      });
+    });
+
     it('returns 404 when env query param references non-existent environment', async () => {
       const strapi = makeStrapi({
         environments: [],
@@ -254,6 +388,7 @@ describe('sync controller', () => {
       });
       engine().get('/admin/jdms').reply(200, { jdms: [] });
       engine().get('/admin/connections').reply(200, { connections: [] });
+      stubEmptyExtras();
 
       const strapi = makeStrapi({
         flows: [
@@ -285,6 +420,7 @@ describe('sync controller', () => {
       engine().get('/admin/connections').reply(200, {
         connections: [{ key: 'conn-x', type: 'http', settings: {}, secretRef: '', resilience: {} }],
       });
+      stubEmptyExtras();
 
       // Detail endpoints
       engine().get('/admin/flows/flow-a').reply(200, {
@@ -399,6 +535,171 @@ describe('sync controller', () => {
         imported: true,
         type: 'connection',
         id: 'conn-x',
+      });
+    });
+
+    it('imports a single webhook, converting the engine mapping/filter maps to CMS component arrays', async () => {
+      engine().get('/admin/webhooks/wh-a').reply(200, {
+        webhookId: 'wh-a',
+        name: 'Checkout',
+        secretRef: 'env:WH_SECRET',
+        provider: 'stripe',
+        flowId: 'flow-a',
+        mapping: { '$.id': 'event.id', '$.type': 'event.type' },
+        filter: { '$.type': ['payment_intent.succeeded'] },
+        version: 3,
+      });
+
+      // Capture the data passed to webhook create.
+      let created: any = null;
+      const strapi: any = {
+        documents: vi.fn((uid: string) => {
+          if (uid === 'api::flow.flow') {
+            return { findMany: vi.fn().mockResolvedValue([{ flowId: 'flow-a', documentId: 'flow-doc-a' }]) };
+          }
+          if (uid === 'api::webhook.webhook') {
+            return {
+              findMany: vi.fn().mockResolvedValue([]),
+              create: vi.fn().mockImplementation(({ data }: any) => {
+                created = data;
+                return Promise.resolve({ documentId: 'new-wh' });
+              }),
+              update: vi.fn(),
+            };
+          }
+          return { findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn() };
+        }),
+      };
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx({ type: 'webhook', id: 'wh-a' });
+      await ctrl.importOne(ctx);
+
+      expect(ctx.body).toMatchObject({ imported: true, type: 'webhook', id: 'wh-a' });
+      expect(created.webhookId).toBe('wh-a');
+      expect(created.flowId).toBe('flow-doc-a');
+      // map -> component array
+      expect(created.mapping).toEqual(
+        expect.arrayContaining([
+          { sourceJsonPath: '$.id', targetContextPath: 'event.id' },
+          { sourceJsonPath: '$.type', targetContextPath: 'event.type' },
+        ])
+      );
+      expect(created.filter).toEqual([
+        { jsonPath: '$.type', allowedValues: ['payment_intent.succeeded'] },
+      ]);
+    });
+
+    it('imports a single schedule (straight field copy, resolves flowId relation)', async () => {
+      engine().get('/admin/schedules/sched-a').reply(200, {
+        id: 'sched-a',
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        timezone: 'Asia/Jakarta',
+        flowId: 'flow-a',
+        input: { k: 'v' },
+        enabled: true,
+        createdAt: '',
+        updatedAt: '',
+      });
+
+      let created: any = null;
+      const strapi: any = {
+        documents: vi.fn((uid: string) => {
+          if (uid === 'api::flow.flow') {
+            return { findMany: vi.fn().mockResolvedValue([{ flowId: 'flow-a', documentId: 'flow-doc-a' }]) };
+          }
+          if (uid === 'api::schedule.schedule') {
+            return {
+              findMany: vi.fn().mockResolvedValue([]),
+              create: vi.fn().mockImplementation(({ data }: any) => {
+                created = data;
+                return Promise.resolve({ documentId: 'new-sched' });
+              }),
+              update: vi.fn(),
+            };
+          }
+          return { findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn() };
+        }),
+      };
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx({ type: 'schedule', id: 'sched-a' });
+      await ctrl.importOne(ctx);
+
+      expect(ctx.body).toMatchObject({ imported: true, type: 'schedule', id: 'sched-a' });
+      expect(created).toMatchObject({
+        scheduleId: 'sched-a',
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        timezone: 'Asia/Jakarta',
+        enabled: true,
+        input: { k: 'v' },
+        flowId: 'flow-doc-a',
+      });
+    });
+
+    it('imports a single group, converting the nested ScalingConfig to flat CMS fields', async () => {
+      engine().get('/admin/groups/grp-a').reply(200, {
+        id: 'grp-a',
+        name: 'Workers',
+        description: 'pool',
+        version: 2,
+        connections: ['conn-x', 'conn-y'],
+        enabled: true,
+        scaling: {
+          mode: 'dynamic',
+          minReplicas: 1,
+          maxReplicas: 5,
+          scaleDownDelay: '5m',
+          startupTimeout: '30s',
+          resources: { cpuRequest: '100m', memoryLimit: '512Mi' },
+        },
+      });
+
+      let created: any = null;
+      const strapi: any = {
+        documents: vi.fn((uid: string) => {
+          if (uid === 'api::connection.connection') {
+            return {
+              findMany: vi.fn().mockResolvedValue([
+                { key: 'conn-x', documentId: 'conn-doc-x' },
+                { key: 'conn-y', documentId: 'conn-doc-y' },
+              ]),
+            };
+          }
+          if (uid === 'api::group.group') {
+            return {
+              findMany: vi.fn().mockResolvedValue([]),
+              create: vi.fn().mockImplementation(({ data }: any) => {
+                created = data;
+                return Promise.resolve({ documentId: 'new-grp' });
+              }),
+              update: vi.fn(),
+            };
+          }
+          return { findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn() };
+        }),
+      };
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx({ type: 'group', id: 'grp-a' });
+      await ctrl.importOne(ctx);
+
+      expect(ctx.body).toMatchObject({ imported: true, type: 'group', id: 'grp-a' });
+      expect(created).toMatchObject({
+        groupId: 'grp-a',
+        name: 'Workers',
+        enabled: true,
+        scalingMode: 'dynamic',
+        minReplicas: 1,
+        maxReplicas: 5,
+        // duration strings -> integer seconds
+        scaleDownDelaySeconds: 300,
+        startupTimeoutSeconds: 30,
+        resources: { cpuRequest: '100m', memoryLimit: '512Mi' },
+        // connection keys -> relation documentIds
+        connections: ['conn-doc-x', 'conn-doc-y'],
       });
     });
 

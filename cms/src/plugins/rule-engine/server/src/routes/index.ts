@@ -54,6 +54,34 @@ export default {
           policies: [],
         },
       },
+      // --- Entity Publish/Sync routes (FEAT-002) ---
+      {
+        // POST /webhooks/:id/publish — push a webhook to the engine.
+        method: 'POST',
+        path: '/webhooks/:id/publish',
+        handler: 'entity-publish.webhookPublish',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /schedules/:id/publish — push a schedule to the engine.
+        method: 'POST',
+        path: '/schedules/:id/publish',
+        handler: 'entity-publish.schedulePublish',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /groups/:id/publish — push a group to the engine.
+        method: 'POST',
+        path: '/groups/:id/publish',
+        handler: 'entity-publish.groupPublish',
+        config: {
+          policies: [],
+        },
+      },
       // --- Environment routes (FEAT-001/FEAT-002 multi-env-ui) ---
       {
         // GET /environments — list all Environment entries.

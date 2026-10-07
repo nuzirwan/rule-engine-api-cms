@@ -104,6 +104,27 @@ export default {
             return () => <TemplatesPage />;
           },
         },
+        {
+          path: 'webhooks',
+          Component: async () => {
+            const { WebhooksPage } = await import('./pages/WebhooksPage');
+            return () => <WebhooksPage />;
+          },
+        },
+        {
+          path: 'schedules',
+          Component: async () => {
+            const { SchedulesPage } = await import('./pages/SchedulesPage');
+            return () => <SchedulesPage />;
+          },
+        },
+        {
+          path: 'groups',
+          Component: async () => {
+            const { GroupsPage } = await import('./pages/GroupsPage');
+            return () => <GroupsPage />;
+          },
+        },
       ],
     },
   ],

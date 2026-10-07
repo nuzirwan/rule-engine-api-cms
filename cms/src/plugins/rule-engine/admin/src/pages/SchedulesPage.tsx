@@ -1,12 +1,11 @@
-// WebhooksPage — basic webhook management page (FEAT-004 / FEAT-002). Lists
-// webhooks with their name, provider, flowId, and sync status, and offers a
-// per-row Publish/Sync action that pushes the webhook to the engine via the
-// plugin route POST /rule-engine/webhooks/:id/publish.
+// SchedulesPage — basic schedule management page (FEAT-002). Lists schedules
+// with their cron expression, timezone, flow, and sync status, and offers a
+// per-row Publish/Sync action that pushes the schedule to the engine via the
+// plugin route POST /rule-engine/schedules/:id/publish.
 //
-// FEAT-002: migrated off the deprecated @strapi/design-system HeaderLayout/
-// ContentLayout to Layouts.* from '@strapi/admin/strapi-admin' (matches
-// SyncPage.tsx) — the previous imports no longer exist in @strapi/design-system
-// and broke the admin build once this page was bundled.
+// Follows the WebhooksPage / SyncPage pattern: Layouts.* from
+// '@strapi/admin/strapi-admin', @strapi/design-system Table, useFetchClient.
+// Editing is delegated to the Strapi content manager (no custom editor here).
 
 import * as React from 'react';
 import {
@@ -27,21 +26,17 @@ import {
 import { Plus, ArrowClockwise } from '@strapi/icons';
 import { Layouts, useFetchClient } from '@strapi/admin/strapi-admin';
 
-interface WebhookEntry {
+interface ScheduleEntry {
   id: number;
   documentId: string;
-  webhookId: string;
+  scheduleId: string;
   name: string;
-  provider: 'stripe' | 'github' | 'generic';
+  schedule: string;
+  timezone?: string;
+  enabled: boolean;
   flowId?: { flowId: string } | null;
   lastSyncStatus: 'none' | 'synced' | 'failed';
 }
-
-const providerBadgeVariant: Record<string, 'primary' | 'secondary' | 'alternative'> = {
-  stripe: 'primary',
-  github: 'secondary',
-  generic: 'alternative',
-};
 
 const statusBadgeVariant: Record<string, 'success' | 'danger' | 'neutral'> = {
   synced: 'success',
@@ -49,54 +44,53 @@ const statusBadgeVariant: Record<string, 'success' | 'danger' | 'neutral'> = {
   none: 'neutral',
 };
 
-export interface WebhooksPageProps {
+export interface SchedulesPageProps {
   /** Base URL path for the content manager (defaults to /admin/content-manager) */
   contentManagerBasePath?: string;
 }
 
-export const WebhooksPage: React.FC<WebhooksPageProps> = ({
+export const SchedulesPage: React.FC<SchedulesPageProps> = ({
   contentManagerBasePath = '/admin/content-manager',
 }) => {
   const { get, post } = useFetchClient();
-  const [webhooks, setWebhooks] = React.useState<WebhookEntry[]>([]);
+  const [schedules, setSchedules] = React.useState<ScheduleEntry[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [publishingId, setPublishingId] = React.useState<string | null>(null);
   const [publishError, setPublishError] = React.useState<string | null>(null);
 
-  const fetchWebhooks = React.useCallback(async () => {
+  const fetchSchedules = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await get('/api/webhooks?populate=flowId');
+      const response = await get('/api/schedules?populate=flowId');
       const data = response.data?.data ?? [];
-      setWebhooks(data);
+      setSchedules(data);
     } catch (err) {
-      setError((err as Error).message || 'Failed to load webhooks');
+      setError((err as Error).message || 'Failed to load schedules');
     } finally {
       setLoading(false);
     }
   }, [get]);
 
   React.useEffect(() => {
-    fetchWebhooks();
-  }, [fetchWebhooks]);
+    fetchSchedules();
+  }, [fetchSchedules]);
 
   const handleRowClick = (documentId: string) => {
-    // Navigate to the content manager edit page for this webhook
-    window.location.href = `${contentManagerBasePath}/collection-types/api::webhook.webhook/${documentId}`;
+    window.location.href = `${contentManagerBasePath}/collection-types/api::schedule.schedule/${documentId}`;
   };
 
   const handleCreate = () => {
-    window.location.href = `${contentManagerBasePath}/collection-types/api::webhook.webhook/create`;
+    window.location.href = `${contentManagerBasePath}/collection-types/api::schedule.schedule/create`;
   };
 
-  const handlePublish = async (webhookId: string) => {
-    setPublishingId(webhookId);
+  const handlePublish = async (scheduleId: string) => {
+    setPublishingId(scheduleId);
     setPublishError(null);
     try {
-      await post(`/rule-engine/webhooks/${encodeURIComponent(webhookId)}/publish`, {});
-      await fetchWebhooks();
+      await post(`/rule-engine/schedules/${encodeURIComponent(scheduleId)}/publish`, {});
+      await fetchSchedules();
     } catch (err) {
       const body = (err as any)?.response?.data;
       setPublishError(body?.error ?? (err as Error).message ?? 'Publish failed');
@@ -108,20 +102,20 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
   return (
     <Layouts.Root>
       <Layouts.Header
-        title="Webhooks"
-        subtitle="Manage webhook configurations for external event sources"
+        title="Schedules"
+        subtitle="Manage cron-based schedules that trigger flows"
         primaryAction={
           <Flex gap={2}>
             <Button
               variant="secondary"
               startIcon={<ArrowClockwise />}
-              onClick={fetchWebhooks}
+              onClick={fetchSchedules}
               disabled={loading}
             >
               Refresh
             </Button>
             <Button startIcon={<Plus />} onClick={handleCreate}>
-              Create Webhook
+              Create Schedule
             </Button>
           </Flex>
         }
@@ -130,7 +124,7 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
         <Box padding={4}>
           {loading && (
             <Flex justifyContent="center" padding={8}>
-              <Loader>Loading webhooks...</Loader>
+              <Loader>Loading schedules...</Loader>
             </Flex>
           )}
 
@@ -146,29 +140,29 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
             </Box>
           )}
 
-          {!loading && !error && webhooks.length === 0 && (
+          {!loading && !error && schedules.length === 0 && (
             <EmptyStateLayout
-              content="No webhooks configured yet. Create one to start receiving external events."
+              content="No schedules configured yet. Create one to trigger a flow on a cron."
               action={
                 <Button startIcon={<Plus />} onClick={handleCreate}>
-                  Create Webhook
+                  Create Schedule
                 </Button>
               }
             />
           )}
 
-          {!loading && !error && webhooks.length > 0 && (
-            <Table colCount={6} rowCount={webhooks.length + 1}>
+          {!loading && !error && schedules.length > 0 && (
+            <Table colCount={6} rowCount={schedules.length + 1}>
               <Thead>
                 <Tr>
                   <Th>
-                    <Typography variant="sigma">Webhook ID</Typography>
+                    <Typography variant="sigma">Schedule ID</Typography>
                   </Th>
                   <Th>
                     <Typography variant="sigma">Name</Typography>
                   </Th>
                   <Th>
-                    <Typography variant="sigma">Provider</Typography>
+                    <Typography variant="sigma">Cron</Typography>
                   </Th>
                   <Th>
                     <Typography variant="sigma">Flow</Typography>
@@ -182,35 +176,33 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
                 </Tr>
               </Thead>
               <Tbody>
-                {webhooks.map((webhook) => (
-                  <Tr key={webhook.documentId}>
-                    <Td onClick={() => handleRowClick(webhook.documentId)} style={{ cursor: 'pointer' }}>
-                      <Typography>{webhook.webhookId}</Typography>
+                {schedules.map((schedule) => (
+                  <Tr key={schedule.documentId}>
+                    <Td onClick={() => handleRowClick(schedule.documentId)} style={{ cursor: 'pointer' }}>
+                      <Typography>{schedule.scheduleId}</Typography>
                     </Td>
-                    <Td onClick={() => handleRowClick(webhook.documentId)} style={{ cursor: 'pointer' }}>
-                      <Typography fontWeight="bold">{webhook.name}</Typography>
-                    </Td>
-                    <Td>
-                      <Badge variant={providerBadgeVariant[webhook.provider] || 'alternative'}>
-                        {webhook.provider}
-                      </Badge>
+                    <Td onClick={() => handleRowClick(schedule.documentId)} style={{ cursor: 'pointer' }}>
+                      <Typography fontWeight="bold">{schedule.name}</Typography>
                     </Td>
                     <Td>
-                      <Typography textColor={webhook.flowId ? undefined : 'neutral500'}>
-                        {webhook.flowId?.flowId || '—'}
+                      <Typography>{schedule.schedule}</Typography>
+                    </Td>
+                    <Td>
+                      <Typography textColor={schedule.flowId ? undefined : 'neutral500'}>
+                        {schedule.flowId?.flowId || '—'}
                       </Typography>
                     </Td>
                     <Td>
-                      <Badge variant={statusBadgeVariant[webhook.lastSyncStatus] || 'neutral'}>
-                        {webhook.lastSyncStatus}
+                      <Badge variant={statusBadgeVariant[schedule.lastSyncStatus] || 'neutral'}>
+                        {schedule.lastSyncStatus}
                       </Badge>
                     </Td>
                     <Td>
                       <Button
                         variant="secondary"
                         size="S"
-                        onClick={() => handlePublish(webhook.webhookId)}
-                        loading={publishingId === webhook.webhookId}
+                        onClick={() => handlePublish(schedule.scheduleId)}
+                        loading={publishingId === schedule.scheduleId}
                         disabled={publishingId !== null}
                       >
                         Publish
@@ -227,4 +219,4 @@ export const WebhooksPage: React.FC<WebhooksPageProps> = ({
   );
 };
 
-export default WebhooksPage;
+export default SchedulesPage;
