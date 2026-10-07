@@ -9,6 +9,9 @@
 //   * if the stored value fails to parse, we render a raw-JSON fallback editor +
 //     an error, never a blank/broken graph (design §4). The pure parse decision
 //     lives in ../../lib/parseStored (unit-tested by the §6.4 smoke).
+//
+// PERF: Loading state shown while the JDM editor initializes to give immediate
+// visual feedback and prevent perceived freezes during component mount.
 
 import * as React from 'react';
 import { DecisionGraph, JdmConfigProvider, type DecisionGraphType } from '@gorules/jdm-editor';
@@ -17,6 +20,7 @@ import { Field, Flex } from '@strapi/design-system';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
+import { EditorSkeleton } from '../EditorSkeleton';
 
 const EMPTY_GRAPH: DecisionGraphType = { nodes: [], edges: [] };
 const DEBOUNCE_MS = 300;
@@ -38,6 +42,14 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
 
   // Decide parsed-vs-fallback once per incoming value.
   const parsed = React.useMemo(() => parseStoredJson<DecisionGraphType>(value, EMPTY_GRAPH), [value]);
+
+  // PERF: Loading state while the JDM editor initializes
+  const [isReady, setIsReady] = React.useState(false);
+  React.useEffect(() => {
+    // Defer ready state to next frame to allow React to finish mounting
+    const frame = requestAnimationFrame(() => setIsReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   // Local working copy of the graph while editing (so the editor stays
   // responsive and the debounced writer flushes to Strapi).
@@ -79,6 +91,16 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
   );
 
   const label = intlLabel?.defaultMessage ?? name;
+
+  // Show skeleton while initializing
+  if (!isReady) {
+    return (
+      <Field.Root name={name} hint={hint} error={error} required={required}>
+        <Field.Label>{label}</Field.Label>
+        <EditorSkeleton height={520} label="Initializing decision editor…" />
+      </Field.Root>
+    );
+  }
 
   return (
     <Field.Root name={name} hint={hint} error={error ?? (parsed.ok ? undefined : parsed.error)} required={required}>

@@ -1,6 +1,8 @@
 // VersionPreview — modal component showing a read-only flow canvas for a specific version.
 // Fetches the full flow detail and renders FlowCanvasField in read-only mode.
 // Shows validation status/errors from version metadata.
+//
+// PERF: FlowCanvasField is wrapped with React.Suspense to handle lazy-loaded chunks.
 
 import * as React from 'react';
 import { useFetchClient } from '@strapi/admin/strapi-admin';
@@ -8,6 +10,7 @@ import { Box, Flex, Loader, Typography, Badge } from '@strapi/design-system';
 
 import type { FlowDetail } from '../VersionHistory/types';
 import FlowCanvasField from '../FlowCanvasField';
+import { EditorSkeleton } from '../EditorSkeleton';
 
 // ---------------------------------------------------------------------------
 // FetchState
@@ -100,15 +103,17 @@ export const VersionPreview: React.FC<VersionPreviewProps> = ({ flowId, version 
               </Flex>
             </Flex>
 
-            {/* Flow canvas in read-only mode */}
+            {/* Flow canvas in read-only mode, wrapped with Suspense */}
             <Box style={{ minHeight: 500 }}>
-              <FlowCanvasField
-                name="tree-preview"
-                value={state.data.tree}
-                onChange={noop}
-                disabled={true}
-                intlLabel={{ defaultMessage: 'Flow Tree (Read-only)' }}
-              />
+              <React.Suspense fallback={<EditorSkeleton height={500} label="Loading flow preview…" />}>
+                <FlowCanvasField
+                  name="tree-preview"
+                  value={state.data.tree}
+                  onChange={noop}
+                  disabled={true}
+                  intlLabel={{ defaultMessage: 'Flow Tree (Read-only)' }}
+                />
+              </React.Suspense>
             </Box>
 
             {/* Fixtures summary */}

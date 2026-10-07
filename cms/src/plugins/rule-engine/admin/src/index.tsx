@@ -9,6 +9,9 @@
 // FEAT-002: Adds EnvironmentsPage to plugin settings and wraps the app with
 // EnvironmentProvider for global environment selection state. All page imports
 // are lazy to avoid loading @strapi/admin hooks during tests.
+//
+// PERF: EnvironmentProvider is lifted to wrap ALL routes via a layout component,
+// eliminating redundant fetchEnvironments() calls on every route navigation.
 
 import { buildCustomFields, PLUGIN_ID } from './customFields';
 
@@ -44,77 +47,64 @@ export default {
 
   // Plugin routes — these are rendered when navigating to /plugins/rule-engine/*
   // All routes load lazily to avoid importing @strapi/admin at module load time
-  // (which would break the smoke tests that don't have a full Strapi environment)
+  // (which would break the smoke tests that don't have a full Strapi environment).
+  //
+  // PERF: The layout route wraps all children with EnvironmentProvider ONCE,
+  // so fetchEnvironments() is called on first mount and NOT re-called on each
+  // route navigation. The children routes only load their page component.
   routes: [
     {
+      // Layout route — provides EnvironmentProvider to all nested routes
       path: '/',
       Component: async () => {
         const React = await import('react');
+        const { Outlet } = await import('react-router-dom');
         const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
-        const { SyncPage } = await import('./pages/SyncPage');
+        // Return a layout component that renders children via Outlet
         return () => (
           <EnvironmentProvider>
-            <SyncPage />
+            <Outlet />
           </EnvironmentProvider>
         );
       },
-      exact: true,
-    },
-    {
-      path: '/environments',
-      Component: async () => {
-        const React = await import('react');
-        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
-        const { EnvironmentsPage } = await import('./pages/EnvironmentsPage');
-        return () => (
-          <EnvironmentProvider>
-            <EnvironmentsPage />
-          </EnvironmentProvider>
-        );
-      },
-      exact: true,
-    },
-    {
-      path: '/sync',
-      Component: async () => {
-        const React = await import('react');
-        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
-        const { SyncPage } = await import('./pages/SyncPage');
-        return () => (
-          <EnvironmentProvider>
-            <SyncPage />
-          </EnvironmentProvider>
-        );
-      },
-      exact: true,
-    },
-    {
-      path: '/flows/:flowId',
-      Component: async () => {
-        const React = await import('react');
-        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
-        const { FlowDetailPage } = await import('./pages/FlowDetailPage');
-        return () => (
-          <EnvironmentProvider>
-            <FlowDetailPage />
-          </EnvironmentProvider>
-        );
-      },
-      exact: true,
-    },
-    {
-      path: '/templates',
-      Component: async () => {
-        const React = await import('react');
-        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
-        const { TemplatesPage } = await import('./pages/TemplatesPage');
-        return () => (
-          <EnvironmentProvider>
-            <TemplatesPage />
-          </EnvironmentProvider>
-        );
-      },
-      exact: true,
+      children: [
+        {
+          path: '',
+          index: true,
+          Component: async () => {
+            const { SyncPage } = await import('./pages/SyncPage');
+            return () => <SyncPage />;
+          },
+        },
+        {
+          path: 'environments',
+          Component: async () => {
+            const { EnvironmentsPage } = await import('./pages/EnvironmentsPage');
+            return () => <EnvironmentsPage />;
+          },
+        },
+        {
+          path: 'sync',
+          Component: async () => {
+            const { SyncPage } = await import('./pages/SyncPage');
+            return () => <SyncPage />;
+          },
+        },
+        {
+          path: 'flows/:flowId',
+          Component: async () => {
+            const { FlowDetailPage } = await import('./pages/FlowDetailPage');
+            return () => <FlowDetailPage />;
+          },
+        },
+        {
+          path: 'templates',
+          Component: async () => {
+            const { TemplatesPage } = await import('./pages/TemplatesPage');
+            return () => <TemplatesPage />;
+          },
+        },
+      ],
     },
   ],
 

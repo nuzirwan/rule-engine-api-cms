@@ -13,6 +13,9 @@
 //
 // On a parse failure of the stored value, it degrades to the shared raw-JSON
 // fallback rather than a blank/broken canvas (design §4).
+//
+// PERF: Loading state shown while ReactFlow initializes; drag/connect disabled
+// until first user interaction to reduce initial render cost on large flows.
 
 import * as React from 'react';
 import {
@@ -34,6 +37,7 @@ import { Box, Button, Field, Flex, Textarea, Typography } from '@strapi/design-s
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
+import { EditorSkeleton } from '../EditorSkeleton';
 import {
   canvasToTree,
   treeToCanvas,
@@ -103,6 +107,21 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
   const { name, value, onChange, intlLabel, hint, required, error, disabled } = props;
 
   const parsed = React.useMemo(() => parseStoredJson<EngineNode>(value, EMPTY_TREE), [value]);
+
+  // PERF: Loading state while ReactFlow initializes
+  const [isReady, setIsReady] = React.useState(false);
+  React.useEffect(() => {
+    // Defer ready state to next frame to allow React to finish mounting
+    const frame = requestAnimationFrame(() => setIsReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  // PERF: Delayed interactivity — drag/connect disabled until first user interaction.
+  // This reduces initial render cost on large flows by deferring interactivity setup.
+  const [interactionEnabled, setInteractionEnabled] = React.useState(false);
+  const enableInteraction = React.useCallback(() => {
+    if (!interactionEnabled) setInteractionEnabled(true);
+  }, [interactionEnabled]);
 
   // Sidecar x/y layout, kept OUT of the engine tree. Positions a drag produces
   // live here so re-deriving the canvas from the (layout-free) engine tree does
@@ -308,6 +327,16 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     );
   }
 
+  // Show skeleton while initializing
+  if (!isReady) {
+    return (
+      <Field.Root name={name} hint={hint} error={error} required={required}>
+        <Field.Label>{label}</Field.Label>
+        <EditorSkeleton height={560} label="Initializing flow canvas…" />
+      </Field.Root>
+    );
+  }
+
   return (
     <Field.Root name={name} hint={hint} error={error} required={required}>
       <Field.Label>{label}</Field.Label>
@@ -332,8 +361,10 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
               onEdgesChange={disabled ? undefined : onEdgesChange}
               onConnect={disabled ? undefined : onConnect}
               onSelectionChange={onSelectionChange}
-              nodesDraggable={!disabled}
-              nodesConnectable={!disabled}
+              nodesDraggable={!disabled && interactionEnabled}
+              nodesConnectable={!disabled && interactionEnabled}
+              onPaneClick={enableInteraction}
+              onNodeClick={enableInteraction}
               fitView
             >
               <Background />
