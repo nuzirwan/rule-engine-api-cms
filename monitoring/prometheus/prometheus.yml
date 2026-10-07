@@ -14,3 +14,27 @@ scrape_configs:
           - nzr-engine:8080
     metrics_path: /metrics
     scheme: http
+
+  # Workers scrape job.
+  # In docker-compose (local dev), add worker containers to this target list.
+  # In Kubernetes, replace static_configs with kubernetes_sd_configs for pod discovery:
+  #
+  #   - job_name: nzr-workers
+  #     kubernetes_sd_configs:
+  #       - role: pod
+  #     relabel_configs:
+  #       - source_labels: [__meta_kubernetes_pod_label_app]
+  #         action: keep
+  #         regex: nzr-worker
+  #       - source_labels: [__meta_kubernetes_pod_container_port_number]
+  #         action: keep
+  #         regex: "8080"
+  #
+  - job_name: nzr-workers
+    static_configs:
+      - targets: []
+        # Add worker targets here for docker-compose:
+        # - nzr-worker-1:8080
+        # - nzr-worker-2:8080
+    metrics_path: /metrics
+    scheme: http

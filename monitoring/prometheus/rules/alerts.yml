@@ -35,3 +35,12 @@ groups:
         annotations:
           summary: "Circuit breaker OPEN on {{ $labels.conn_key }}"
           description: "Connection {{ $labels.conn_key }} breaker is open."
+
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes > 800000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory usage > 800MB (tune threshold for your deployment)"
+          description: "Process is using {{ $value | humanize1024 }}B of memory. Adjust the 800MB threshold in this alert to match your container limits."

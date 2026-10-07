@@ -84,13 +84,16 @@ To verify the engine is being scraped successfully: go to **Status → Targets**
 
 ## Alert Rules
 
-Three Prometheus alert rules are pre-configured in `monitoring/prometheus/rules/alerts.yml`:
+Four Prometheus alert rules are pre-configured in `monitoring/prometheus/rules/alerts.yml`:
 
 | Alert | Condition | Severity | Fire After |
 |-------|-----------|----------|------------|
 | `HighErrorRate` | Flow error rate > 5% | warning | 5 minutes |
 | `HighP99Latency` | Flow p99 latency > 1s | warning | 5 minutes |
 | `CircuitBreakerOpen` | Any `nzr_breaker_state == 2` | critical | Immediately |
+| `HighMemoryUsage` | `process_resident_memory_bytes > 800MB` | warning | 5 minutes |
+
+**Note on memory alert:** The default threshold is 800MB. Adjust this value in `monitoring/prometheus/rules/alerts.yml` to match 80% of your container's memory limit. For example, if your engine container has a 2GB limit, set the threshold to `1600000000` (1.6GB).
 
 Alerts are visible in the Prometheus UI at **http://localhost:9090/alerts**. To integrate with PagerDuty, Slack, or other receivers, add an Alertmanager deployment and configure routes in `monitoring/alertmanager/alertmanager.yml` (not included in this release — Prometheus will log a warning about the missing alertmanager but continue scraping normally).
 
@@ -153,3 +156,52 @@ The engine's `/metrics` endpoint is unauthenticated. In internet-facing deployme
 - A reverse proxy (nginx, Caddy) with IP allowlisting for the Prometheus scraper
 - Network-level controls (security groups, firewall rules)
 - mTLS between Prometheus and the engine (requires scrape config changes)
+
+---
+
+## Worker Metrics
+
+Workers export their own metrics at `/metrics`, separate from the engine. The `monitoring/prometheus/prometheus.yml` includes a commented `nzr-workers` scrape job.
+
+### Docker Compose (local dev)
+
+Add worker targets manually to the `nzr-workers` job:
+
+```yaml
+- job_name: nzr-workers
+  static_configs:
+    - targets:
+        - nzr-worker-1:8080
+        - nzr-worker-2:8080
+```
+
+### Kubernetes
+
+Replace `static_configs` with Kubernetes service discovery:
+
+```yaml
+- job_name: nzr-workers
+  kubernetes_sd_configs:
+    - role: pod
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: nzr-worker
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+      action: keep
+      regex: "8080"
+```
+
+### Worker Metrics Available
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `worker_requests_total` | CounterVec | `group`, `flow_id`, `status` | Total requests processed by worker |
+| `worker_request_duration_seconds` | HistogramVec | `group`, `flow_id` | Worker request latency |
+| `worker_config_version` | GaugeVec | `group` | Current config version loaded |
+| `worker_flows_loaded` | GaugeVec | `group` | Number of flows loaded |
+| `worker_jdms_loaded` | GaugeVec | `group` | Number of JDMs loaded |
+| `worker_connections_active` | GaugeVec | `group`, `connection` | Active connections per worker |
+| `worker_reload_total` | CounterVec | `group`, `status` | Config reload attempts |
+
+Worker metrics are visualized in a separate dashboard (`flow-workers.json`) in the `deploy/grafana/dashboards/` directory.
