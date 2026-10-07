@@ -17,6 +17,8 @@ func All() []connect.Connector {
 		newValkeyConnector(),
 		rest,
 		restAlias,
+		newKafkaConnector(),
+		newRabbitMQConnector(),
 	}
 }
 
