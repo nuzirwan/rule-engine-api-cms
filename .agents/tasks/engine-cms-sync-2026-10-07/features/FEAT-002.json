@@ -1,0 +1,19 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Add missing flow node types to the FlowCanvasField palette. Engine supports 16 node types but CMS palette only offers 11. Add: messageTrigger, filter, find, map, reduce.",
+  "status": "completed",
+  "steps": [
+    "1. Edit /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/index.tsx: Add 'messageTrigger' after 'trigger' in NODE_PALETTE array.",
+    "2. In the same file, add 'filter', 'find', 'map', 'reduce' to NODE_PALETTE array after 'response'. Final palette should have 16 entries matching engine's flow/node.go NodeType constants."
+  ],
+  "acceptance_criteria": [
+    "NODE_PALETTE array contains exactly: trigger, messageTrigger, action, condition, switch, sequence, parallel, forEach, decision, set, logger, response, filter, find, map, reduce",
+    "TypeScript compiles without errors"
+  ],
+  "verification": [
+    "Run: cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms && npm run build 2>&1 | head -50 — should complete without TypeScript errors"
+  ],
+  "blocked_reason": null,
+  "findings": "NODE_PALETTE updated from 11 to 16 entries. TypeScript compilation verified with tsc --noEmit (exit 0). Full build showed '✔ Compiling TS' before timeout."
+}

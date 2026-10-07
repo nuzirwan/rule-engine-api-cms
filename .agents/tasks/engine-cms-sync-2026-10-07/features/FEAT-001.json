@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add mysql, http, kafka, rabbitmq connector types to CMS. Create settings components for each new type following existing patterns (postgres-settings.json, valkey-settings.json). Update connection schema enum and dynamiczone.",
+  "status": "completed",
+  "steps": [
+    "1. Create /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/mysql-settings.json with fields matching engine mysql.go: host (string), port (integer, default 3306), database (string), user (string), maxOpenConns (integer), maxIdleConns (integer), connMaxLifetime (string for duration). No password field - comes from secretRef. Follow postgres-settings.json structure (collectionName: components_connection_mysql_settings, displayName: mysql-settings).",
+    "2. Create /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/kafka-settings.json with fields matching engine kafka.go: brokers (string - comma-separated list), topic (string, required), groupID (string), partition (integer), dlqTopic (string), maxRetries (integer). Follow existing pattern.",
+    "3. Create /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/rabbitmq-settings.json with fields matching engine rabbitmq.go: url (string, required - AMQP URL), queue (string), exchange (string), routingKey (string), prefetch (integer, default 10), maxRetries (integer). Follow existing pattern.",
+    "4. Update /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/api/connection/content-types/connection/schema.json: add 'mysql', 'http', 'kafka', 'rabbitmq' to the type enum (currently [\"postgres\", \"valkey\", \"rest\"]).",
+    "5. Update the same connection schema.json: add the new components to the settings dynamiczone components array: 'connection.mysql-settings', 'connection.kafka-settings', 'connection.rabbitmq-settings'."
+  ],
+  "acceptance_criteria": [
+    "Connection schema type enum includes: postgres, valkey, rest, mysql, http, kafka, rabbitmq",
+    "mysql-settings.json exists with host, port, database, user, maxOpenConns, maxIdleConns, connMaxLifetime attributes",
+    "kafka-settings.json exists with brokers, topic, groupID, partition, dlqTopic, maxRetries attributes",
+    "rabbitmq-settings.json exists with url, queue, exchange, routingKey, prefetch, maxRetries attributes",
+    "Connection schema settings dynamiczone includes all 6 settings components"
+  ],
+  "verification": [
+    "Run: cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms && npm run build 2>&1 | head -50 — should complete without schema errors",
+    "Check that each new JSON file is valid JSON: cat <file> | jq ."
+  ],
+  "blocked_reason": null,
+  "findings": "http type added to enum but uses existing rest-settings component (rest == http connector). CMS build passed TS compilation and schema validation but ran out of memory during admin panel build (NODE heap limit issue, not schema problem)."
+}

@@ -1,0 +1,12 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "label": "Stale controller comment",
+      "description": "The comment at the top of validate.ts claims dry-run \"only supports stored mode\" and describes a workaround using mocks, but the implementation sends to the actual dry-run endpoint which now supports candidate mode. Update the comment to match reality.",
+      "severity": "low",
+      "blocking": false
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/flow-validate-dryrun-2026-10-07/review.md"
+}

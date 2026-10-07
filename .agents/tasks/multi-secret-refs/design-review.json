@@ -1,0 +1,34 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": "H1",
+      "severity": "HIGH",
+      "title": "Pool's open() snippet incomplete — missing newResilientClient and metrics",
+      "location": "Design §3.2",
+      "fix": "Update snippet to include full function body with p.openCount.Add(1) and newResilientClient return"
+    },
+    {
+      "id": "M1",
+      "severity": "MEDIUM",
+      "title": "CMS dynamiczone coordination unclear — UI needs to map settings component to connector type",
+      "location": "Design §6.1",
+      "fix": "Add note clarifying connector type inference from settings dynamiczone component selection"
+    },
+    {
+      "id": "M2",
+      "severity": "MEDIUM",
+      "title": "RabbitMQ silent ignore of secretRefs when URL is set may confuse users",
+      "location": "Design §2.6",
+      "fix": "Log info-level message when both url and secretRefs are provided, or document in CMS UI"
+    },
+    {
+      "id": "M3",
+      "severity": "MEDIUM",
+      "title": "testConnectionRequest Secrets field needs explicit json tag documentation",
+      "location": "Design §5.1",
+      "fix": "Add explicit note that field must be Secrets map[string]string with json tag \"secrets\""
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/multi-secret-refs/design-review.md"
+}

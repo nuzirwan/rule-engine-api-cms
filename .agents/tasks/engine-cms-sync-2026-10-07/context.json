@@ -1,0 +1,39 @@
+{
+  "project_type": "Full-stack: Strapi v5 CMS (TypeScript/Node) + Go rule engine",
+  "language": "TypeScript (CMS), Go (engine)",
+  "build_system": "npm for CMS (no explicit build step for Strapi schema), make for engine",
+  "test_framework": "Strapi admin rebuilds on schema change (npm run build for admin); no automated unit tests for schema changes",
+  "build_command": "cd cms && npm run build (for admin plugin changes only)",
+  "test_command": "No automated tests for schema-only changes; verify via Strapi startup and content-type inspection",
+  "verification_instructions": "1. For schema changes: restart Strapi dev server to confirm no parse errors. 2. For admin UI changes: npm run build in cms/ then check no build errors. 3. Manual verification: check new enum values appear in Strapi admin UI",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Worktree at /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync - all file paths must be absolute to this worktree, never relative or main workspace",
+  "contribution_requirements": "Three separate commits per the brief: (1) connector types, (2) flow node types, (3) resilience features. Each commit leaves codebase buildable.",
+  "key_patterns": {
+    "component_json_structure": "collectionName: components_connection_<name>, info: {displayName, description}, options: {}, attributes: {...}",
+    "settings_component_pattern": "See postgres-settings.json: credential-free fields only, password via secretRef, no dsn",
+    "dynamiczone_pattern": "settings field in connection schema lists components in the components array",
+    "NODE_PALETTE_pattern": "Array of string literals in FlowCanvasField/index.tsx"
+  },
+  "relevant_files": [
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/api/connection/content-types/connection/schema.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/postgres-settings.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/valkey-settings.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/rest-settings.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/pool.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/resilience-policy.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/retry-policy.json",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/index.tsx",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine/internal/connect/drivers/mysql.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine/internal/connect/drivers/kafka.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine/internal/connect/drivers/rabbitmq.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/engine/internal/connect/resilience.go"
+  ],
+  "directory_structure": {
+    "cms/src/api/connection/content-types/connection/": "Connection content-type schema",
+    "cms/src/components/connection/": "Strapi components for connection settings and resilience",
+    "cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/": "Flow canvas UI component with NODE_PALETTE",
+    "engine/internal/connect/drivers/": "Go driver implementations (mysql, kafka, rabbitmq, etc.)",
+    "engine/internal/connect/": "Connect package with resilience.go defining ResiliencePolicy"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "SecretSchemaProvider interface and connector implementations: add optional SecretSchemaProvider interface, SecretField struct, ConnectorRegistry interface with AllConnectors(), implement SecretSchema() on all connectors, update connector Open() methods to prefer SecretsFrom, and add GET /admin/connectors/schema endpoint.",
+  "status": "pending",
+  "steps": [
+    "1. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/connector.go: Add `SecretField struct { Name string json:\"name\"; Required bool json:\"required\"; Label string json:\"label\" }`, add `SecretSchemaProvider interface { SecretSchema() []SecretField }`, add `ConnectorRegistry interface { ConnectorLookup; AllConnectors() map[string]Connector }`.",
+    "2. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/registry.go: Add `AllConnectors() map[string]Connector` method returning a copy of r.byType, add compile-time assertion `var _ ConnectorRegistry = (*registry)(nil)`.",
+    "3. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/registry_v2.go: Add `AllConnectors() map[string]Connector` method, add compile-time assertion `var _ ConnectorRegistry = (*registryV2)(nil)`.",
+    "4. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/postgres.go: Add `SecretSchema() []connect.SecretField` returning [{Name: \"password\", Required: false, Label: \"Database Password\"}]. Update Open() to prefer SecretsFrom(ctx)[\"password\"] with fallback to SecretFrom(ctx).",
+    "5. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/mysql.go: Add SecretSchema() returning [{Name: \"password\", Required: false, Label: \"Database Password\"}]. Update Open() to prefer SecretsFrom.",
+    "6. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/valkey.go: Add SecretSchema() returning [{Name: \"password\", Required: false, Label: \"Redis Password\"}]. Update Open() to prefer SecretsFrom.",
+    "7. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/kafka.go: Add SecretSchema() returning [{Name: \"password\", Required: false, Label: \"SASL Password\"}, {Name: \"username\", Required: false, Label: \"SASL Username\"}]. Add SASL auth support in Open() reading secrets from SecretsFrom(ctx) when saslMechanism setting is present. Add dialer field to kafkaClient.",
+    "8. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/rabbitmq.go: Add SecretSchema() returning [{Name: \"password\", Required: false, Label: \"Password\"}, {Name: \"username\", Required: false, Label: \"Username\"}]. Update Open() to support discrete settings (host/port/vhost) with secret injection for credentials, keeping URL codepath as-is for backward compat.",
+    "9. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/drivers/rest.go: Add SecretSchema() returning nil (dynamic secrets). Update Open() to read SecretsFrom(ctx) and inject resolved secret values as HTTP header values where the key is the header name.",
+    "10. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/httpapi/admin_handlers.go: Add connectorSchemaResponse and connectorSchema types, add listConnectorSchemas handler that iterates ConnectorRegistry.AllConnectors() and calls SecretSchemaProvider type assertion, add optional getConnectorSchema handler for single-type lookup.",
+    "11. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/httpapi/admin.go: Register routes `GET /admin/connectors/schema` and `GET /admin/connectors/{type}/schema` in mount().",
+    "12. Add tests: verify each connector's SecretSchema() returns expected fields, verify schema endpoint returns correct structure with REST having null secrets."
+  ],
+  "acceptance_criteria": [
+    "SecretSchemaProvider interface exists and connectors implement it via type assertion",
+    "Each connector (postgres, mysql, valkey, kafka, rabbitmq, rest) implements SecretSchema()",
+    "REST connector's SecretSchema() returns nil (dynamic)",
+    "GET /admin/connectors/schema returns all connector schemas as JSON",
+    "Kafka Open() supports SASL auth when saslMechanism setting is present",
+    "RabbitMQ Open() supports discrete settings with secret injection",
+    "REST Open() injects resolved secrets as HTTP headers",
+    "All existing tests pass plus new tests for SecretSchema and schema endpoint"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine && go build ./... && go test ./..."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

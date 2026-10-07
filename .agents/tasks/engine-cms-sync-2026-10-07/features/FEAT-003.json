@@ -1,0 +1,22 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Add circuit breaker and backoff fields to resilience policy. Engine ResiliencePolicy supports Retry.BaseBackoff, Retry.MaxBackoff, and Breaker.{FailureThreshold, FailureRatio, OpenTimeout} but CMS only has Retry.MaxAttempts.",
+  "status": "completed",
+  "steps": [
+    "1. Edit /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/retry-policy.json: Add baseBackoffMs (integer, min 0) and maxBackoffMs (integer, min 0) to attributes. These map to engine's Retry.BaseBackoff and Retry.MaxBackoff (the transform layer converts ms to Go duration).",
+    "2. Create /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/breaker-policy.json with collectionName: components_connection_breaker_policies, displayName: breaker-policy. Attributes: failureThreshold (integer, min 1), failureRatio (float, min 0, max 1), openTimeoutMs (integer, min 1000). These map to engine resilience.go Breaker struct fields.",
+    "3. Edit /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms/src/components/connection/resilience-policy.json: Add a breaker component reference: \"breaker\": {\"type\": \"component\", \"repeatable\": false, \"component\": \"connection.breaker-policy\"}."
+  ],
+  "acceptance_criteria": [
+    "retry-policy.json has maxAttempts, baseBackoffMs, maxBackoffMs attributes",
+    "breaker-policy.json exists with failureThreshold, failureRatio, openTimeoutMs attributes",
+    "resilience-policy.json has timeoutMs, retry component, and breaker component"
+  ],
+  "verification": [
+    "Run: cd /home/nuzirwan/project/rule-engine-api/.worktrees/engine-cms-sync/cms && npm run build 2>&1 | head -50 — should complete without schema errors",
+    "Check that each modified/new JSON file is valid JSON: cat <file> | jq ."
+  ],
+  "blocked_reason": null,
+  "findings": "All three acceptance criteria met: retry-policy.json now has maxAttempts, baseBackoffMs, maxBackoffMs; breaker-policy.json created with failureThreshold, failureRatio, openTimeoutMs; resilience-policy.json has timeoutMs, retry component, and breaker component. CMS build passes."
+}

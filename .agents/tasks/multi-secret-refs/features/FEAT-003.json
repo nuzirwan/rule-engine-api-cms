@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Engine API updates: update testConnectionRequest to accept secrets map (in addition to legacy secret string), update createConnectionRequest to include SecretRefs field, convert plaintext secrets to connect.Secret type before passing to context.",
+  "status": "pending",
+  "steps": [
+    "1. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/httpapi/admin_handlers.go: Update testConnectionRequest struct to add `Secrets map[string]string json:\"secrets,omitempty\"` field alongside existing Secret string field.",
+    "2. In testConnection handler: Prefer req.Secrets map over req.Secret string. Convert map[string]string to map[string]connect.Secret using connect.NewPlainSecret(value) for each entry. Call connect.WithSecrets(ctx, secrets) before connector.Open(). Also call connect.WithSecret(ctx, secrets[\"password\"]) for backward compat when password key exists.",
+    "3. Update createConnectionRequest struct to add `SecretRefs map[string]string json:\"secretRefs,omitempty\"` field.",
+    "4. In createConnection handler: Populate def.SecretRefs from req.SecretRefs.",
+    "5. In listConnections handler: Add secretRefs to the output map (alongside existing secretRef).",
+    "6. In getConnection handler: Add secretRefs to the output map.",
+    "7. Add tests: test endpoint accepts {\"type\": \"kafka\", \"settings\": {...}, \"secrets\": {\"username\": \"u\", \"password\": \"p\"}}, test legacy format {\"type\": \"postgres\", \"settings\": {...}, \"secret\": \"pass\"} continues to work."
+  ],
+  "acceptance_criteria": [
+    "POST /admin/connections/test accepts secrets map: {\"type\": \"kafka\", \"secrets\": {\"username\": \"u\", \"password\": \"p\"}}",
+    "POST /admin/connections/test backward compat: {\"type\": \"postgres\", \"secret\": \"pass\"} continues to work",
+    "POST /admin/connections accepts secretRefs field",
+    "GET /admin/connections returns secretRefs in addition to secretRef",
+    "GET /admin/connections/{key} returns secretRefs in addition to secretRef"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine && go build ./... && go test ./..."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

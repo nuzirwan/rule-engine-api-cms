@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add POST /admin/connections/test endpoint to the engine HTTP API. This endpoint receives connection settings + a plaintext secret, builds a temporary ConnectionDef, injects the secret via connect.WithSecret, opens the appropriate connector, runs a health check (ping), closes the connection, and returns success/failure.",
+  "status": "completed",
+  "steps": [
+    "1. In engine/internal/httpapi/admin_handlers.go, add testConnectionRequest struct with fields: Type (string), Settings (map[string]any), Secret (string). Add testConnectionResponse struct with Success (bool), Message (string), Error (string, omitempty).",
+    "2. In engine/internal/httpapi/admin_handlers.go, add testConnection handler method on *Admin. Implementation: (a) decode testConnectionRequest with decodeJSON, (b) validate Type and Settings are present, (c) look up connector by type from a.deps.Conns (need to add a method or expose byType), (d) build ConnectionDef{Key: \"_test\", Type: req.Type, Settings: req.Settings}, (e) if req.Secret != \"\" then ctx = connect.WithSecret(ctx, connect.NewPlainSecret(req.Secret)), (f) call connector.Open(ctx, def) to get client, (g) defer client.Close(), (h) call client.Execute(ctx, connect.Operation{Kind: \"ping\"}) for health check, (i) on success return {success: true, message: \"Connection successful\"}, on error return {success: false, error: err.Error()}.",
+    "3. In engine/internal/connect/connector.go, add NewPlainSecret(value string) Secret function that returns a Secret wrapping the plaintext bytes. This is needed because the test endpoint receives the password as a string, not via SecretProvider.",
+    "4. In engine/internal/httpapi/admin.go, add ConnectorLookup interface { Connector(typ string) (connect.Connector, bool) } that registry can satisfy. Or: check if connect.Registry already exposes a way to get a connector by type. If not, add a method to registry.go.",
+    "5. In engine/internal/connect/registry.go, add Connector(typ string) (Connector, bool) method to *registry that returns byType[typ]. Update Registry interface in connect package if needed.",
+    "6. In engine/internal/httpapi/admin.go mount(), register the route: mux.Handle(\"POST /admin/connections/test\", h(a.testConnection)). Place it near the other /admin/connections routes.",
+    "7. In engine/internal/httpapi/admin_test.go, add TestAdminTestConnection test. Test cases: (a) missing type -> 400, (b) unknown type -> 400, (c) successful connection (mock connector that returns a mock client whose ping succeeds), (d) failed connection (mock connector whose Open returns error). Use fakeAdminStore pattern but also need to mock the connector lookup.",
+    "8. Run `go build ./...` and `go test ./...` in engine directory to verify."
+  ],
+  "acceptance_criteria": [
+    "POST /admin/connections/test with valid settings returns 200 {success: true, message: ...} on successful ping",
+    "POST /admin/connections/test with valid settings returns 200 {success: false, error: ...} on connection failure",
+    "POST /admin/connections/test with missing type returns 400",
+    "POST /admin/connections/test with unknown type returns 400",
+    "The secret is never logged or stored - only passed transiently via context",
+    "All existing tests pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/engine && go build ./...",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/engine && go test ./..."
+  ],
+  "blocked_reason": null,
+  "findings": "Added ConnectorLookup interface to connect/connect.go (not connector.go as originally planned). NewPlainSecret added to secret.go (not connector.go). Both registry.go and registry_v2.go implement the Connector method. Test uses fakeTestConnRegistry to avoid name collision with existing fakeRegistry in ops_test.go."
+}

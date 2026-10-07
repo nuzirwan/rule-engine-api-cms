@@ -1,0 +1,7 @@
+{
+  "task_id": "task-multi-secret-refs",
+  "task_description": "Implement multi-secret references for connections per approved design: add SecretRefs map to ConnectionDef, context helpers, SecretSchemaProvider interface, connector implementations, schema endpoint, test endpoint update, and CMS UI changes.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

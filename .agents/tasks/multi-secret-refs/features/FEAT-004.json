@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "CMS schema and admin UI changes: add secretRefs JSON field to connection content-type, update lifecycles validation, update TypeScript types, update publish transform, update TestConnectionModal to show multiple secret inputs based on connector schema, update ConnectionsPage to show secretRefs count.",
+  "status": "pending",
+  "steps": [
+    "1. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/api/connection/content-types/connection/schema.json: Add `secretRefs` attribute with type `json` after secretRef attribute.",
+    "2. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/api/connection/content-types/connection/lifecycles.ts: Add validateSecretRefs(refs: unknown) function that validates secretRefs is null, undefined, or a {string: string} map. Update beforeCreate and beforeUpdate hooks to call validateSecretRefs(event.params.data.secretRefs).",
+    "3. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/types/engine.ts: Update CreateConnectionRequest interface to add `secretRefs?: Record<string, string>`. Update EngineConnectionDef interface to add `secretRefs?: Record<string, string>`. Add ConnectorSchema type `{ secrets: SecretField[] | null }` and ConnectorSchemaResponse type `{ connectors: Record<string, ConnectorSchema> }`. Add SecretField type `{ name: string; required: boolean; label: string }`. Add TestConnectionRequest type with secrets map.",
+    "4. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/server/src/services/publish-transform.ts: Update connectionToEnginePayload to include secretRefs from entry.secretRefs.",
+    "5. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/server/src/services/admin-client.ts: Add getConnectorSchemas() method calling GET /admin/connectors/schema. Update testConnection to accept secrets map parameter instead of single secret.",
+    "6. Create /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/admin/src/components/KeyValueRepeater/index.tsx: New component for REST's dynamic secret refs — renders key-value pairs with add/remove buttons.",
+    "7. Create /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/admin/src/components/SecretRefEditor/index.tsx: New component that fetches connector schema, renders labeled fields for fixed-schema connectors or KeyValueRepeater for REST (null schema).",
+    "8. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/admin/src/components/TestConnectionModal/index.tsx: Update to accept secretRefs prop, fetch connector schema on open, render multiple password inputs based on schema (for fixed) or secretRefs keys (for REST), send secrets map to test endpoint.",
+    "9. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms/src/plugins/rule-engine/admin/src/pages/ConnectionsPage.tsx: Update Secret Ref column to show secretRefs key count when present (e.g. '3 secrets'), update TestConnectionModal invocation to pass secretRefs."
+  ],
+  "acceptance_criteria": [
+    "Connection content-type has secretRefs JSON field",
+    "Lifecycle hooks validate secretRefs shape",
+    "TypeScript types updated for multi-secret support",
+    "Publish transform includes secretRefs in engine payload",
+    "TestConnectionModal shows multiple secret inputs based on connector schema",
+    "REST connections show KeyValueRepeater for dynamic secret headers",
+    "ConnectionsPage shows secretRefs count in table",
+    "CMS type-checks pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/cms && npx tsc --noEmit && npm run test -- --run"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

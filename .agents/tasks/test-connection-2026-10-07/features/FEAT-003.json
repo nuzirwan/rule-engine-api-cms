@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Add Test Connection button and modal to the CMS admin Connection edit view. The modal shows current settings (read-only), provides a password input, and calls the test endpoint. Password is never stored - only sent for the test call.",
+  "status": "completed",
+  "steps": [
+    "1. Create cms/src/plugins/rule-engine/admin/src/components/TestConnectionModal/index.tsx. Import Dialog, Button, TextInput, Field, Typography, Loader, Badge from @strapi/design-system. Component props: isOpen, onClose, connectionType (string), settings (object with host/port/database/user etc based on type). State: password (string), isLoading (boolean), result ({success, message?, error?} | null).",
+    "2. In TestConnectionModal, render Dialog.Root with Dialog.Content containing: (a) Dialog.Header: 'Test Connection', (b) Dialog.Body: read-only display of connection type and settings (Typography for each field), password TextInput (type='password'), result Badge (green if success, red if failure), (c) Dialog.Footer: Cancel button (Dialog.Cancel), Test button (calls API, shows Loader while testing).",
+    "3. In TestConnectionModal, implement handleTest: (a) set isLoading=true, result=null, (b) call useFetchClient().post('/rule-engine/connections/test', { type: connectionType, settings, secret: password }), (c) set result from response, (d) set isLoading=false. Handle errors with try/catch.",
+    "4. Determine where to inject the Test Connection button. Connection edit is via Strapi's standard content-manager. Options: (a) Register a custom field component for Connection content type that includes the button, (b) Add to the existing custom fields injection, (c) Create a content-manager injection. Research how EnvironmentManager test connection is wired - it's a standalone page, not content-manager. For Connections we need content-manager integration.",
+    "5. In cms/src/plugins/rule-engine/admin/src/index.tsx, check if there's a registerField or customFields mechanism for the Connection content type. If the plugin already injects fields (like FlowCanvasField for flows), follow that pattern. Otherwise, may need to add a custom action button via Strapi's admin extensions.",
+    "6. Alternative simpler approach: Add a ConnectionsPage similar to WebhooksPage or SchedulesPage that lists connections and has Test Connection button. This avoids content-manager integration complexity. Create cms/src/plugins/rule-engine/admin/src/pages/ConnectionsPage.tsx.",
+    "7. If using ConnectionsPage approach: (a) fetch connections via /api/connections, (b) render table with key, type, host (from settings), Test button per row, (c) clicking Test opens TestConnectionModal with that connection's type and settings.",
+    "8. Register the new page/component in the plugin's admin index.tsx navigation if adding a page.",
+    "9. Write tests for TestConnectionModal in cms/src/plugins/rule-engine/admin/src/components/TestConnectionModal/TestConnectionModal.test.tsx if test infrastructure allows component testing.",
+    "10. Run `npx tsc --noEmit` and `npm run test -- --run` in cms directory to verify."
+  ],
+  "acceptance_criteria": [
+    "Test Connection modal can be opened from somewhere in the admin UI related to connections",
+    "Modal displays current connection type and settings in read-only format",
+    "Modal provides masked password input field",
+    "Test button calls /rule-engine/connections/test with type, settings, and entered password",
+    "Success shows green indicator with message",
+    "Failure shows red indicator with error detail",
+    "Password is never stored - only used for the test call",
+    "TypeScript compiles without errors"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npx tsc --noEmit",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npm run test -- --run"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented via ConnectionsPage approach (step 6/7) rather than content-manager injection, which was simpler and avoided complex Strapi 5 content-manager hook integration. Page registered at /plugins/rule-engine/connections. TestConnectionModal extracts display-friendly settings from both flat objects and Strapi dynamic zone arrays. All 23 new tests pass. Pre-existing test failures (connection-denylist-guard.test.ts missing date-fns, TS config moduleResolution warning) are unrelated."
+}

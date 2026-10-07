@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Engine data model: add SecretRefs map to ConnectionDef, multi-secret context helpers (WithSecrets/SecretsFrom), and update registry/pool resolution to resolve multiple secrets with backward-compatible fallback to legacy single SecretRef.",
+  "status": "pending",
+  "steps": [
+    "1. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/connect.go: Add `SecretRefs map[string]string` field to `ConnectionDef` struct after `SecretRef string` (additive, backward compatible).",
+    "2. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/connector.go: Add `secretsCtxKey struct{}` context key type, `WithSecrets(ctx context.Context, secrets map[string]Secret) context.Context` helper, and `SecretsFrom(ctx context.Context) (map[string]Secret, bool)` helper following the existing WithSecret/SecretFrom pattern.",
+    "3. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/registry.go: Update `open()` method to resolve multiple secrets from `def.SecretRefs` when non-empty, falling back to legacy `def.SecretRef` when SecretRefs is empty. Call `WithSecrets(ctx, secrets)` and also `WithSecret(ctx, secrets[\"password\"])` for backward compat when password key exists.",
+    "4. In /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/pool.go: Apply identical multi-secret resolution logic in `(*ConnectionPool).open()` method.",
+    "5. Add unit tests in /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine/internal/connect/connector_test.go (or registry_test.go): Test WithSecrets/SecretsFrom round-trip, test registry.open() resolves multiple secrets, test legacy SecretRef fallback."
+  ],
+  "acceptance_criteria": [
+    "ConnectionDef struct has both SecretRef string and SecretRefs map[string]string fields",
+    "WithSecrets and SecretsFrom context helpers exist and work correctly (round-trip test passes)",
+    "A connection with SecretRefs: {\"password\": \"env:X\", \"username\": \"env:Y\"} resolves both secrets",
+    "A connection with only SecretRef: \"env:X\" (no SecretRefs) is treated as {\"password\": \"env:X\"}",
+    "A connection with both set prefers SecretRefs over SecretRef",
+    "All existing tests pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/multi-secret-refs/engine && go build ./... && go test ./internal/connect/..."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

@@ -1,0 +1,7 @@
+{
+  "task_id": "task-test-connection",
+  "task_description": "Add Test Connection feature: engine endpoint to test connectivity with user-provided password, CMS proxy controller, and admin UI modal on Connection edit page",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

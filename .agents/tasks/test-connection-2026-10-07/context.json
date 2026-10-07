@@ -1,0 +1,49 @@
+{
+  "project_type": "Monorepo: Go engine (net/http stdlib) + Strapi CMS TypeScript plugin",
+  "language": "Go (engine), TypeScript (CMS plugin)",
+  "build_system": "Go modules for engine, npm for CMS. Engine has no workspace; CMS is standard Strapi plugin structure.",
+  "test_framework": "Go testing (engine), Vitest (CMS)",
+  "build_command": "Engine: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/engine && go build ./...`; CMS: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npx tsc --noEmit`",
+  "test_command": "Engine: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/engine && go test ./...`; CMS: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npm run test -- --run`",
+  "verification_instructions": "1. Run engine build+test: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/engine && go build ./... && go test ./...`. 2. Run CMS typecheck+test: `cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npx tsc --noEmit && npm run test -- --run`.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "All work happens in worktree at /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection. Use `git -C <worktree>` for git commands.",
+  "contribution_requirements": "CMS stores secretRef (never actual secrets). Engine resolves secrets via SecretProvider at runtime. Test Connection password is passed in request body, used once, then discarded.",
+  "key_patterns": {
+    "engine_admin_handler": "Admin handlers in engine/internal/httpapi/admin_handlers.go follow pattern: decode JSON with decodeJSON(), validate, call store method, call writeJSON() for response. Use a.fail(w, ctx, label, err) for errors.",
+    "engine_admin_routes": "Routes registered in admin.go mount() using Go 1.22 method-aware patterns like `mux.Handle(\"POST /admin/...\", h(handler))`",
+    "connector_open_pattern": "Connectors in engine/internal/connect/drivers/ implement Connector.Open(ctx, def) -> Client. Password injected via connect.WithSecret(ctx, secret) and read via connect.SecretFrom(ctx).",
+    "connector_health_check": "Health check is Execute(ctx, Operation{Kind: \"ping\"}). Postgres does pool.Ping(), MySQL does db.PingContext(), Valkey does client.Do(\"PING\").",
+    "cms_controller_pattern": "Controllers in cms/src/plugins/rule-engine/server/src/controllers/ use factory pattern returning object with handlers. Handlers receive ctx with status/body properties.",
+    "cms_proxy_pattern": "Controllers create AdminClient from resolveAdminConfig(), call engine endpoint, handle AdminApiError for error classification.",
+    "cms_routes": "Routes defined in cms/src/plugins/rule-engine/server/src/routes/index.ts using { method, path, handler } pattern.",
+    "cms_modal_pattern": "Modals use @strapi/design-system Dialog.Root/Content/Header/Body/Footer. State tracked via React useState with mode/formData/errors/isSubmitting. See EnvironmentManager for test connection modal pattern.",
+    "cms_types": "Engine API types in cms/types/engine.ts. Add new request/response types there.",
+    "admin_client": "AdminClient in cms/src/plugins/rule-engine/server/src/services/admin-client.ts wraps engine admin API. Add new methods following existing patterns."
+  },
+  "relevant_files": [
+    "engine/internal/httpapi/admin_handlers.go - Add testConnection handler here",
+    "engine/internal/httpapi/admin.go - Register route in mount(), add AdminStore method signature",
+    "engine/internal/httpapi/admin_test.go - Add test for testConnection endpoint",
+    "engine/internal/httpapi/server.go - Reference for handler patterns",
+    "engine/internal/connect/connector.go - Connector interface, WithSecret/SecretFrom",
+    "engine/internal/connect/drivers/postgres.go - Pattern for Open() with secret injection",
+    "engine/internal/connect/drivers/mysql.go - Pattern for Open() with secret injection",
+    "engine/internal/connect/drivers/valkey.go - Pattern for Open() with secret injection",
+    "engine/internal/connect/drivers/rest.go - Pattern for ephemeral connector",
+    "engine/internal/connect/drivers/registry.go - All() returns connector list",
+    "cms/src/plugins/rule-engine/server/src/routes/index.ts - Add route for test connection",
+    "cms/src/plugins/rule-engine/server/src/controllers/validate.ts - Pattern for proxy controller",
+    "cms/src/plugins/rule-engine/server/src/services/admin-client.ts - Add testConnection method",
+    "cms/types/engine.ts - Add TestConnectionRequest/Response types",
+    "cms/src/plugins/rule-engine/admin/src/components/EnvironmentManager/index.tsx - Modal pattern reference"
+  ],
+  "directory_structure": {
+    "engine/internal/httpapi/": "HTTP handlers - admin.go (Admin struct + routes), admin_handlers.go (CRUD handlers), server.go (data plane)",
+    "engine/internal/connect/": "Connection layer - connector.go (interfaces), registry.go (client pool)",
+    "engine/internal/connect/drivers/": "Connector implementations - postgres.go, mysql.go, valkey.go, rest.go, kafka.go, rabbitmq.go",
+    "cms/src/plugins/rule-engine/server/src/": "Plugin server-side - controllers/, routes/, services/",
+    "cms/src/plugins/rule-engine/admin/src/": "Plugin admin UI - components/, pages/",
+    "cms/types/": "Shared TypeScript types - engine.ts for admin API types"
+  }
+}

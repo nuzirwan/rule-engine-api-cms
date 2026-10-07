@@ -1,0 +1,7 @@
+{
+  "task_id": "task-engine-cms-capability-sync",
+  "task_description": "Implement all high-priority engine-CMS capability gaps: add missing connector types (mysql, http, kafka, rabbitmq), add missing flow node types to palette, and add circuit breaker and backoff to resilience policy",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Add CMS plugin proxy endpoint POST /rule-engine/connections/test that forwards test connection requests to the engine. Add AdminClient.testConnection method and TypeScript types.",
+  "status": "completed",
+  "steps": [
+    "1. In cms/types/engine.ts, add TestConnectionRequest interface: { type: string; settings: Record<string, unknown>; secret: string; }. Add TestConnectionResponse interface: { success: boolean; message?: string; error?: string; }.",
+    "2. In cms/src/plugins/rule-engine/server/src/services/admin-client.ts, add testConnection(req: Omit<TestConnectionRequest, 'env'>): Promise<TestConnectionResponse> method to AdminClient class. Implementation: return this.request('POST', '/admin/connections/test', req).",
+    "3. Create cms/src/plugins/rule-engine/server/src/controllers/connection-test.ts following the validate.ts pattern. Export default function connectionTestController({strapi}, fetchImpl?). Implement testConnection handler: (a) extract { type, settings, secret } from ctx.request.body, (b) validate required fields, (c) create AdminClient via resolveAdminConfig(), (d) call client.testConnection({ type, settings, secret }), (e) set ctx.body with result, (f) handle AdminApiError following the §5.5 error classification.",
+    "4. In cms/src/plugins/rule-engine/server/src/routes/index.ts, add route: { method: 'POST', path: '/connections/test', handler: 'connection-test.testConnection', config: { policies: [] } }.",
+    "5. In cms/src/plugins/rule-engine/server/src/index.ts, register the new controller in the controllers object.",
+    "6. Create cms/src/plugins/rule-engine/server/tests/connection-test.test.ts with tests: (a) successful test returns 200 with success:true, (b) failed test returns 200 with success:false, (c) missing type returns 400, (d) engine unreachable returns 503 (recoverable).",
+    "7. Run `npx tsc --noEmit` and `npm run test -- --run` in cms directory to verify."
+  ],
+  "acceptance_criteria": [
+    "POST /rule-engine/connections/test proxies to engine and returns result",
+    "Missing required fields return 400",
+    "Engine errors are classified per §5.5 (5xx -> 503, 4xx -> echo)",
+    "TypeScript compiles without errors",
+    "All existing and new tests pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npx tsc --noEmit",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/test-connection/cms && npm run test -- --run"
+  ],
+  "blocked_reason": null,
+  "findings": "TypeScript check has a pre-existing config issue (moduleResolution=Node deprecated in TS 5.x). All 8 new tests pass. One unrelated test (connection-denylist-guard.test.ts) fails due to missing date-fns dependency from symlinked node_modules, not related to this feature."
+}
