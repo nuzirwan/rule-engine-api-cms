@@ -1,7 +1,14 @@
 {
-  "task_id": "task-dynamic-grouped-workers-phase1",
-  "task_description": "Implement Phase 1 of Dynamic Grouped Flow Workers: data model, group CRUD, and CMS content types. No gateway mode or K8s workers - dispatch.mode stays inline.",
-  "status": "pending",
+  "task_id": "task-dynamic-grouped-workers-phase1-5",
+  "task_description": "Dynamic Grouped Flow Workers: All 5 phases implemented - data model, gateway+worker architecture, K8s infrastructure, KEDA scaling, and observability/hardening.",
+  "status": "completed",
   "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
-  "blocked_reason": null
+  "blocked_reason": null,
+  "phases_completed": [
+    "Phase 1: Data model, group CRUD, CMS content types",
+    "Phase 2: Gateway mode and worker binary",
+    "Phase 3: K8s infrastructure and dispatcher integration",
+    "Phase 4: KEDA dynamic scaling",
+    "Phase 5: Observability & Hardening"
+  ]
 }
