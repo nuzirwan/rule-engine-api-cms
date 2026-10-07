@@ -1,0 +1,30 @@
+{
+  "collectionName": "components_config_resource_limits",
+  "info": {
+    "displayName": "resource-limits",
+    "description": "Kubernetes resource requests and limits for worker pods (design §4.2). Values use K8s quantity notation."
+  },
+  "options": {},
+  "attributes": {
+    "cpuRequest": {
+      "type": "string",
+      "default": "100m",
+      "regex": "^[0-9]+m?$"
+    },
+    "cpuLimit": {
+      "type": "string",
+      "default": "500m",
+      "regex": "^[0-9]+m?$"
+    },
+    "memoryRequest": {
+      "type": "string",
+      "default": "128Mi",
+      "regex": "^[0-9]+(Mi|Gi)$"
+    },
+    "memoryLimit": {
+      "type": "string",
+      "default": "512Mi",
+      "regex": "^[0-9]+(Mi|Gi)$"
+    }
+  }
+}

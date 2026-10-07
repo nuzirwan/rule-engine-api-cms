@@ -54,6 +54,11 @@
     },
     "lastValidation": {
       "type": "json"
+    },
+    "group": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::group.group"
     }
   }
 }

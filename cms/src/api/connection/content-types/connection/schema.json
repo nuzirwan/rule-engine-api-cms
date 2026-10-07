@@ -45,6 +45,12 @@
     },
     "engineVersion": {
       "type": "integer"
+    },
+    "groups": {
+      "type": "relation",
+      "relation": "manyToMany",
+      "target": "api::group.group",
+      "mappedBy": "connections"
     }
   }
 }
