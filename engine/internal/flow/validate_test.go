@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -180,6 +181,22 @@ func TestValidateTree(t *testing.T) {
 					}}
 			},
 			wantCode: "decision_no_saveas",
+		},
+		{
+			name: "invalid input schema rejected",
+			tree: func(t *testing.T) Node {
+				return Node{ID: "root", Type: TypeTrigger, Spec: json.RawMessage(`{"method":"GET","path":"/x","input":{"schema":{"type":123}}}`),
+					Children: []Node{resp(t, "r")}}
+			},
+			wantCode: "bad_input_schema",
+		},
+		{
+			name: "valid input schema accepted",
+			tree: func(t *testing.T) Node {
+				return Node{ID: "root", Type: TypeTrigger, Spec: json.RawMessage(`{"method":"GET","path":"/x","input":{"schema":{"type":"object","properties":{"id":{"type":"string"}}}}}`),
+					Children: []Node{resp(t, "r")}}
+			},
+			wantCode: "",
 		},
 	}
 

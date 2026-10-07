@@ -39,10 +39,11 @@ type ResilienceOverride struct {
 // The mapping itself is performed by httpapi before Run; this is the
 // contract/validation surface.
 type TriggerInput struct {
-	Params  []string `json:"params,omitempty"`
-	Query   []string `json:"query,omitempty"`
-	Headers []string `json:"headers,omitempty"`
-	Body    bool     `json:"body,omitempty"`
+	Params  []string        `json:"params,omitempty"`
+	Query   []string        `json:"query,omitempty"`
+	Headers []string        `json:"headers,omitempty"`
+	Body    bool            `json:"body,omitempty"`
+	Schema  json.RawMessage `json:"schema,omitempty"`
 }
 
 // TriggerSpec is the flow entrypoint (the root, one per tree).

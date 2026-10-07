@@ -65,6 +65,9 @@ type FlowVersion struct {
 	Group    string        `json:"group,omitempty"` // group_id from flow_versions; empty if ungrouped
 	Tree     flow.Node     `json:"tree"`
 	Fixtures []FlowFixture `json:"fixtures,omitempty"`
+	// CompiledInputSchema is the pre-compiled JSON Schema for input validation.
+	// It is transient (not serialized) — rebuilt from Tree on decode.
+	CompiledInputSchema any `json:"-"`
 }
 
 // RouteInfo describes one active route: the flow it resolves to and the stable

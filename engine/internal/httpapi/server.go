@@ -34,6 +34,7 @@ import (
 	"nzr-rules-engine/internal/observ"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // defaultEnv is the environment the thin slice resolves flows and JDM under.
@@ -195,18 +196,30 @@ func genericFlowHandler(store Store, interp *flow.Interpreter, deps Deps) http.H
 			return
 		}
 
-		// Build the per-request Ctx from the captured path params. A path segment
-		// is lifted in its NATURAL wire form — a string — and the engine does NOT
-		// guess a param's type from its shape. The bind type is a DECLARED datum in
-		// config: a flow whose SQL binds a non-text column marks that param
-		// `{"value":"{{input.x}}","as":"int"}` and the edge converts it before pgx
-		// encodes it (see adapters.go resolveParams + flow.ConvertParam). This keeps
-		// typing config-driven and never mangles a digit-only string into a number
-		// (which would break a text column holding digits, like an msisdn, and
-		// misbehave on leading-zero or '+' values).
-		input := make(map[string]any, len(params))
-		for name, val := range params {
-			input[name] = val
+		// Parse the trigger spec to get the input extraction configuration.
+		var triggerSpec flow.TriggerSpec
+		if err := json.Unmarshal(fv.Tree.Spec, &triggerSpec); err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid trigger spec")
+			return
+		}
+
+		// Extract and validate request input based on the trigger spec.
+		// The compiled schema (if any) was built at flow load time.
+		var compiledSchema *jsonschema.Schema
+		if fv.CompiledInputSchema != nil {
+			compiledSchema, _ = fv.CompiledInputSchema.(*jsonschema.Schema)
+		}
+		input, err := flow.ExtractAndValidate(r, params, triggerSpec.Input, compiledSchema)
+		if err != nil {
+			// Check if it's a validation error and return structured response.
+			if verrs, ok := err.(flow.InputValidationErrors); ok {
+				writeValidationErrors(w, verrs)
+				return
+			}
+			// Other extraction errors (e.g., invalid JSON body).
+			status, msg := statusForFlow(err)
+			writeError(w, status, msg)
+			return
 		}
 		c := flow.NewCtx(requestID(r), traceID(r), defaultEnv, input)
 
@@ -316,6 +329,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // client; the full classified error is logged at the seam.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+// writeValidationErrors writes a structured 400 response for input validation
+// errors. The response body contains field paths and messages from JSON Schema
+// validation, providing actionable feedback to API consumers.
+func writeValidationErrors(w http.ResponseWriter, errs flow.InputValidationErrors) {
+	details := make([]map[string]string, 0, len(errs))
+	for _, e := range errs {
+		details = append(details, map[string]string{
+			"field":   e.Field,
+			"code":    e.Code,
+			"message": e.Message,
+		})
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error":   "invalid request",
+		"details": details,
+	})
 }
 
 // statusForFlow maps a classified flow error to an HTTP status and a safe

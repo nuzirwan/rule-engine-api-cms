@@ -29,6 +29,19 @@ export interface EngineNode {
   children?: EngineNode[];
 }
 
+/**
+ * TriggerInput declares input extraction and validation for a flow trigger.
+ * Used in the trigger node's spec.input field.
+ */
+export interface TriggerInput {
+  params?: string[];
+  query?: string[];
+  headers?: string[];
+  body?: boolean;
+  /** JSON Schema for input validation. When present, all extracted input is validated. */
+  schema?: unknown;
+}
+
 // ----------------------------------------------------------------------------
 // Resilience — Go-cased, nanosecond Timeout (tag-less connect.ResiliencePolicy)
 // ----------------------------------------------------------------------------

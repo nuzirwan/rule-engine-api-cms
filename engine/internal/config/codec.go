@@ -56,19 +56,31 @@ func encodeFlow(fv FlowVersion) ([]byte, error) {
 
 // decodeFlow parses cache/store bytes into a FlowVersion. A decode failure is a
 // Validation error (reject on load, AC-15) carrying no stack-unwinding panic.
+// The CompiledInputSchema is built from the tree's trigger spec if present.
 func decodeFlow(b []byte) (FlowVersion, error) {
 	var cf cachedFlow
 	if err := json.Unmarshal(b, &cf); err != nil {
 		return FlowVersion{}, wrapErr(Validation, "decode flow version (bad config)", err)
 	}
-	return FlowVersion{
+	fv := FlowVersion{
 		FlowID:   cf.FlowID,
 		Version:  cf.Version,
 		Method:   cf.Method,
 		Path:     cf.Path,
 		Tree:     cf.Tree,
 		Fixtures: cf.Fixtures,
-	}, nil
+	}
+	// Compile the input schema from the trigger spec if present.
+	if cf.Tree.Type == flow.TypeTrigger {
+		var spec flow.TriggerSpec
+		if err := json.Unmarshal(cf.Tree.Spec, &spec); err == nil && len(spec.Input.Schema) > 0 {
+			if compiled, err := flow.CompileSchema(spec.Input.Schema); err == nil {
+				fv.CompiledInputSchema = compiled
+			}
+			// Ignore compile errors here — they are caught at validate/publish time.
+		}
+	}
+	return fv, nil
 }
 
 // decodeTree defensively parses a stored jsonb tree into a flow.Node. Used on the

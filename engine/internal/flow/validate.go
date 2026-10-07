@@ -117,6 +117,15 @@ func ValidateTree(root Node, refs RefResolver) []ValidationIssue {
 
 		// Per-type structural rules.
 		switch n.Type {
+		case TypeTrigger:
+			// Validate input schema if present.
+			if spec, err := parseSpec[TriggerSpec](n.Spec); err == nil {
+				if len(spec.Input.Schema) > 0 {
+					if _, err := CompileSchema(spec.Input.Schema); err != nil {
+						add(n.ID, "bad_input_schema", fmt.Sprintf("input schema invalid: %v", err))
+					}
+				}
+			}
 		case TypeAction:
 			if spec, err := parseSpec[ActionSpec](n.Spec); err == nil {
 				if spec.Connection == "" {

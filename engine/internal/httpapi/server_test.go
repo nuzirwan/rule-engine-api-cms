@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -445,3 +446,121 @@ var (
 	_ decision.Evaluator = fakeEvaluator{}
 	_ connect.Registry   = (*templatingRegistry)(nil)
 )
+
+// TestInputValidationError proves that when a flow has a JSON Schema defined and
+// the request input fails validation, the handler returns a 400 with a structured
+// error body containing field paths and messages.
+func TestInputValidationError(t *testing.T) {
+	// Flow with a schema that requires "id" field and body with "name" field
+	schema := `{
+		"type": "object",
+		"required": ["id"],
+		"properties": {
+			"id": {"type": "string"},
+			"body": {
+				"type": "object",
+				"required": ["name"],
+				"properties": {
+					"name": {"type": "string"}
+				}
+			}
+		}
+	}`
+	triggerSpec := `{"method":"POST","path":"/users/{id}","input":{"params":["id"],"body":true,"schema":` + schema + `}}`
+	resp := flow.Node{ID: "resp", Type: flow.TypeResponse, Spec: json.RawMessage(`{"status":200}`)}
+	trig := flow.Node{ID: "t", Type: flow.TypeTrigger, Spec: json.RawMessage(triggerSpec), Children: []flow.Node{resp}}
+
+	// Compile the schema at flow load time (normally done by decodeFlow)
+	var ts flow.TriggerSpec
+	_ = json.Unmarshal(trig.Spec, &ts)
+	compiled, _ := flow.CompileSchema(ts.Input.Schema)
+
+	store := fakeStore{fv: config.FlowVersion{
+		FlowID:              "f",
+		Version:             1,
+		Method:              "POST",
+		Path:                "/users/{id}",
+		Tree:                trig,
+		CompiledInputSchema: compiled,
+	}}
+
+	h, err := NewHandler(store, flow.New(), Deps{})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		body         string
+		wantStatus   int
+		wantField    string
+		wantContains string
+	}{
+		{
+			name:         "missing required body field",
+			body:         `{"age": 30}`,
+			wantStatus:   http.StatusBadRequest,
+			wantField:    "body",
+			wantContains: "name",
+		},
+		{
+			name:       "valid input",
+			body:       `{"name": "Alice"}`,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/users/123", nil)
+			if tc.body != "" {
+				req = httptest.NewRequest(http.MethodPost, "/users/123", newStringReader(tc.body))
+				req.Header.Set("Content-Type", "application/json")
+				req.ContentLength = int64(len(tc.body))
+			}
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			if tc.wantStatus == http.StatusBadRequest {
+				var resp map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("invalid JSON response: %v", err)
+				}
+				if resp["error"] != "invalid request" {
+					t.Errorf("error = %v want 'invalid request'", resp["error"])
+				}
+				details, ok := resp["details"].([]any)
+				if !ok || len(details) == 0 {
+					t.Fatalf("details missing or empty: %v", resp)
+				}
+				first := details[0].(map[string]any)
+				if tc.wantField != "" && first["field"] != tc.wantField {
+					t.Errorf("field = %v want %v", first["field"], tc.wantField)
+				}
+			}
+		})
+	}
+}
+
+// stringReader is a simple io.Reader wrapper for test bodies.
+type stringReader struct {
+	s string
+	i int64
+}
+
+func newStringReader(s string) *stringReader {
+	return &stringReader{s: s}
+}
+
+func (sr *stringReader) Read(p []byte) (n int, err error) {
+	if sr.i >= int64(len(sr.s)) {
+		return 0, io.EOF
+	}
+	n = copy(p, sr.s[sr.i:])
+	sr.i += int64(n)
+	return
+}
