@@ -129,6 +129,43 @@ export default {
           policies: [],
         },
       },
+      // --- Template routes (TASK-006 flow-templates) ---
+      {
+        // GET /templates — list all available templates.
+        method: 'GET',
+        path: '/templates',
+        handler: 'template.listTemplates',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // GET /templates/:id — get a single template by ID.
+        method: 'GET',
+        path: '/templates/:id',
+        handler: 'template.getTemplate',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /templates/:id/preview — preview substituted flows.
+        method: 'POST',
+        path: '/templates/:id/preview',
+        handler: 'template.previewTemplate',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /templates/:id/instantiate — create flows from template.
+        method: 'POST',
+        path: '/templates/:id/instantiate',
+        handler: 'template.instantiateTemplate',
+        config: {
+          policies: [],
+        },
+      },
     ],
   },
 };

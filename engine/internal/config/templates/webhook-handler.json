@@ -1,0 +1,104 @@
+{
+  "id": "webhook-handler",
+  "name": "Webhook Handler",
+  "description": "Receive incoming webhook, validate via a validator connection, then forward to a target connection for processing.",
+  "category": "webhook",
+  "variables": [
+    {
+      "name": "WEBHOOK_ID",
+      "type": "string",
+      "description": "Webhook identifier used in flow ID and path (e.g., 'stripe-payment')"
+    },
+    {
+      "name": "VALIDATOR_CONNECTION",
+      "type": "string",
+      "description": "Connection key for signature validation service"
+    },
+    {
+      "name": "TARGET_CONNECTION",
+      "type": "string",
+      "description": "Connection key for the processing target"
+    },
+    {
+      "name": "TARGET_PATH",
+      "type": "string",
+      "description": "Path on the target connection to call",
+      "default": "/process"
+    }
+  ],
+  "flows": [
+    {
+      "flowId": "{{WEBHOOK_ID}}-handle",
+      "method": "POST",
+      "path": "/webhooks/{{WEBHOOK_ID}}",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "POST",
+          "path": "/webhooks/{{WEBHOOK_ID}}",
+          "input": {
+            "body": true,
+            "headers": ["x-signature", "x-timestamp"]
+          }
+        },
+        "children": [
+          {
+            "id": "validate-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{VALIDATOR_CONNECTION}}",
+              "operation": {
+                "Kind": "http",
+                "Payload": {
+                  "method": "POST",
+                  "path": "/validate",
+                  "body": {
+                    "payload": "{{input.body}}",
+                    "signature": "{{input.headers.x-signature}}",
+                    "timestamp": "{{input.headers.x-timestamp}}"
+                  }
+                },
+                "Required": true
+              },
+              "saveAs": "validation"
+            }
+          },
+          {
+            "id": "process-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{TARGET_CONNECTION}}",
+              "operation": {
+                "Kind": "http",
+                "Payload": {
+                  "method": "POST",
+                  "path": "{{TARGET_PATH}}",
+                  "body": "{{input.body}}"
+                },
+                "Required": true
+              },
+              "saveAs": "result"
+            }
+          },
+          {
+            "id": "set-result",
+            "type": "set",
+            "spec": {
+              "targetPath": "processed",
+              "value": true
+            }
+          },
+          {
+            "id": "respond-ok",
+            "type": "response",
+            "spec": {
+              "status": 200,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

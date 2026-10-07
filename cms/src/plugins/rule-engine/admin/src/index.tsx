@@ -102,6 +102,20 @@ export default {
       },
       exact: true,
     },
+    {
+      path: '/templates',
+      Component: async () => {
+        const React = await import('react');
+        const { EnvironmentProvider } = await import('./contexts/EnvironmentContext');
+        const { TemplatesPage } = await import('./pages/TemplatesPage');
+        return () => (
+          <EnvironmentProvider>
+            <TemplatesPage />
+          </EnvironmentProvider>
+        );
+      },
+      exact: true,
+    },
   ],
 
   // Lazily load admin translations if/when they are added; none are shipped in

@@ -16,6 +16,7 @@ import auditController from './controllers/audit';
 import syncController from './controllers/sync';
 import environmentController from './controllers/environment';
 import flowController from './controllers/flow';
+import templateController from './controllers/template';
 import routes from './routes';
 
 const PLUGIN_ID = 'rule-engine';
@@ -37,6 +38,7 @@ export default {
     sync: syncController,
     environment: environmentController,
     flow: flowController,
+    template: templateController,
   },
 
   routes,

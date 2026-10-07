@@ -1,0 +1,273 @@
+{
+  "id": "crud-rest-postgres",
+  "name": "CRUD REST → Postgres",
+  "description": "Standard CRUD operations with REST API and Postgres backend. Creates 5 flows: list, get by ID, create, update, and delete.",
+  "category": "crud",
+  "variables": [
+    {
+      "name": "ENTITY",
+      "type": "string",
+      "description": "Entity name in singular form (e.g., 'user', 'order')"
+    },
+    {
+      "name": "TABLE",
+      "type": "string",
+      "description": "Postgres table name (e.g., 'users', 'orders')"
+    },
+    {
+      "name": "CONNECTION",
+      "type": "string",
+      "description": "Postgres connection key",
+      "default": "pg-main"
+    },
+    {
+      "name": "ID_FIELD",
+      "type": "string",
+      "description": "Primary key column name",
+      "default": "id"
+    }
+  ],
+  "flows": [
+    {
+      "flowId": "{{ENTITY}}-list",
+      "method": "GET",
+      "path": "/{{ENTITY}}s",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "GET",
+          "path": "/{{ENTITY}}s",
+          "input": {}
+        },
+        "children": [
+          {
+            "id": "list-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{CONNECTION}}",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT * FROM {{TABLE}}"
+                },
+                "Required": true
+              },
+              "saveAs": "rows",
+              "unwrapSingleRow": false
+            }
+          },
+          {
+            "id": "set-items",
+            "type": "set",
+            "spec": {
+              "targetPath": "items",
+              "from": "rows"
+            }
+          },
+          {
+            "id": "respond-list",
+            "type": "response",
+            "spec": {
+              "status": 200,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "flowId": "{{ENTITY}}-get",
+      "method": "GET",
+      "path": "/{{ENTITY}}s/{id}",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "GET",
+          "path": "/{{ENTITY}}s/{id}",
+          "input": {
+            "params": ["id"]
+          }
+        },
+        "children": [
+          {
+            "id": "get-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{CONNECTION}}",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT * FROM {{TABLE}} WHERE {{ID_FIELD}} = $1",
+                  "params": ["{{input.id}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "row"
+            }
+          },
+          {
+            "id": "set-item",
+            "type": "set",
+            "spec": {
+              "targetPath": "item",
+              "from": "row"
+            }
+          },
+          {
+            "id": "respond-get",
+            "type": "response",
+            "spec": {
+              "status": 200,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "flowId": "{{ENTITY}}-create",
+      "method": "POST",
+      "path": "/{{ENTITY}}s",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "POST",
+          "path": "/{{ENTITY}}s",
+          "input": {
+            "body": true
+          }
+        },
+        "children": [
+          {
+            "id": "create-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{CONNECTION}}",
+              "operation": {
+                "Kind": "exec",
+                "Payload": {
+                  "sql": "INSERT INTO {{TABLE}} (name) VALUES ($1) RETURNING *",
+                  "params": ["{{input.body.name}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "created"
+            }
+          },
+          {
+            "id": "set-created",
+            "type": "set",
+            "spec": {
+              "targetPath": "item",
+              "from": "created"
+            }
+          },
+          {
+            "id": "respond-create",
+            "type": "response",
+            "spec": {
+              "status": 201,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "flowId": "{{ENTITY}}-update",
+      "method": "PUT",
+      "path": "/{{ENTITY}}s/{id}",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "PUT",
+          "path": "/{{ENTITY}}s/{id}",
+          "input": {
+            "params": ["id"],
+            "body": true
+          }
+        },
+        "children": [
+          {
+            "id": "update-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{CONNECTION}}",
+              "operation": {
+                "Kind": "exec",
+                "Payload": {
+                  "sql": "UPDATE {{TABLE}} SET name = $2 WHERE {{ID_FIELD}} = $1 RETURNING *",
+                  "params": ["{{input.id}}", "{{input.body.name}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "updated"
+            }
+          },
+          {
+            "id": "set-updated",
+            "type": "set",
+            "spec": {
+              "targetPath": "item",
+              "from": "updated"
+            }
+          },
+          {
+            "id": "respond-update",
+            "type": "response",
+            "spec": {
+              "status": 200,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "flowId": "{{ENTITY}}-delete",
+      "method": "DELETE",
+      "path": "/{{ENTITY}}s/{id}",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "DELETE",
+          "path": "/{{ENTITY}}s/{id}",
+          "input": {
+            "params": ["id"]
+          }
+        },
+        "children": [
+          {
+            "id": "delete-action",
+            "type": "action",
+            "spec": {
+              "connection": "{{CONNECTION}}",
+              "operation": {
+                "Kind": "exec",
+                "Payload": {
+                  "sql": "DELETE FROM {{TABLE}} WHERE {{ID_FIELD}} = $1",
+                  "params": ["{{input.id}}"]
+                },
+                "Required": false
+              },
+              "saveAs": "deleted"
+            }
+          },
+          {
+            "id": "respond-delete",
+            "type": "response",
+            "spec": {
+              "status": 204,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

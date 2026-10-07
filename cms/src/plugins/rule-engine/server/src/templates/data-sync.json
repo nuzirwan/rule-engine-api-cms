@@ -1,0 +1,107 @@
+{
+  "id": "data-sync",
+  "name": "Data Sync",
+  "description": "Read data from a source database, optionally transform, and write to a target database. Useful for periodic data synchronization.",
+  "category": "sync",
+  "variables": [
+    {
+      "name": "SYNC_ID",
+      "type": "string",
+      "description": "Sync job identifier (e.g., 'user-sync', 'order-mirror')"
+    },
+    {
+      "name": "SOURCE_CONNECTION",
+      "type": "string",
+      "description": "Source database connection key"
+    },
+    {
+      "name": "TARGET_CONNECTION",
+      "type": "string",
+      "description": "Target database connection key"
+    },
+    {
+      "name": "SOURCE_TABLE",
+      "type": "string",
+      "description": "Source table name to read from"
+    },
+    {
+      "name": "TARGET_TABLE",
+      "type": "string",
+      "description": "Target table name to write to"
+    },
+    {
+      "name": "ID_FIELD",
+      "type": "string",
+      "description": "Primary key field for upsert",
+      "default": "id"
+    }
+  ],
+  "flows": [
+    {
+      "flowId": "{{SYNC_ID}}-run",
+      "method": "POST",
+      "path": "/sync/{{SYNC_ID}}",
+      "tree": {
+        "id": "trigger",
+        "type": "trigger",
+        "spec": {
+          "method": "POST",
+          "path": "/sync/{{SYNC_ID}}",
+          "input": {
+            "body": true
+          }
+        },
+        "children": [
+          {
+            "id": "read-source",
+            "type": "action",
+            "spec": {
+              "connection": "{{SOURCE_CONNECTION}}",
+              "operation": {
+                "Kind": "query",
+                "Payload": {
+                  "sql": "SELECT * FROM {{SOURCE_TABLE}}"
+                },
+                "Required": true
+              },
+              "saveAs": "source",
+              "unwrapSingleRow": false
+            }
+          },
+          {
+            "id": "write-target",
+            "type": "action",
+            "spec": {
+              "connection": "{{TARGET_CONNECTION}}",
+              "operation": {
+                "Kind": "exec",
+                "Payload": {
+                  "sql": "INSERT INTO {{TARGET_TABLE}} SELECT * FROM unnest($1::jsonb[]) ON CONFLICT ({{ID_FIELD}}) DO UPDATE SET data = EXCLUDED.data",
+                  "params": ["{{source}}"]
+                },
+                "Required": true
+              },
+              "saveAs": "result"
+            }
+          },
+          {
+            "id": "set-synced",
+            "type": "set",
+            "spec": {
+              "targetPath": "synced",
+              "value": true
+            }
+          },
+          {
+            "id": "respond-sync",
+            "type": "response",
+            "spec": {
+              "status": 200,
+              "bodyFrom": ""
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
