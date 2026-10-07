@@ -2,7 +2,7 @@
   "id": "FEAT-005",
   "type": "feat",
   "description": "Create CMS Group content type and resource-limits component, update Flow content type with group relation. Backward compatible - existing flows work without group.",
-  "status": "pending",
+  "status": "completed",
   "steps": [
     "Create directory structure: mkdir -p /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/content-types/group /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/controllers /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/routes /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/services /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/config",
     "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/config/resource-limits.json component with attributes: cpuRequest (string, default '100m', regex ^[0-9]+m?$), cpuLimit (string, default '500m'), memoryRequest (string, default '128Mi', regex ^[0-9]+(Mi|Gi)$), memoryLimit (string, default '512Mi').",
