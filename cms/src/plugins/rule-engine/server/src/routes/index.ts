@@ -45,6 +45,16 @@ export default {
           policies: [],
         },
       },
+      // --- Connection test route (test-connection feature) ---
+      {
+        // POST /connections/test — test a connection with ephemeral credentials.
+        method: 'POST',
+        path: '/connections/test',
+        handler: 'connection-test.testConnection',
+        config: {
+          policies: [],
+        },
+      },
       // --- Sync routes (FEAT-002) ---
       {
         // GET /sync/status — compare CMS vs engine, return diff status.

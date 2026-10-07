@@ -44,6 +44,8 @@ import type {
   PublishWebhookRequest,
   PublishWebhookResponse,
   SetActiveResponse,
+  TestConnectionRequest,
+  TestConnectionResponse,
   TriggerScheduleRunResponse,
   UpdateScheduleRequest,
   UpdateWebhookRequest,
@@ -235,6 +237,14 @@ export class AdminClient {
   /** GET /admin/connections — list active connection defs (Go-cased ns resilience). */
   listConnections(): Promise<ListConnectionsResponse> {
     return this.request<ListConnectionsResponse>('GET', '/admin/connections');
+  }
+
+  /**
+   * POST /admin/connections/test — test a connection with ephemeral credentials.
+   * The secret is passed in the request body and is never stored.
+   */
+  testConnection(req: Omit<TestConnectionRequest, 'env'>): Promise<TestConnectionResponse> {
+    return this.request<TestConnectionResponse>('POST', '/admin/connections/test', req);
   }
 
   /** POST /admin/flows/dry-run — trace preview, writes suppressed (not a gate). */

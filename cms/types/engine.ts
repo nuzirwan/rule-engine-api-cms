@@ -620,3 +620,21 @@ export interface TriggerScheduleRunResponse {
   durationMs: number;
   error?: string;
 }
+
+// ============================================================================
+// Test Connection Types (test-connection feature)
+// ============================================================================
+
+/** POST /admin/connections/test body — testConnectionRequest. */
+export interface TestConnectionRequest {
+  type: string;
+  settings: Record<string, unknown>;
+  secret: string;
+}
+
+/** 200 from POST /admin/connections/test. */
+export interface TestConnectionResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
