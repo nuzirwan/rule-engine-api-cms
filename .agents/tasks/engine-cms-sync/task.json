@@ -1,7 +1,9 @@
 {
   "task_id": "task-engine-cms-sync",
   "task_description": "Build bidirectional sync: Engine read endpoints (GET /admin/flows, /admin/flows/{id}, etc.) + CMS import/sync feature with admin UI that pulls engine config into CMS content types.",
-  "status": "pending",
+  "status": "completed",
   "feature_order": ["FEAT-001", "FEAT-002"],
-  "blocked_reason": null
+  "blocked_reason": null,
+  "completed_at": "2025-01-17",
+  "summary": "Synced CMS with engine capabilities: 4 connector types (mysql, http, kafka, rabbitmq), 3 settings components, 5 flow node types, circuit breaker and backoff fields"
 }
