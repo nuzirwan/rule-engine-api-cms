@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "feat",
   "description": "Integrate gateway dispatcher into httpapi/server.go. When dispatch.mode=gateway, the genericFlowHandler routes requests through Dispatcher instead of running flow.Interpreter inline. Add POST /internal/execute endpoint for cross-group calls (worker→gateway→worker). The API remains transparent to consumers - same request/response format.",
-  "status": "pending",
+  "status": "completed",
   "steps": [
     "Modify /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/httpapi/server.go Deps struct: add Dispatcher *gateway.Dispatcher field (nil when dispatch.mode=inline), add DispatchConfig *config.DispatchConfig field",
     "Modify genericFlowHandler in server.go: after resolving flow via store.ActiveFlow, check if deps.DispatchConfig.Mode == config.DispatchGateway. If gateway mode: extract group from flow (fv.Group, fallback to config.DefaultGroup), call deps.Dispatcher.Dispatch(ctx, fv.FlowID, group, input), convert worker.ExecuteResponse to HTTP response. If inline mode: existing flow.Interpreter.Run logic unchanged",
@@ -25,5 +25,5 @@
     "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go vet ./..."
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Changed Deps.Dispatcher from *gateway.Dispatcher to a Dispatcher interface to enable testing with mocks. Gateway mode integration adds handleGatewayDispatch and handleInlineExecution helper functions to split the flow handling logic. The internalExecuteHandler resolves flow by ID by iterating routes (since flows are keyed by method+path, not ID). Added statusForDispatchError and classifyDispatchError for error mapping from gateway errors to HTTP responses. The buildK8sClient function tries in-cluster config first, then falls back to kubeconfig from KUBECONFIG env or ~/.kube/config for local development. Cross-FEAT verification passed: go mod tidy, go build ./cmd/engine, go build ./cmd/worker, go test ./... (12 packages pass), go vet ./... all succeed."
 }
