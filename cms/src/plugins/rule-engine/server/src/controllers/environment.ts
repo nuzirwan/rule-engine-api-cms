@@ -5,6 +5,7 @@
 //   * PUT /environments/:id — update an existing Environment
 //   * DELETE /environments/:id — delete an Environment
 //   * POST /environments/:id/test — test connection to an environment's engine
+//   * POST /environments/:id/validate-flow/:flowId — validate a flow against an environment's engine
 
 import { AdminClient, resolveAdminConfig, AdminApiError } from '../services/admin-client';
 
@@ -14,6 +15,7 @@ import { AdminClient, resolveAdminConfig, AdminApiError } from '../services/admi
  */
 export default function environmentController({ strapi }: { strapi: any }) {
   const ENV_UID = 'api::environment.environment';
+  const FLOW_UID = 'api::flow.flow';
 
   /**
    * Map database record to API response shape.
@@ -219,6 +221,121 @@ export default function environmentController({ strapi }: { strapi: any }) {
           ctx.body = {
             success: false,
             message: `Configuration error: ${message}`,
+          };
+        }
+      }
+    },
+
+    /**
+     * POST /environments/:id/validate-flow/:flowId — validate a flow against a specific environment's engine.
+     * 
+     * This endpoint allows validating a flow definition against a particular environment,
+     * which is useful for testing flows against staging/production environments before
+     * actually publishing to them.
+     * 
+     * Body: { version?: number } — optional version to validate (defaults to latest)
+     * Returns validation result from the engine.
+     */
+    async validateFlow(ctx: any) {
+      const { id: envId, flowId } = ctx.params;
+      const { version } = ctx.request.body || {};
+
+      // Find the environment
+      const env = await strapi.documents(ENV_UID).findOne({
+        documentId: envId,
+      });
+
+      if (!env) {
+        ctx.status = 404;
+        ctx.body = { error: 'Environment not found' };
+        return;
+      }
+
+      // Find the flow in CMS
+      const flows = await strapi.documents(FLOW_UID).findMany({
+        filters: { flowId: { $eq: flowId } },
+        limit: 1,
+      });
+
+      if (flows.length === 0) {
+        ctx.status = 404;
+        ctx.body = { error: 'Flow not found in CMS' };
+        return;
+      }
+
+      try {
+        // Resolve admin config from environment
+        const config = resolveAdminConfig({
+          adminApiBaseUrl: env.adminApiBaseUrl,
+          operatorTokenRef: env.operatorTokenRef,
+          payloadEnv: env.payloadEnv,
+        });
+
+        const client = new AdminClient(config);
+
+        // If version not specified, we need to get the flow's current version from the engine
+        // The validateFlow endpoint requires both flowId and version
+        let targetVersion = version;
+        
+        if (targetVersion === undefined) {
+          // Try to get the latest version from the engine
+          try {
+            const flowVersions = await client.listFlowVersions(flowId);
+            if (flowVersions.versions.length === 0) {
+              ctx.status = 404;
+              ctx.body = { 
+                error: 'Flow has no versions in the engine. Publish the flow first.',
+                recoverable: false,
+              };
+              return;
+            }
+            // Get the latest version
+            targetVersion = Math.max(...flowVersions.versions.map(v => v.version));
+          } catch (err) {
+            if (err instanceof AdminApiError && err.status === 404) {
+              ctx.status = 404;
+              ctx.body = { 
+                error: 'Flow not found in engine. Publish the flow first.',
+                recoverable: false,
+              };
+              return;
+            }
+            throw err;
+          }
+        }
+
+        // Validate the flow against the environment's engine
+        const result = await client.validateFlow(flowId, targetVersion);
+
+        ctx.body = {
+          success: true,
+          flowId,
+          version: targetVersion,
+          environment: {
+            id: envId,
+            name: env.name,
+          },
+          validation: result,
+        };
+      } catch (err: unknown) {
+        if (err instanceof AdminApiError) {
+          const recoverable = err.recoverable;
+          ctx.status = recoverable ? 503 : (err.status || 500);
+          ctx.body = {
+            error: err.message,
+            recoverable,
+            flowId,
+            environment: {
+              id: envId,
+              name: env.name,
+            },
+          };
+        } else {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          ctx.status = 500;
+          ctx.body = {
+            error: `Configuration error: ${message}`,
+            recoverable: false,
           };
         }
       }

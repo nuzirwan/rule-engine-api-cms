@@ -100,6 +100,16 @@ export default {
           policies: [],
         },
       },
+      {
+        // POST /environments/:id/validate-flow/:flowId — validate a flow against a specific environment's engine.
+        // This allows validating the same flow definition against different environments.
+        method: 'POST',
+        path: '/environments/:id/validate-flow/:flowId',
+        handler: 'environment.validateFlow',
+        config: {
+          policies: [],
+        },
+      },
       // --- Flow versioning routes (FEAT-001 flow-versioning-ui) ---
       {
         // GET /flows/:id/versions — list all versions for a flow.

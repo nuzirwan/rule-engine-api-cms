@@ -4,6 +4,11 @@
 //   * Fetch-on-mount via useFetchClient (Strapi 5 admin hook)
 //   * Loading / error / success states with FetchState union
 //
+// FEAT-003: Environment-aware sync:
+//   * Consumes useEnvironment hook for selected environment
+//   * Passes selected environment's documentId to sync status API
+//   * Shows environment badge on items when in "All Environments" mode
+//
 // Shows diff status (synced/localOnly/engineOnly) and provides:
 //   * Import All button to pull all engine config
 //   * Per-item import buttons for engine-only items
@@ -25,6 +30,7 @@ import {
   Td,
 } from '@strapi/design-system';
 
+import { useEnvironment } from '../../contexts/EnvironmentContext';
 import type { SyncStatus, SyncItem, ImportResult } from './types';
 
 export type { SyncStatus, SyncItem, ImportResult };
@@ -60,6 +66,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: flow.id,
       label: `${flow.method} ${flow.path}`,
       status: 'synced',
+      environmentName: flow.environmentName,
+      environmentId: flow.environmentId,
     });
   }
   for (const flow of status.flows.localOnly) {
@@ -68,6 +76,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: flow.id,
       label: flow.id,
       status: 'localOnly',
+      environmentName: flow.environmentName,
+      environmentId: flow.environmentId,
     });
   }
   for (const flow of status.flows.engineOnly) {
@@ -76,6 +86,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: flow.id,
       label: `${flow.method} ${flow.path}`,
       status: 'engineOnly',
+      environmentName: flow.environmentName,
+      environmentId: flow.environmentId,
     });
   }
 
@@ -86,6 +98,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: jdm.id,
       label: jdm.id,
       status: 'synced',
+      environmentName: jdm.environmentName,
+      environmentId: jdm.environmentId,
     });
   }
   for (const jdm of status.jdms.localOnly) {
@@ -94,6 +108,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: jdm.id,
       label: jdm.id,
       status: 'localOnly',
+      environmentName: jdm.environmentName,
+      environmentId: jdm.environmentId,
     });
   }
   for (const jdm of status.jdms.engineOnly) {
@@ -102,6 +118,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: jdm.id,
       label: jdm.id,
       status: 'engineOnly',
+      environmentName: jdm.environmentName,
+      environmentId: jdm.environmentId,
     });
   }
 
@@ -112,6 +130,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: conn.key,
       label: conn.key,
       status: 'synced',
+      environmentName: conn.environmentName,
+      environmentId: conn.environmentId,
     });
   }
   for (const conn of status.connections.localOnly) {
@@ -120,6 +140,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: conn.key,
       label: conn.key,
       status: 'localOnly',
+      environmentName: conn.environmentName,
+      environmentId: conn.environmentId,
     });
   }
   for (const conn of status.connections.engineOnly) {
@@ -128,6 +150,8 @@ function flattenSyncStatus(status: SyncStatus): SyncItem[] {
       id: conn.key,
       label: conn.key,
       status: 'engineOnly',
+      environmentName: conn.environmentName,
+      environmentId: conn.environmentId,
     });
   }
 
@@ -162,6 +186,22 @@ function getStatusLabel(status: SyncItem['status']): string {
   }
 }
 
+/** Get badge variant for environment name (same logic as EnvironmentSelector). */
+function getEnvBadgeVariant(name: string): 'success' | 'alternative' | 'warning' | 'neutral' {
+  const lower = name.toLowerCase();
+
+  if (lower.includes('prod') || lower === 'default' || lower === 'live') {
+    return 'success';
+  }
+  if (lower.includes('stag') || lower.includes('stg') || lower === 'qa' || lower === 'uat') {
+    return 'alternative';
+  }
+  if (lower.includes('dev') || lower === 'local' || lower === 'test') {
+    return 'warning';
+  }
+  return 'neutral';
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -170,16 +210,25 @@ interface SyncItemRowProps {
   item: SyncItem;
   onImport: (type: SyncItem['type'], id: string) => void;
   importing: boolean;
+  /** Whether to show environment badge (true when in "All Environments" mode). */
+  showEnvBadge: boolean;
 }
 
-function SyncItemRow({ item, onImport, importing }: SyncItemRowProps): React.JSX.Element {
+function SyncItemRow({ item, onImport, importing, showEnvBadge }: SyncItemRowProps): React.JSX.Element {
   return (
     <Tr>
       <Td>
         <Typography variant="omega">{item.type}</Typography>
       </Td>
       <Td>
-        <Typography variant="omega">{item.label}</Typography>
+        <Flex direction="row" alignItems="center" gap={2}>
+          <Typography variant="omega">{item.label}</Typography>
+          {showEnvBadge && item.environmentName && (
+            <Badge variant={getEnvBadgeVariant(item.environmentName)} size="S">
+              {item.environmentName}
+            </Badge>
+          )}
+        </Flex>
       </Td>
       <Td>
         <Badge variant={getBadgeVariant(item.status)}>{getStatusLabel(item.status)}</Badge>
@@ -265,14 +314,23 @@ export interface SyncPanelProps {
 
 export const SyncPanel: React.FC<SyncPanelProps> = ({ onImportComplete }) => {
   const { get, post } = useFetchClient();
+  const { selectedEnv } = useEnvironment();
   const [state, setState] = React.useState<FetchState>({ status: 'idle' });
   const [importState, setImportState] = React.useState<ImportState>({ status: 'idle' });
+
+  // Determine if we're in "All Environments" mode (no specific env selected)
+  const isAllEnvsMode = selectedEnv === null;
 
   const fetchStatus = React.useCallback(async () => {
     setState({ status: 'loading' });
 
     try {
-      const { data } = await get<SyncStatus>('/rule-engine/sync/status');
+      // Build URL with optional environment filter
+      const url = selectedEnv
+        ? `/rule-engine/sync/status?env=${encodeURIComponent(selectedEnv.documentId)}`
+        : '/rule-engine/sync/status';
+
+      const { data } = await get<SyncStatus>(url);
       setState({ status: 'ok', data });
     } catch (err: unknown) {
       const body = (err as any)?.response?.data;
@@ -281,8 +339,9 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onImportComplete }) => {
         body?.error ?? (err instanceof Error ? err.message : 'Failed to load sync status');
       setState({ status: 'error', message, recoverable });
     }
-  }, [get]);
+  }, [get, selectedEnv]);
 
+  // Refetch when selected environment changes
   React.useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
@@ -330,7 +389,19 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onImportComplete }) => {
       <Flex direction="column" alignItems="stretch" gap={4}>
         {/* Header */}
         <Flex direction="row" justifyContent="space-between" alignItems="center">
-          <Typography variant="delta">Engine Sync</Typography>
+          <Flex direction="row" alignItems="center" gap={2}>
+            <Typography variant="delta">Engine Sync</Typography>
+            {selectedEnv && (
+              <Badge variant={getEnvBadgeVariant(selectedEnv.name)} size="S">
+                {selectedEnv.name}
+              </Badge>
+            )}
+            {isAllEnvsMode && (
+              <Badge variant="neutral" size="S">
+                All Environments
+              </Badge>
+            )}
+          </Flex>
           <Flex direction="row" gap={2}>
             <Button variant="tertiary" onClick={fetchStatus} disabled={isImporting}>
               Refresh
@@ -420,6 +491,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onImportComplete }) => {
                   item={item}
                   onImport={handleImportOne}
                   importing={isImporting}
+                  showEnvBadge={isAllEnvsMode}
                 />
               ))}
             </Tbody>

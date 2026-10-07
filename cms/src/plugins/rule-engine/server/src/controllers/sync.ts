@@ -7,6 +7,11 @@
 //   * 5xx / transport (recoverable) → 503
 //   * 4xx (non-recoverable) → echo the engine status
 //   * Config missing → 503 (env not provisioned)
+//
+// FEAT-003: Environment-aware sync:
+//   * Optional ?env=documentId query param on syncStatus to filter by environment
+//   * When env is provided, only CMS items with that environment relation are shown
+//   * AdminClient is configured from the environment's settings when specified
 
 import { AdminApiError, AdminClient, resolveAdminConfig } from '../services/admin-client';
 import type {
@@ -30,11 +35,32 @@ interface SyncDiff<T> {
   engineOnly: T[];
 }
 
+/** Extended FlowSummary with optional environment info. */
+interface FlowSummaryWithEnv extends FlowSummary {
+  environmentName?: string;
+  environmentId?: string;
+}
+
+/** Extended JDMSummary with optional environment info. */
+interface JDMSummaryWithEnv extends JDMSummary {
+  environmentName?: string;
+  environmentId?: string;
+}
+
+/** Extended connection summary with optional environment info. */
+interface ConnectionSummaryWithEnv {
+  key: string;
+  environmentName?: string;
+  environmentId?: string;
+}
+
 /** Response shape for GET /sync/status. */
 interface SyncStatusResponse {
-  flows: SyncDiff<FlowSummary>;
-  jdms: SyncDiff<JDMSummary>;
-  connections: SyncDiff<{ key: string }>;
+  flows: SyncDiff<FlowSummaryWithEnv>;
+  jdms: SyncDiff<JDMSummaryWithEnv>;
+  connections: SyncDiff<ConnectionSummaryWithEnv>;
+  /** Environment documentId if filtered, null for all environments. */
+  environment: string | null;
 }
 
 /** Response shape for POST /sync/import. */
@@ -55,6 +81,15 @@ interface ImportOneResponse {
 
 const VALID_SYNC_TYPES = new Set<string>(['flow', 'jdm', 'connection']);
 
+/** Environment config override shape. */
+interface EnvironmentOverride {
+  documentId: string;
+  name: string;
+  adminApiBaseUrl: string | null;
+  operatorTokenRef: string | null;
+  payloadEnv: string;
+}
+
 /**
  * Sync controller factory. The optional `fetchImpl` parameter is a test seam:
  * it is passed through to AdminClient so tests can inject the nock-compatible
@@ -64,14 +99,43 @@ export default function syncController(
   { strapi }: { strapi: any },
   fetchImpl?: typeof fetch
 ) {
+  const ENV_UID = 'api::environment.environment';
+
+  /**
+   * Fetch an environment by documentId. Returns null if not found.
+   */
+  async function getEnvironment(documentId: string): Promise<EnvironmentOverride | null> {
+    const env = await strapi.documents(ENV_UID).findOne({
+      documentId,
+      fields: ['name', 'adminApiBaseUrl', 'operatorTokenRef', 'payloadEnv'],
+    });
+    if (!env) return null;
+    return {
+      documentId: env.documentId,
+      name: env.name,
+      adminApiBaseUrl: env.adminApiBaseUrl ?? null,
+      operatorTokenRef: env.operatorTokenRef ?? null,
+      payloadEnv: env.payloadEnv ?? '',
+    };
+  }
+
   /**
    * Create an AdminClient instance with resolved config.
    * Returns { client } on success, or sets ctx.status/ctx.body and returns null on failure.
+   * If envOverride is provided, uses that environment's config instead of defaults.
    */
-  function createClient(ctx: any): AdminClient | null {
+  function createClient(ctx: any, envOverride?: EnvironmentOverride | null): AdminClient | null {
     let config;
     try {
-      config = resolveAdminConfig();
+      config = resolveAdminConfig(
+        envOverride
+          ? {
+              adminApiBaseUrl: envOverride.adminApiBaseUrl,
+              operatorTokenRef: envOverride.operatorTokenRef,
+              payloadEnv: envOverride.payloadEnv,
+            }
+          : undefined
+      );
     } catch (err) {
       ctx.status = 503;
       ctx.body = { error: (err as Error).message, recoverable: false };
@@ -93,41 +157,152 @@ export default function syncController(
   }
 
   /**
-   * Fetch all CMS flows from the document service.
+   * CMS flow record shape with environment relation.
    */
-  async function getCmsFlows(): Promise<{ flowId: string; documentId: string }[]> {
-    const results = await strapi.documents('api::flow.flow').findMany({
+  interface CmsFlowRecord {
+    flowId: string;
+    documentId: string;
+    environmentName?: string;
+    environmentId?: string;
+  }
+
+  /**
+   * CMS JDM record shape with environment relation.
+   */
+  interface CmsJdmRecord {
+    jdmId: string;
+    documentId: string;
+    environmentName?: string;
+    environmentId?: string;
+  }
+
+  /**
+   * CMS connection record shape with environment relation.
+   */
+  interface CmsConnectionRecord {
+    key: string;
+    documentId: string;
+    environmentName?: string;
+    environmentId?: string;
+  }
+
+  /**
+   * Fetch all CMS flows from the document service.
+   * If envDocumentId is provided, only returns flows with that environment relation.
+   */
+  async function getCmsFlows(envDocumentId?: string): Promise<CmsFlowRecord[]> {
+    const query: any = {
       fields: ['flowId'],
-    });
-    return results.map((r: any) => ({ flowId: r.flowId, documentId: r.documentId }));
+      populate: {
+        environment: {
+          fields: ['name'],
+        },
+      },
+    };
+
+    // Filter by environment if specified
+    if (envDocumentId) {
+      query.filters = {
+        environment: {
+          documentId: { $eq: envDocumentId },
+        },
+      };
+    }
+
+    const results = await strapi.documents('api::flow.flow').findMany(query);
+    return results.map((r: any) => ({
+      flowId: r.flowId,
+      documentId: r.documentId,
+      environmentName: r.environment?.name,
+      environmentId: r.environment?.documentId,
+    }));
   }
 
   /**
    * Fetch all CMS JDMs from the document service.
+   * If envDocumentId is provided, only returns JDMs with that environment relation.
    */
-  async function getCmsJdms(): Promise<{ jdmId: string; documentId: string }[]> {
-    const results = await strapi.documents('api::jdm.jdm').findMany({
+  async function getCmsJdms(envDocumentId?: string): Promise<CmsJdmRecord[]> {
+    const query: any = {
       fields: ['jdmId'],
-    });
-    return results.map((r: any) => ({ jdmId: r.jdmId, documentId: r.documentId }));
+      populate: {
+        environment: {
+          fields: ['name'],
+        },
+      },
+    };
+
+    if (envDocumentId) {
+      query.filters = {
+        environment: {
+          documentId: { $eq: envDocumentId },
+        },
+      };
+    }
+
+    const results = await strapi.documents('api::jdm.jdm').findMany(query);
+    return results.map((r: any) => ({
+      jdmId: r.jdmId,
+      documentId: r.documentId,
+      environmentName: r.environment?.name,
+      environmentId: r.environment?.documentId,
+    }));
   }
 
   /**
    * Fetch all CMS connections from the document service.
+   * If envDocumentId is provided, only returns connections with that environment relation.
    */
-  async function getCmsConnections(): Promise<{ key: string; documentId: string }[]> {
-    const results = await strapi.documents('api::connection.connection').findMany({
+  async function getCmsConnections(envDocumentId?: string): Promise<CmsConnectionRecord[]> {
+    const query: any = {
       fields: ['key'],
-    });
-    return results.map((r: any) => ({ key: r.key, documentId: r.documentId }));
+      populate: {
+        environment: {
+          fields: ['name'],
+        },
+      },
+    };
+
+    if (envDocumentId) {
+      query.filters = {
+        environment: {
+          documentId: { $eq: envDocumentId },
+        },
+      };
+    }
+
+    const results = await strapi.documents('api::connection.connection').findMany(query);
+    return results.map((r: any) => ({
+      key: r.key,
+      documentId: r.documentId,
+      environmentName: r.environment?.name,
+      environmentId: r.environment?.documentId,
+    }));
   }
 
   return {
     /**
      * GET /sync/status — compare CMS vs engine, return diff for flows, jdms, connections.
+     * 
+     * Query params:
+     *   * env: optional environment documentId to filter CMS items by
+     *          When provided, also uses that environment's engine config
      */
     async syncStatus(ctx: any) {
-      const client = createClient(ctx);
+      // Parse optional environment filter
+      const envDocumentId = ctx.query?.env as string | undefined;
+      let envOverride: EnvironmentOverride | null = null;
+
+      if (envDocumentId) {
+        envOverride = await getEnvironment(envDocumentId);
+        if (!envOverride) {
+          ctx.status = 404;
+          ctx.body = { error: 'Environment not found', recoverable: false };
+          return;
+        }
+      }
+
+      const client = createClient(ctx, envOverride);
       if (!client) return;
 
       try {
@@ -138,11 +313,11 @@ export default function syncController(
           client.listConnections(),
         ]);
 
-        // Fetch from CMS
+        // Fetch from CMS (filtered by environment if specified)
         const [cmsFlows, cmsJdms, cmsConnections] = await Promise.all([
-          getCmsFlows(),
-          getCmsJdms(),
-          getCmsConnections(),
+          getCmsFlows(envDocumentId),
+          getCmsJdms(envDocumentId),
+          getCmsConnections(envDocumentId),
         ]);
 
         const cmsFlowIds = new Set(cmsFlows.map(f => f.flowId));
@@ -153,32 +328,79 @@ export default function syncController(
         const engineJdmIds = new Set(engineJdmsResp.jdms.map(j => j.id));
         const engineConnectionKeys = new Set(engineConnectionsResp.connections.map(c => c.key));
 
-        // Compute diffs for flows
-        const flowsDiff: SyncDiff<FlowSummary> = {
-          synced: engineFlowsResp.flows.filter(f => cmsFlowIds.has(f.id)),
+        // Create a map for CMS items to get environment info
+        const cmsFlowMap = new Map(cmsFlows.map(f => [f.flowId, f]));
+        const cmsJdmMap = new Map(cmsJdms.map(j => [j.jdmId, j]));
+        const cmsConnectionMap = new Map(cmsConnections.map(c => [c.key, c]));
+
+        // Compute diffs for flows with environment info
+        const flowsDiff: SyncDiff<FlowSummaryWithEnv> = {
+          synced: engineFlowsResp.flows
+            .filter(f => cmsFlowIds.has(f.id))
+            .map(f => {
+              const cmsFlow = cmsFlowMap.get(f.id);
+              return {
+                ...f,
+                environmentName: cmsFlow?.environmentName,
+                environmentId: cmsFlow?.environmentId,
+              };
+            }),
           localOnly: cmsFlows
             .filter(f => !engineFlowIds.has(f.flowId))
-            .map(f => ({ id: f.flowId, method: '', path: '', activeVersion: null, updatedAt: '' })),
+            .map(f => ({
+              id: f.flowId,
+              method: '',
+              path: '',
+              activeVersion: null,
+              updatedAt: '',
+              environmentName: f.environmentName,
+              environmentId: f.environmentId,
+            })),
           engineOnly: engineFlowsResp.flows.filter(f => !cmsFlowIds.has(f.id)),
         };
 
-        // Compute diffs for jdms
-        const jdmsDiff: SyncDiff<JDMSummary> = {
-          synced: engineJdmsResp.jdms.filter(j => cmsJdmIds.has(j.id)),
+        // Compute diffs for jdms with environment info
+        const jdmsDiff: SyncDiff<JDMSummaryWithEnv> = {
+          synced: engineJdmsResp.jdms
+            .filter(j => cmsJdmIds.has(j.id))
+            .map(j => {
+              const cmsJdm = cmsJdmMap.get(j.id);
+              return {
+                ...j,
+                environmentName: cmsJdm?.environmentName,
+                environmentId: cmsJdm?.environmentId,
+              };
+            }),
           localOnly: cmsJdms
             .filter(j => !engineJdmIds.has(j.jdmId))
-            .map(j => ({ id: j.jdmId, updatedAt: '' })),
+            .map(j => ({
+              id: j.jdmId,
+              updatedAt: '',
+              environmentName: j.environmentName,
+              environmentId: j.environmentId,
+            })),
           engineOnly: engineJdmsResp.jdms.filter(j => !cmsJdmIds.has(j.id)),
         };
 
-        // Compute diffs for connections
-        const connectionsDiff: SyncDiff<{ key: string }> = {
+        // Compute diffs for connections with environment info
+        const connectionsDiff: SyncDiff<ConnectionSummaryWithEnv> = {
           synced: engineConnectionsResp.connections
             .filter(c => cmsConnectionKeys.has(c.key))
-            .map(c => ({ key: c.key })),
+            .map(c => {
+              const cmsConn = cmsConnectionMap.get(c.key);
+              return {
+                key: c.key,
+                environmentName: cmsConn?.environmentName,
+                environmentId: cmsConn?.environmentId,
+              };
+            }),
           localOnly: cmsConnections
             .filter(c => !engineConnectionKeys.has(c.key))
-            .map(c => ({ key: c.key })),
+            .map(c => ({
+              key: c.key,
+              environmentName: c.environmentName,
+              environmentId: c.environmentId,
+            })),
           engineOnly: engineConnectionsResp.connections
             .filter(c => !cmsConnectionKeys.has(c.key))
             .map(c => ({ key: c.key })),
@@ -188,6 +410,7 @@ export default function syncController(
           flows: flowsDiff,
           jdms: jdmsDiff,
           connections: connectionsDiff,
+          environment: envDocumentId ?? null,
         };
 
         ctx.body = response;

@@ -1,113 +1,202 @@
-# nzr-rules-engine — v1 thin vertical slice
+# nzr-rules-engine
 
-A data-plane rules engine that walks a declarative flow tree per request: read a
-source, run a GoRules **ZEN** decision over the data, branch, call a downstream,
-and stitch a response. This repository is the **thin vertical slice** — one real
-route proving the whole pipeline end to end against a real Postgres and a real
-HTTP downstream, with the decision driven by the embedded ZEN engine.
-
-Module path: `nzr-rules-engine` · Go 1.22+ · stdlib `net/http` only (no chi/gin).
-
-## The one route
+A lightweight **stateless flow orchestration engine** with embedded decision tables. It walks a declarative flow tree per HTTP request: read data sources, evaluate business rules via [GoRules ZEN](https://gorules.io/), branch on outcomes, call external services, and compose responses — all in a single request/response cycle with sub-millisecond overhead.
 
 ```
-GET /orders/{id}
+HTTP Request → Flow Interpreter → ZEN Decision Tables → Connectors → HTTP Response
 ```
 
-The handler resolves and **pins** the active flow version once (version pinning
-at the request boundary), builds the request context, and runs the interpreter.
-The seeded flow is:
+**Module path:** `nzr-rules-engine` · Go 1.22+ · stdlib `net/http` only (no chi/gin)
+
+## What is this?
+
+This is **not** a BPM engine — it's a purpose-built API orchestration layer that combines:
+
+| Capability | Implementation |
+|------------|----------------|
+| **Flow orchestration** | Tree-based interpreter with 15 node types |
+| **Business rules** | Embedded ZEN decision tables (no external service) |
+| **Connector resilience** | Retry, circuit breaker, timeouts per connection |
+| **Webhook ingestion** | Stripe/GitHub/generic HMAC with filtering |
+
+### How it compares
+
+| Tool | Type | State | Rules | Best for |
+|------|------|-------|-------|----------|
+| **This engine** | Flow orchestrator | Stateless | ZEN (embedded) | API orchestration, real-time rules |
+| Camunda | BPM | Persisted | DMN | Long-running business processes |
+| Temporal | Workflow engine | Persisted | None | Durable, fault-tolerant workflows |
+| AWS Step Functions | State machine | Persisted | None | Serverless orchestration |
+| Apache Camel | Integration | Optional | External | Enterprise integration patterns |
+
+**The gap it fills:** No existing tool combines stateless execution + embedded decision tables + resilient connectors in a single Go binary. You'd otherwise stitch together 3–4 systems (gateway + rules service + workflow engine + resilience library).
+
+## Flow model
+
+A flow is a tree of typed nodes executed per request:
 
 ```
-Trigger -> Action(postgres: SELECT amount,status FROM orders WHERE id=$1)
-        -> Condition(ZEN "order" JDM over {amount,status})
-             -> expedited: Action(POST /expedite) -> Set(shipping) -> Response(200)
-             -> standard : Action(POST /standard) -> Set(shipping) -> Response(200)
+Trigger → Action(postgres) → Condition(ZEN decision)
+                                 ├── true:  Action(HTTP POST) → Response
+                                 └── false: Set(field) → Response
 ```
 
-The decision table is `amount > 1000 AND status == 'paid' => "expedited"`, else
-`"standard"`. A high-value paid order expedites; a low-value paid order ships
-standard.
+### Node types (15)
 
-Classified engine errors map to HTTP status at the edge: `Validation -> 400`,
-`NotFound -> 404`, `Timeout -> 504`, `Upstream -> 502`, `Internal -> 500`.
+| Category | Nodes | Purpose |
+|----------|-------|---------|
+| **Entry** | `trigger` | Binds request to flow context |
+| **Control** | `condition`, `switch`, `sequence`, `parallel`, `forEach` | Branching and iteration |
+| **Data** | `set`, `decision`, `filter`, `find`, `map`, `reduce` | Transform and enrich context |
+| **Integration** | `action` | Call external connectors |
+| **Observability** | `logger` | Structured logging with sampling |
+| **Exit** | `response` | Compose HTTP response |
+
+### Decision integration
+
+Two ways to use ZEN decision tables:
+
+- **`condition` node** — Evaluate rules to pick a branch (true/false path)
+- **`decision` node** — Evaluate rules to compute values (save to flow context)
+
+Decision tables are JSON documents (JDMs) stored and versioned alongside flows — business users can edit rules without code deploys.
+
+## Connectors
+
+Built-in drivers with shared resilience envelope (timeout → circuit breaker → retry):
+
+| Type | Operations | Pool |
+|------|------------|------|
+| `postgres` | query, exec, ping | pgxpool |
+| `valkey` | get, set, del, ping | valkey-go |
+| `rest` / `http` | HTTP methods | http.Client |
+
+Each connection carries its own resilience policy; action nodes can override per-call.
+
+## Webhooks
+
+Ingest external events and trigger flows:
+
+```
+POST /webhooks/{webhook_id}
+```
+
+| Provider | Signature | Event type |
+|----------|-----------|------------|
+| Stripe | `Stripe-Signature` (timestamp + HMAC-SHA256) | `$.type` from payload |
+| GitHub | `X-Hub-Signature-256` (HMAC-SHA256) | `X-GitHub-Event` header |
+| Generic | Configurable header + algorithm | JSONPath extraction |
+
+Webhooks support:
+- **Filtering** — JSONPath-based event filtering (skip irrelevant events)
+- **Mapping** — Extract payload fields into flow context
+- **Logging** — Audit trail with redacted headers and payload hash
+
+## Example flow
+
+```json
+{
+  "id": "order-flow",
+  "tree": {
+    "id": "root", "type": "trigger",
+    "children": [{
+      "id": "fetch", "type": "action",
+      "spec": {
+        "connection": "orders-db",
+        "kind": "query",
+        "payload": {"sql": "SELECT amount, status FROM orders WHERE id = $1", "params": ["{{input.orderId}}"]}
+      },
+      "children": [{
+        "id": "route", "type": "condition",
+        "spec": {"jdmId": "order-routing", "input": {"amount": "data.fetch[0].amount", "status": "data.fetch[0].status"}},
+        "children": [
+          {"id": "expedited", "type": "action", "spec": {"connection": "shipping-api", "kind": "http", "payload": {"method": "POST", "path": "/expedite"}}},
+          {"id": "standard", "type": "action", "spec": {"connection": "shipping-api", "kind": "http", "payload": {"method": "POST", "path": "/standard"}}}
+        ]
+      }]
+    }]
+  }
+}
+```
+
+The `order-routing` decision table: `amount > 1000 AND status == 'paid' => "expedited"`, else `"standard"`.
+
+## Error classification
+
+Engine errors map to HTTP status at the edge:
+
+| Error class | HTTP status | Meaning |
+|-------------|-------------|---------|
+| `Validation` | 400 | Bad request / invalid flow |
+| `NotFound` | 404 | Missing resource |
+| `Timeout` | 504 | Deadline exceeded |
+| `Upstream` | 502 | Connector failure |
+| `Internal` | 500 | Engine bug |
 
 ## Build and run
 
 **CGO is required.** The decision engine links the embedded ZEN native library
-(`github.com/gorules/zen-go/v2`, which links `-lzen_ffi`), so a C toolchain
-(`gcc`/`cc`) must be present and `CGO_ENABLED=1` must be set to build or run the
-engine. A `CGO_ENABLED=0` build still *compiles* the whole tree via the
-`//go:build !cgo` stub in `internal/decision`, but that binary **refuses ZEN at
-runtime** with a Validation-class error — it never silently no-ops.
-
-The Go engine lives under `engine/` (its own `go.mod`); run all Go commands from
-there. The Strapi CMS lives under `cms/`. From the repo root you can also use the
-`Makefile` targets (`make build`, `make test`, `make vet`, `make test-integration`),
-which `cd` into `engine/` for you.
+(`github.com/gorules/zen-go/v2`), so a C toolchain (`gcc`/`cc`) must be present
+and `CGO_ENABLED=1` set. A `CGO_ENABLED=0` build compiles via the `//go:build !cgo`
+stub but **refuses ZEN at runtime** with a Validation error.
 
 ```sh
-# Build the whole engine tree (CGO on).
-cd engine && CGO_ENABLED=1 go build ./...
+# From repo root (Makefile handles cd)
+make build      # Build the engine
+make test       # Unit tests (no Docker)
+make vet        # Static analysis
 
-# Run the engine (serves :8080, loads the committed seed).
-cd engine && CGO_ENABLED=1 go run ./cmd/engine
-# or choose the address / seed:
-cd engine && CGO_ENABLED=1 go run ./cmd/engine -addr :9090 -seed internal/config/testdata/seed.json
+# Or directly
+cd engine && CGO_ENABLED=1 go build ./...
+cd engine && CGO_ENABLED=1 go run ./cmd/engine -addr :8080
 ```
 
-The process starts the HTTP server and blocks on `SIGINT`/`SIGTERM`. On a
-termination signal it drains in-flight requests with a bounded timeout, then
-closes the connection pools and the decision engine (freeing the ZEN graphs).
+### Container image
 
-### Container base image — must be glibc
-
-The vendored ZEN native library links **dynamically against glibc**
-(`libc.so.6`, `libm.so.6`, `libgcc_s.so.1`). The container image **MUST be
-glibc-based** — `debian-slim` or `distroless` — **NOT Alpine/musl** (per ADR-003
-and the Phase 0 spike report, `docs/phase0-spike-report.md`). Alpine/musl is not
-supported out of the box; a musl image would require rebuilding `libzen_ffi` for
-musl. Build the binary with `CGO_ENABLED=1` and ship it on a matching glibc
-runtime.
+The ZEN library links **dynamically against glibc**. Use `debian-slim` or `distroless` — **not Alpine/musl**.
 
 ## Tests
 
 ```sh
-# Unit tests (fakes only — no Docker, no network). CGO on so the whole tree,
-# including the real decision package, is exercised.
+# Unit tests (fakes only, no Docker)
 cd engine && CGO_ENABLED=1 go test ./...
 
-# Real-HTTP end-to-end integration test (Docker REQUIRED). Starts an ephemeral
-# postgres:16 and an in-process httptest REST stub, drives the real handler +
-# real registry + real ZEN engine, and asserts both branch cases.
+# Integration tests (requires Docker)
 cd engine && CGO_ENABLED=1 go test -tags 'integration cgo' ./internal/httpapi
 ```
 
-The integration test is guarded by `//go:build integration && cgo`, so a plain
-`go test ./...` never requires Docker. It needs the Docker daemon running: it
-runs `docker run -P postgres:16`, resolves the mapped port, polls until the
-server accepts connections, then tears the container down.
+Integration tests spin up ephemeral Postgres containers and tear them down after.
 
-## Layout
-
-Two separate components at the repo root — the Go engine (data plane) and the
-Strapi CMS (control plane / authoring UI):
+## Project layout
 
 ```
-engine/            the Go rules engine (own go.mod, module nzr-rules-engine)
-  cmd/engine/      process wiring + graceful shutdown
+engine/                 Go rules engine (data plane)
+  cmd/engine/           Main entry point, graceful shutdown
   internal/
-    flow/          interpreter, ctx accumulator, node handlers (pure core)
-    connect/       connection registry + resilience
-      drivers/     postgres + valkey + rest connectors
-    decision/      ZEN decision engine (cgo) + non-cgo stub + compiled cache
-    config/        config store (in-memory seed + Postgres), seeded from JSON
-    observ/        slog-backed tracer + logger + metrics
-    auth/          JWT (data plane) + operator-token (admin plane) auth
-    httpapi/       stdlib ServeMux edge, Ctx construction, admin API, adapters
-  migrations/      embedded config-store SQL migrations
-cms/               the Strapi 5 CMS (own package.json, own Postgres db+schema)
-docs/              HLD, ADRs, per-slice LLDs, state/handoff
+    flow/               Interpreter, context, node handlers
+    connect/            Connection registry + resilience
+      drivers/          postgres, valkey, rest connectors
+    decision/           ZEN engine (cgo) + non-cgo stub
+    config/             Config store (in-memory + Postgres)
+    webhook/            Signature verification, filtering, mapping
+    observ/             Tracing, logging, metrics
+    auth/               JWT (data plane) + operator token (admin)
+    httpapi/            HTTP handlers, admin API
+  migrations/           SQL migrations (embedded)
+
+cms/                    Strapi 5 CMS (control plane / authoring UI)
+docs/                   Architecture docs, ADRs, LLDs
 ```
 
-See `docs/` for the HLD, ADRs, and the per-slice LLDs this slice realizes.
+## Documentation
+
+- `docs/hld.md` — High-level design
+- `docs/lld.md` — Low-level design
+- `docs/lld-contracts.md` — Node specs and contracts
+- `docs/DEPLOYMENT.md` — Deployment guide
+- `docs/MONITORING.md` — Observability setup
+- `docs/SECRETS.md` — Secret management
+
+## License
+
+MIT

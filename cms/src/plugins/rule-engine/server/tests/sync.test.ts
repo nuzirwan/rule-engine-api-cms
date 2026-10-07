@@ -2,6 +2,8 @@
 //
 // Tests use nock to intercept HTTP calls (the controller is passed the httpFetch
 // shim so nock sees the traffic — same pattern as audit-controller.test.ts).
+//
+// FEAT-003: Added tests for environment-filtered sync status.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import nock from 'nock';
@@ -13,9 +15,10 @@ const BASE = 'http://engine.sync-test';
 const TOKEN = 'sync-token-xyz';
 
 /** Build a minimal mock Strapi ctx. */
-function makeCtx(params: Record<string, string> = {}) {
+function makeCtx(params: Record<string, string> = {}, query: Record<string, string> = {}) {
   return {
     params,
+    query,
     body: undefined as unknown,
     status: undefined as number | undefined,
     badRequest: vi.fn(),
@@ -24,50 +27,86 @@ function makeCtx(params: Record<string, string> = {}) {
 
 /** Build a mock strapi instance with document service stubs. */
 function makeStrapi(cmsData: {
-  flows?: { flowId: string; documentId: string }[];
-  jdms?: { jdmId: string; documentId: string }[];
-  connections?: { key: string; documentId: string }[];
+  flows?: { flowId: string; documentId: string; environmentName?: string; environmentId?: string }[];
+  jdms?: { jdmId: string; documentId: string; environmentName?: string; environmentId?: string }[];
+  connections?: { key: string; documentId: string; environmentName?: string; environmentId?: string }[];
+  environments?: { documentId: string; name: string; adminApiBaseUrl?: string; operatorTokenRef?: string; payloadEnv?: string }[];
 }) {
   return {
     documents: vi.fn((uid: string) => {
       if (uid === 'api::flow.flow') {
         return {
-          findMany: vi.fn().mockResolvedValue(
-            (cmsData.flows ?? []).map((f) => ({
-              flowId: f.flowId,
-              documentId: f.documentId,
-            }))
-          ),
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let flows = cmsData.flows ?? [];
+            // Filter by environment if specified
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              flows = flows.filter(f => f.environmentId === envId);
+            }
+            return Promise.resolve(
+              flows.map((f) => ({
+                flowId: f.flowId,
+                documentId: f.documentId,
+                environment: f.environmentId ? { name: f.environmentName, documentId: f.environmentId } : null,
+              }))
+            );
+          }),
           create: vi.fn().mockResolvedValue({ documentId: 'new-doc' }),
           update: vi.fn().mockResolvedValue({ documentId: 'updated-doc' }),
         };
       }
       if (uid === 'api::jdm.jdm') {
         return {
-          findMany: vi.fn().mockResolvedValue(
-            (cmsData.jdms ?? []).map((j) => ({
-              jdmId: j.jdmId,
-              documentId: j.documentId,
-            }))
-          ),
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let jdms = cmsData.jdms ?? [];
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              jdms = jdms.filter(j => j.environmentId === envId);
+            }
+            return Promise.resolve(
+              jdms.map((j) => ({
+                jdmId: j.jdmId,
+                documentId: j.documentId,
+                environment: j.environmentId ? { name: j.environmentName, documentId: j.environmentId } : null,
+              }))
+            );
+          }),
           create: vi.fn().mockResolvedValue({ documentId: 'new-doc' }),
           update: vi.fn().mockResolvedValue({ documentId: 'updated-doc' }),
         };
       }
       if (uid === 'api::connection.connection') {
         return {
-          findMany: vi.fn().mockResolvedValue(
-            (cmsData.connections ?? []).map((c) => ({
-              key: c.key,
-              documentId: c.documentId,
-            }))
-          ),
+          findMany: vi.fn().mockImplementation((opts?: any) => {
+            let connections = cmsData.connections ?? [];
+            if (opts?.filters?.environment?.documentId?.$eq) {
+              const envId = opts.filters.environment.documentId.$eq;
+              connections = connections.filter(c => c.environmentId === envId);
+            }
+            return Promise.resolve(
+              connections.map((c) => ({
+                key: c.key,
+                documentId: c.documentId,
+                environment: c.environmentId ? { name: c.environmentName, documentId: c.environmentId } : null,
+              }))
+            );
+          }),
           create: vi.fn().mockResolvedValue({ documentId: 'new-doc' }),
           update: vi.fn().mockResolvedValue({ documentId: 'updated-doc' }),
         };
       }
+      if (uid === 'api::environment.environment') {
+        return {
+          findMany: vi.fn().mockResolvedValue(cmsData.environments ?? []),
+          findOne: vi.fn().mockImplementation(({ documentId }: { documentId: string }) => {
+            const env = (cmsData.environments ?? []).find(e => e.documentId === documentId);
+            return Promise.resolve(env ?? null);
+          }),
+        };
+      }
       return {
         findMany: vi.fn().mockResolvedValue([]),
+        findOne: vi.fn().mockResolvedValue(null),
         create: vi.fn(),
         update: vi.fn(),
       };
@@ -154,6 +193,84 @@ describe('sync controller', () => {
 
       expect(ctx.status).toBe(503);
       expect(typeof (ctx.body as any)?.error).toBe('string');
+    });
+
+    it('filters CMS items by environment when ?env= query param is provided', async () => {
+      // Engine has flow-a, flow-b
+      engine().get('/admin/flows').reply(200, {
+        flows: [
+          { id: 'flow-a', method: 'POST', path: '/a', activeVersion: 1, updatedAt: '2024-01-01' },
+          { id: 'flow-b', method: 'GET', path: '/b', activeVersion: 2, updatedAt: '2024-01-02' },
+        ],
+      });
+      engine().get('/admin/jdms').reply(200, { jdms: [] });
+      engine().get('/admin/connections').reply(200, { connections: [] });
+
+      const strapi = makeStrapi({
+        flows: [
+          { flowId: 'flow-a', documentId: 'doc-a', environmentId: 'env-prod', environmentName: 'production' },
+          { flowId: 'flow-c', documentId: 'doc-c', environmentId: 'env-staging', environmentName: 'staging' },
+          { flowId: 'flow-d', documentId: 'doc-d', environmentId: 'env-prod', environmentName: 'production' },
+        ],
+        environments: [
+          { documentId: 'env-prod', name: 'production' },
+          { documentId: 'env-staging', name: 'staging' },
+        ],
+      });
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx({}, { env: 'env-prod' });
+      await ctrl.syncStatus(ctx);
+
+      // Should only see production flows (flow-a synced, flow-d local only)
+      expect(ctx.body).toMatchObject({
+        flows: {
+          synced: [{ id: 'flow-a', environmentName: 'production' }],
+          localOnly: [{ id: 'flow-d', environmentName: 'production' }],
+          engineOnly: [{ id: 'flow-b' }],
+        },
+        environment: 'env-prod',
+      });
+    });
+
+    it('returns 404 when env query param references non-existent environment', async () => {
+      const strapi = makeStrapi({
+        environments: [],
+      });
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx({}, { env: 'non-existent' });
+      await ctrl.syncStatus(ctx);
+
+      expect(ctx.status).toBe(404);
+      expect(ctx.body).toMatchObject({ error: 'Environment not found' });
+    });
+
+    it('includes environment info in response when showing all environments', async () => {
+      engine().get('/admin/flows').reply(200, {
+        flows: [
+          { id: 'flow-a', method: 'POST', path: '/a', activeVersion: 1, updatedAt: '2024-01-01' },
+        ],
+      });
+      engine().get('/admin/jdms').reply(200, { jdms: [] });
+      engine().get('/admin/connections').reply(200, { connections: [] });
+
+      const strapi = makeStrapi({
+        flows: [
+          { flowId: 'flow-a', documentId: 'doc-a', environmentId: 'env-prod', environmentName: 'production' },
+        ],
+      });
+
+      const ctrl = syncController({ strapi } as any, httpFetch);
+      const ctx = makeCtx(); // No env filter = all environments
+      await ctrl.syncStatus(ctx);
+
+      expect(ctx.body).toMatchObject({
+        flows: {
+          synced: [{ id: 'flow-a', environmentName: 'production', environmentId: 'env-prod' }],
+        },
+        environment: null,
+      });
     });
   });
 
