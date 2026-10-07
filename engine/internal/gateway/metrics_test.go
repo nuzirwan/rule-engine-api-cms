@@ -48,6 +48,12 @@ func TestNewGatewayMetrics(t *testing.T) {
 	if m.coldStartDuration == nil {
 		t.Error("expected coldStartDuration to be initialized")
 	}
+	if m.queueLength == nil {
+		t.Error("expected queueLength to be initialized")
+	}
+	if m.queueTimeoutTotal == nil {
+		t.Error("expected queueTimeoutTotal to be initialized")
+	}
 
 	// Verify metrics can be used (triggers registration).
 	m.ObserveDispatch("test", "ok", time.Millisecond)
@@ -58,6 +64,8 @@ func TestNewGatewayMetrics(t *testing.T) {
 	m.SetWorkerReady("test", true)
 	m.SetWorkerReplicas("test", 1)
 	m.IncScaleOperation("test", "scale_up")
+	m.SetQueueLength("test", 5)
+	m.IncQueueTimeout("test")
 
 	// Verify metrics are gathered after use.
 	mfs, err := reg.Gather()
@@ -76,6 +84,8 @@ func TestNewGatewayMetrics(t *testing.T) {
 		"gateway_worker_health":               false,
 		"gateway_circuit_breaker_state":       false,
 		"gateway_cold_start_duration_seconds": false,
+		"gateway_queue_length":                false,
+		"gateway_queue_timeout_total":         false,
 	}
 
 	for _, mf := range mfs {
@@ -287,6 +297,69 @@ func TestGatewayMetrics_NilRegisterer(t *testing.T) {
 	m.SetWorkerHealth("test", "pod-1", true)
 	m.SetCircuitBreakerState("test", CircuitStateClosed)
 	m.ObserveColdStart("test", time.Second)
+	m.SetQueueLength("test", 5)
+	m.IncQueueTimeout("test")
+}
+
+func TestGatewayMetrics_SetQueueLength(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewGatewayMetrics(reg)
+
+	// Set queue length.
+	m.SetQueueLength("test-group", 5)
+	val := testutil.ToFloat64(m.queueLength.WithLabelValues("test-group"))
+	if val != 5 {
+		t.Errorf("expected queueLength=5, got %f", val)
+	}
+
+	// Update queue length.
+	m.SetQueueLength("test-group", 10)
+	val = testutil.ToFloat64(m.queueLength.WithLabelValues("test-group"))
+	if val != 10 {
+		t.Errorf("expected queueLength=10, got %f", val)
+	}
+
+	// Queue drains to zero.
+	m.SetQueueLength("test-group", 0)
+	val = testutil.ToFloat64(m.queueLength.WithLabelValues("test-group"))
+	if val != 0 {
+		t.Errorf("expected queueLength=0, got %f", val)
+	}
+
+	// Multiple groups.
+	m.SetQueueLength("group-a", 3)
+	m.SetQueueLength("group-b", 7)
+	valA := testutil.ToFloat64(m.queueLength.WithLabelValues("group-a"))
+	valB := testutil.ToFloat64(m.queueLength.WithLabelValues("group-b"))
+	if valA != 3 || valB != 7 {
+		t.Errorf("expected group-a=3 group-b=7, got %f %f", valA, valB)
+	}
+}
+
+func TestGatewayMetrics_IncQueueTimeout(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewGatewayMetrics(reg)
+
+	// Increment timeout counter.
+	m.IncQueueTimeout("test-group")
+	m.IncQueueTimeout("test-group")
+	m.IncQueueTimeout("test-group")
+
+	val := testutil.ToFloat64(m.queueTimeoutTotal.WithLabelValues("test-group"))
+	if val != 3 {
+		t.Errorf("expected queueTimeoutTotal=3, got %f", val)
+	}
+
+	// Multiple groups.
+	m.IncQueueTimeout("group-a")
+	m.IncQueueTimeout("group-b")
+	m.IncQueueTimeout("group-b")
+
+	valA := testutil.ToFloat64(m.queueTimeoutTotal.WithLabelValues("group-a"))
+	valB := testutil.ToFloat64(m.queueTimeoutTotal.WithLabelValues("group-b"))
+	if valA != 1 || valB != 2 {
+		t.Errorf("expected group-a=1 group-b=2, got %f %f", valA, valB)
+	}
 }
 
 // getCounterValue extracts the counter value for the given labels.

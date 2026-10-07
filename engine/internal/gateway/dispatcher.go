@@ -36,6 +36,7 @@ type Dispatcher struct {
 	tracer   observ.Tracer
 	scaler   *Scaler
 	metrics  *GatewayMetrics
+	queue    *RequestQueue
 }
 
 // NewDispatcher creates a Dispatcher with the given dependencies.
@@ -51,7 +52,7 @@ func NewDispatcher(registry *WorkerRegistry, client *WorkerClient, config Dispat
 // NewDispatcherWithScaler creates a Dispatcher with scaler and metrics support
 // for dynamic scaling with KEDA.
 func NewDispatcherWithScaler(registry *WorkerRegistry, client *WorkerClient, config DispatchConfig, log observ.Logger, scaler *Scaler, metrics *GatewayMetrics) *Dispatcher {
-	return &Dispatcher{
+	d := &Dispatcher{
 		registry: registry,
 		client:   client,
 		config:   config,
@@ -59,12 +60,18 @@ func NewDispatcherWithScaler(registry *WorkerRegistry, client *WorkerClient, con
 		scaler:   scaler,
 		metrics:  metrics,
 	}
+	// Create request queue with default settings for cold start handling.
+	d.queue = NewRequestQueue(100, 30*time.Second)
+	if metrics != nil {
+		d.queue.SetMetrics(metrics)
+	}
+	return d
 }
 
 // NewDispatcherWithTracing creates a Dispatcher with full observability support
 // including tracing, metrics, and scaler integration.
 func NewDispatcherWithTracing(registry *WorkerRegistry, client *WorkerClient, config DispatchConfig, log observ.Logger, tracer observ.Tracer, scaler *Scaler, metrics *GatewayMetrics) *Dispatcher {
-	return &Dispatcher{
+	d := &Dispatcher{
 		registry: registry,
 		client:   client,
 		config:   config,
@@ -73,6 +80,12 @@ func NewDispatcherWithTracing(registry *WorkerRegistry, client *WorkerClient, co
 		scaler:   scaler,
 		metrics:  metrics,
 	}
+	// Create request queue with default settings for cold start handling.
+	d.queue = NewRequestQueue(100, 30*time.Second)
+	if metrics != nil {
+		d.queue.SetMetrics(metrics)
+	}
+	return d
 }
 
 // SetTracer sets the tracer for distributed tracing support.
@@ -84,6 +97,7 @@ func (d *Dispatcher) SetTracer(t observ.Tracer) {
 // It returns an error if the worker is not found or not ready (NO fallback per design).
 // The request is forwarded to the worker's /execute endpoint with trace headers propagated.
 // When a Scaler is configured and the worker is not ready, it attempts to scale up first.
+// During cold start (scaling from 0), requests are queued rather than blocking synchronously.
 func (d *Dispatcher) Dispatch(ctx context.Context, flowID string, group string, input map[string]any) (*worker.ExecuteResponse, error) {
 	start := time.Now()
 
@@ -101,6 +115,21 @@ func (d *Dispatcher) Dispatch(ctx context.Context, flowID string, group string, 
 
 	// If not found or not ready, try to ensure via scaler (dynamic mode)
 	if (!ok || !workerState.Ready) && d.scaler != nil {
+		// Check if this is a cold start (scaling from 0) and queue is available.
+		// Use queueing to prevent request storms during scale-up.
+		isColdStart, err := d.isColdStart(ctx, group)
+		if err == nil && isColdStart && d.queue != nil {
+			d.log.Emit(ctx, "debug", "gateway.dispatch.queueing", MergeFields(traceFields, map[string]any{
+				"flowId":      flowID,
+				"queueLength": d.queue.QueueLength(group),
+			}))
+			span.Set("queued", true)
+
+			// Enqueue the request. This will block until worker is ready or timeout.
+			// The Drain call from Scaler will process this request.
+			return d.queue.Enqueue(ctx, group, flowID, input)
+		}
+
 		d.log.Emit(ctx, "debug", "gateway.dispatch.scaling", MergeFields(traceFields, map[string]any{
 			"flowId": flowID,
 			"exists": ok,
@@ -149,6 +178,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, flowID string, group string, 
 		}
 	}
 
+	return d.forward(ctx, group, flowID, input, workerState, span, traceFields, start)
+}
+
+// forward sends the request to the worker and handles response/error.
+// Extracted for reuse by queue drain.
+func (d *Dispatcher) forward(ctx context.Context, group, flowID string, input map[string]any, workerState *WorkerState, span observ.Span, traceFields map[string]any, start time.Time) (*worker.ExecuteResponse, error) {
 	// Extract request context values
 	requestID := ""
 	traceID := ""
@@ -212,6 +247,28 @@ func (d *Dispatcher) Dispatch(ctx context.Context, flowID string, group string, 
 	span.Set("status", resp.Status)
 	d.recordMetrics(group, "ok", time.Since(start))
 	return resp, nil
+}
+
+// isColdStart checks if the group's worker deployment is currently at 0 replicas.
+func (d *Dispatcher) isColdStart(ctx context.Context, group string) (bool, error) {
+	if d.scaler == nil {
+		return false, nil
+	}
+	replicas, _, err := d.scaler.GetDeploymentStatus(ctx, group)
+	if err != nil {
+		return false, err
+	}
+	return replicas == 0, nil
+}
+
+// GetQueue returns the request queue for testing and integration.
+func (d *Dispatcher) GetQueue() *RequestQueue {
+	return d.queue
+}
+
+// SetQueue sets the request queue (for testing).
+func (d *Dispatcher) SetQueue(q *RequestQueue) {
+	d.queue = q
 }
 
 // recordMetrics records dispatch metrics if metrics are configured.

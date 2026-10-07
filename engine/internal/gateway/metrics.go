@@ -36,6 +36,10 @@ type GatewayMetrics struct {
 	workerHealth        *prometheus.GaugeVec     // gateway_worker_health{group,worker_id}
 	circuitBreakerState *prometheus.GaugeVec     // gateway_circuit_breaker_state{group}
 	coldStartDuration   *prometheus.HistogramVec // gateway_cold_start_duration_seconds{group}
+
+	// Request queue metrics
+	queueLength       *prometheus.GaugeVec   // gateway_queue_length{group}
+	queueTimeoutTotal *prometheus.CounterVec // gateway_queue_timeout_total{group}
 }
 
 // NewGatewayMetrics creates and registers gateway metrics on the given registerer.
@@ -101,6 +105,17 @@ func NewGatewayMetrics(reg prometheus.Registerer) *GatewayMetrics {
 			Help:    "Cold start duration from scale-from-zero to first ready pod.",
 			Buckets: coldStartBuckets,
 		}, []string{"group"}),
+
+		// Request queue metrics
+		queueLength: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "gateway_queue_length",
+			Help: "Number of requests queued during cold start by group.",
+		}, []string{"group"}),
+
+		queueTimeoutTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_queue_timeout_total",
+			Help: "Total requests that timed out while queued during cold start.",
+		}, []string{"group"}),
 	}
 
 	reg.MustRegister(
@@ -114,6 +129,8 @@ func NewGatewayMetrics(reg prometheus.Registerer) *GatewayMetrics {
 		m.workerHealth,
 		m.circuitBreakerState,
 		m.coldStartDuration,
+		m.queueLength,
+		m.queueTimeoutTotal,
 	)
 
 	return m
@@ -170,4 +187,14 @@ func (m *GatewayMetrics) SetCircuitBreakerState(group string, state int) {
 // ObserveColdStart records the duration of a cold start (scale-from-zero).
 func (m *GatewayMetrics) ObserveColdStart(group string, duration time.Duration) {
 	m.coldStartDuration.WithLabelValues(group).Observe(duration.Seconds())
+}
+
+// SetQueueLength sets the current queue length gauge for a group.
+func (m *GatewayMetrics) SetQueueLength(group string, length int) {
+	m.queueLength.WithLabelValues(group).Set(float64(length))
+}
+
+// IncQueueTimeout increments the queue timeout counter for a group.
+func (m *GatewayMetrics) IncQueueTimeout(group string) {
+	m.queueTimeoutTotal.WithLabelValues(group).Inc()
 }

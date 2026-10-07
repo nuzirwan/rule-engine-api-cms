@@ -11,6 +11,7 @@ import (
 
 	"nzr-rules-engine/internal/config"
 	"nzr-rules-engine/internal/observ"
+	"nzr-rules-engine/internal/worker"
 )
 
 // ErrEphemeralNotSupported is returned when ephemeral scaling mode is requested.
@@ -30,6 +31,7 @@ type ScalerConfig struct {
 	Tracer         observ.Tracer
 	Metrics        *GatewayMetrics
 	StartupTimeout time.Duration
+	Queue          *RequestQueue
 }
 
 // Scaler manages K8s deployments for worker groups. It reads group config from
@@ -44,6 +46,9 @@ type Scaler struct {
 	tracer         observ.Tracer
 	metrics        *GatewayMetrics
 	startupTimeout time.Duration
+	queue          *RequestQueue
+	// dispatchFunc is called to dispatch queued requests after worker becomes ready.
+	dispatchFunc func(ctx context.Context, group, flowID string, input map[string]any) (*worker.ExecuteResponse, error)
 }
 
 // NewScaler creates a Scaler with the given configuration.
@@ -60,7 +65,20 @@ func NewScaler(cfg ScalerConfig) *Scaler {
 		tracer:         cfg.Tracer,
 		metrics:        cfg.Metrics,
 		startupTimeout: timeout,
+		queue:          cfg.Queue,
 	}
+}
+
+// SetDispatchFunc sets the dispatch function used to process queued requests
+// after a worker becomes ready. This creates a loose coupling between Scaler
+// and Dispatcher to avoid circular dependencies.
+func (s *Scaler) SetDispatchFunc(fn func(ctx context.Context, group, flowID string, input map[string]any) (*worker.ExecuteResponse, error)) {
+	s.dispatchFunc = fn
+}
+
+// SetQueue sets the request queue for cold start handling.
+func (s *Scaler) SetQueue(q *RequestQueue) {
+	s.queue = q
 }
 
 // EnsureReady ensures the worker for the group is ready to receive requests.
@@ -263,6 +281,7 @@ func (s *Scaler) GetDeploymentStatus(ctx context.Context, group string) (replica
 }
 
 // waitForReady polls the deployment status until at least minReady pods are ready or timeout.
+// After the worker becomes ready, it drains any queued requests.
 func (s *Scaler) waitForReady(ctx context.Context, group string, minReady int32) error {
 	deadline := time.Now().Add(s.startupTimeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -294,10 +313,37 @@ func (s *Scaler) waitForReady(ctx context.Context, group string, minReady int32)
 					s.metrics.SetWorkerReady(group, true)
 					s.metrics.SetWorkerReplicas(group, int(ready))
 				}
+
+				// Drain any queued requests now that worker is ready.
+				s.drainQueue(ctx, group)
+
 				return nil
 			}
 		}
 	}
+}
+
+// drainQueue processes any queued requests for the group after worker becomes ready.
+func (s *Scaler) drainQueue(ctx context.Context, group string) {
+	if s.queue == nil || s.dispatchFunc == nil {
+		return
+	}
+
+	queueLen := s.queue.QueueLength(group)
+	if queueLen == 0 {
+		return
+	}
+
+	s.logEvent(ctx, "info", "scaler.draining_queue", group, map[string]any{
+		"queueLength": queueLen,
+	})
+
+	// Create a dispatch wrapper that includes the group.
+	dispatch := func(reqCtx context.Context, flowID string, input map[string]any) (*worker.ExecuteResponse, error) {
+		return s.dispatchFunc(reqCtx, group, flowID, input)
+	}
+
+	s.queue.Drain(group, dispatch)
 }
 
 // logEvent emits a structured log event if a logger is configured.
