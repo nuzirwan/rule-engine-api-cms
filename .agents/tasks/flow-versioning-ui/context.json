@@ -1,0 +1,28 @@
+{
+  "project_type": "Strapi 5 plugin with React admin UI + Node server controllers",
+  "language": "TypeScript",
+  "build_system": "npm with Strapi SDK plugin build (NODE_OPTIONS=--max-old-space-size=4096 strapi build)",
+  "test_framework": "vitest with nock for HTTP mocking",
+  "build_command": "cd /home/nuzirwan/project/rule-engine-api/.worktrees/flow-versioning-ui/cms && npm run build",
+  "test_command": "cd /home/nuzirwan/project/rule-engine-api/.worktrees/flow-versioning-ui/cms && npm run test",
+  "verification_instructions": "1. Run `npm run build` to verify TypeScript compiles and admin UI builds. 2. Run `npm run test` to verify all vitest tests pass.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "CMS-only changes; no engine modifications allowed. AdminClient already has listFlowVersions() and rollbackFlow() methods.",
+  "contribution_requirements": "Follow existing component patterns (SyncPanel, ValidationPanel, AuditViewer). Server controllers follow sync.ts pattern with fetchImpl test seam. Unit tests required for new components.",
+  "key_patterns": "Admin components use @strapi/design-system (Box, Flex, Typography, Table, Badge, Button, Modal). useFetchClient for API calls. FetchState discriminated union for loading/error/ok states. Server controllers use factory pattern with strapi injection and fetchImpl test seam. Types kept local to admin bundle (not importing from root types/). Tests use nock + httpFetch shim.",
+  "relevant_files": [
+    "cms/src/plugins/rule-engine/admin/src/components/SyncPanel/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/components/SyncPanel/types.ts",
+    "cms/src/plugins/rule-engine/admin/src/components/AuditViewer/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/components/AuditViewer/types.ts",
+    "cms/src/plugins/rule-engine/admin/src/components/ValidationPanel/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/index.tsx",
+    "cms/src/plugins/rule-engine/admin/src/components/FlowCanvasField/serialize.ts",
+    "cms/src/plugins/rule-engine/server/src/services/admin-client.ts",
+    "cms/src/plugins/rule-engine/server/src/controllers/sync.ts",
+    "cms/src/plugins/rule-engine/server/src/routes/index.ts",
+    "cms/src/plugins/rule-engine/server/tests/sync.test.ts",
+    "cms/types/engine.ts"
+  ],
+  "directory_structure": "cms/src/plugins/rule-engine/admin/src/components/ - React components, cms/src/plugins/rule-engine/admin/src/pages/ - Route pages, cms/src/plugins/rule-engine/server/src/controllers/ - Server controllers, cms/src/plugins/rule-engine/server/src/services/ - Services like AdminClient, cms/src/plugins/rule-engine/server/src/routes/ - Route definitions, cms/src/plugins/rule-engine/server/tests/ - Server-side tests"
+}
