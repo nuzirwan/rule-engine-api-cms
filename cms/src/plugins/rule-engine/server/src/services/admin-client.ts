@@ -280,7 +280,9 @@ export class AdminClient {
 
   /** POST /admin/webhooks/{id}/publish — activate a webhook version (two-step like flows). */
   publishWebhook(id: string, version: number): Promise<PublishWebhookResponse> {
-    const body: PublishWebhookRequest = { env: this.env, version };
+    // Engine publishWebhookRequest accepts ONLY `version` (DisallowUnknownFields);
+    // sending `env` here (unlike flow publish) is a hard 400.
+    const body: PublishWebhookRequest = { version };
     return this.request<PublishWebhookResponse>(
       'POST',
       `/admin/webhooks/${encodeURIComponent(id)}/publish`,

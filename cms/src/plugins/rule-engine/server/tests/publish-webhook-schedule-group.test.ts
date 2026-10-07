@@ -105,8 +105,9 @@ describe('FEAT-001 runWebhookPublish', () => {
     expect(createBody.flowId).toBe('payment-flow');
     expect(createBody.mapping).toEqual({ '$.data.object.id': 'payment_id' });
     expect(createBody.filter).toEqual({ '$.type': ['payment_intent.succeeded'] });
-    // publish body carries {env,version}.
-    expect(publishBody).toEqual({ env: '', version: 4 });
+    // publish body carries ONLY {version} — the engine publishWebhookRequest
+    // has no `env` field and decodes with DisallowUnknownFields.
+    expect(publishBody).toEqual({ version: 4 });
     // write-back: engineVersion + lastSyncStatus=synced.
     expect(update).toHaveBeenCalledWith({
       documentId: 'wh-doc',

@@ -141,7 +141,7 @@ describe('AdminClient webhook methods', () => {
   });
 
   describe('publishWebhook', () => {
-    it('posts to /admin/webhooks/{id}/publish with {env,version}', async () => {
+    it('posts to /admin/webhooks/{id}/publish with ONLY {version} (no env)', async () => {
       let seen: any;
       engine()
         .post('/admin/webhooks/wh-1/publish', (body) => {
@@ -153,7 +153,10 @@ describe('AdminClient webhook methods', () => {
       const client = makeClient();
       const result = await client.publishWebhook('wh-1', 3);
 
-      expect(seen).toEqual({ env: 'test', version: 3 });
+      // Engine publishWebhookRequest has only `version` and decodes with
+      // DisallowUnknownFields, so a top-level `env` would be a hard 400.
+      expect(seen).toEqual({ version: 3 });
+      expect(seen).not.toHaveProperty('env');
       expect(result).toMatchObject({ webhookId: 'wh-1', activeVersion: 3, action: 'publish' });
     });
 

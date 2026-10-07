@@ -350,9 +350,14 @@ export interface CreateWebhookResponse {
   version: number;
 }
 
-/** POST /admin/webhooks/{id}/publish body — publishWebhookRequest. */
+/**
+ * POST /admin/webhooks/{id}/publish body — publishWebhookRequest.
+ *
+ * The engine Go struct (webhook_admin.go `publishWebhookRequest`) carries ONLY
+ * `version`; the handler decodes with DisallowUnknownFields, so a top-level
+ * `env` (unlike flow publish's setActiveRequest) is a hard 400. Do NOT add env.
+ */
 export interface PublishWebhookRequest {
-  env: string;
   version: number;
 }
 
