@@ -18,19 +18,25 @@ import type {
   CreateFlowResponse,
   CreateJDMRequest,
   CreateJDMResponse,
+  CreateScheduleRequest,
   CreateWebhookRequest,
   CreateWebhookResponse,
   DryRunFlowRequest,
   GetConnectionResponse,
   GetFlowResponse,
   GetJdmResponse,
+  GetScheduleResponse,
   GetWebhookResponse,
   ListConnectionsResponse,
   ListFlowsResponse,
   ListFlowVersionsResponse,
   ListJdmsResponse,
+  ListScheduleRunsResponse,
+  ListSchedulesResponse,
   ListWebhooksResponse,
   SetActiveResponse,
+  TriggerScheduleRunResponse,
+  UpdateScheduleRequest,
   UpdateWebhookRequest,
   ValidateFlowRequest,
   ValidateFlowResponse,
@@ -300,6 +306,70 @@ export class AdminClient {
     return this.request<WebhookLogsResponse>(
       'GET',
       `/admin/webhooks/${encodeURIComponent(id)}/logs${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  // --- schedule endpoints (TASK-008) ----------------------------------------
+
+  /** GET /admin/schedules — list all schedules. */
+  listSchedules(): Promise<ListSchedulesResponse> {
+    return this.request<ListSchedulesResponse>('GET', '/admin/schedules');
+  }
+
+  /** GET /admin/schedules/{id} — get a single schedule configuration. */
+  getSchedule(id: string): Promise<GetScheduleResponse> {
+    return this.request<GetScheduleResponse>(
+      'GET',
+      `/admin/schedules/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** POST /admin/schedules — create a new schedule. */
+  createSchedule(
+    schedule: CreateScheduleRequest
+  ): Promise<GetScheduleResponse> {
+    return this.request<GetScheduleResponse>('POST', '/admin/schedules', schedule);
+  }
+
+  /** PUT /admin/schedules/{id} — update an existing schedule. */
+  updateSchedule(
+    id: string,
+    update: UpdateScheduleRequest
+  ): Promise<GetScheduleResponse> {
+    return this.request<GetScheduleResponse>(
+      'PUT',
+      `/admin/schedules/${encodeURIComponent(id)}`,
+      update
+    );
+  }
+
+  /** DELETE /admin/schedules/{id} — delete a schedule. */
+  deleteSchedule(id: string): Promise<void> {
+    return this.request<void>(
+      'DELETE',
+      `/admin/schedules/${encodeURIComponent(id)}`
+    );
+  }
+
+  /** POST /admin/schedules/{id}/run — manually trigger a schedule run. */
+  triggerScheduleRun(id: string): Promise<TriggerScheduleRunResponse> {
+    return this.request<TriggerScheduleRunResponse>(
+      'POST',
+      `/admin/schedules/${encodeURIComponent(id)}/run`
+    );
+  }
+
+  /** GET /admin/schedules/{id}/runs — get schedule execution history. */
+  getScheduleRuns(
+    id: string,
+    opts?: { limit?: number }
+  ): Promise<ListScheduleRunsResponse> {
+    const params = new URLSearchParams();
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return this.request<ListScheduleRunsResponse>(
+      'GET',
+      `/admin/schedules/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ''}`
     );
   }
 }

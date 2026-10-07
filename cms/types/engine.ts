@@ -384,3 +384,88 @@ export interface WebhookLogsResponse {
   logs: WebhookLogEntry[];
   total: number;
 }
+
+// ============================================================================
+// Schedule Types (TASK-008 - Scheduled Triggers)
+// ============================================================================
+
+/** The schedule configuration shape as stored/transmitted to the engine. */
+export interface ScheduleConfig {
+  id: string;
+  name: string;
+  schedule: string; // cron expr, @alias, or @every
+  timezone: string; // IANA timezone
+  flowId: string;
+  input?: Record<string, unknown>;
+  enabled: boolean;
+}
+
+/** POST /admin/schedules body — createScheduleRequest. */
+export interface CreateScheduleRequest {
+  id: string;
+  name: string;
+  schedule: string;
+  timezone?: string;
+  flowId: string;
+  input?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+/** PUT /admin/schedules/{id} body — updateScheduleRequest. */
+export interface UpdateScheduleRequest {
+  name?: string;
+  schedule?: string;
+  timezone?: string;
+  flowId?: string;
+  input?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+/** A schedule summary as returned by the engine. */
+export interface ScheduleSummary {
+  id: string;
+  name: string;
+  schedule: string;
+  timezone: string;
+  flowId: string;
+  input: Record<string, unknown>;
+  enabled: boolean;
+  lastRun?: string;
+  nextRun?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 200 from GET /admin/schedules. */
+export interface ListSchedulesResponse {
+  schedules: ScheduleSummary[];
+}
+
+/** 200/201 from GET/POST /admin/schedules/{id}. */
+export interface GetScheduleResponse extends ScheduleSummary {}
+
+/** A single entry in the schedule run history. */
+export interface ScheduleRunEntry {
+  id: number;
+  scheduleId: string;
+  scheduledTime: string;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  status: 'success' | 'failure' | 'timeout' | 'skipped';
+  error?: string;
+  response?: unknown;
+}
+
+/** 200 from GET /admin/schedules/{id}/runs. */
+export interface ListScheduleRunsResponse {
+  runs: ScheduleRunEntry[];
+}
+
+/** 200 from POST /admin/schedules/{id}/run (manual trigger). */
+export interface TriggerScheduleRunResponse {
+  runId: number;
+  status: 'success' | 'failure' | 'timeout';
+  durationMs: number;
+  error?: string;
+}

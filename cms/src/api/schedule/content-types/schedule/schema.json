@@ -1,0 +1,63 @@
+{
+  "kind": "collectionType",
+  "collectionName": "schedules",
+  "info": {
+    "singularName": "schedule",
+    "pluralName": "schedules",
+    "displayName": "Schedule",
+    "description": "A cron-based schedule (TASK-008) for triggering flows at specific times. Schedules are mutable CRUD entities, unlike versioned flows. Supports standard 5-field cron, @aliases (@hourly, @daily), and @every syntax."
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "scheduleId": {
+      "type": "uid",
+      "required": true
+    },
+    "name": {
+      "type": "string",
+      "required": true,
+      "maxLength": 256
+    },
+    "schedule": {
+      "type": "string",
+      "required": true,
+      "maxLength": 128
+    },
+    "timezone": {
+      "type": "string",
+      "default": "UTC",
+      "maxLength": 64
+    },
+    "flowId": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::flow.flow"
+    },
+    "input": {
+      "type": "json"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "environment": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::environment.environment"
+    },
+    "lastRun": {
+      "type": "datetime"
+    },
+    "nextRun": {
+      "type": "datetime"
+    },
+    "lastSyncStatus": {
+      "type": "enumeration",
+      "enum": ["none", "synced", "failed"],
+      "default": "none"
+    }
+  }
+}
