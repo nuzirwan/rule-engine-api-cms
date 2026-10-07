@@ -20,12 +20,14 @@
 import * as React from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -66,6 +68,20 @@ export const NODE_PALETTE = [
 const EMPTY_TREE: EngineNode = { id: 'trigger', type: 'trigger', spec: {} };
 const DEBOUNCE_MS = 300;
 
+/** dataTransfer MIME type carrying the palette node type across a drag. */
+const DND_MIME = 'application/x-rule-engine-node';
+
+/** Build a fresh @xyflow/react Node for a palette type at the given position. */
+function makeFlowNode(nodeType: string, position: { x: number; y: number }): Node {
+  const id = `${nodeType}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id,
+    position,
+    data: { nodeType, spec: {}, label: `${nodeType} · ${id}` },
+    type: 'default',
+  };
+}
+
 interface InputProps {
   name: string;
   value?: unknown;
@@ -103,7 +119,12 @@ function toFlowEdge(e: CanvasEdge): Edge {
   return { id: e.id, source: e.source, target: e.target, label: e.branchKey };
 }
 
-const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref) => {
+/**
+ * Inner canvas component. Rendered INSIDE <ReactFlowProvider> (see the wrapper
+ * below) so useReactFlow()/screenToFlowPosition resolve against the active flow
+ * instance — a drop maps screen coords to canvas coords through that hook.
+ */
+const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref) => {
   const { name, value, onChange, intlLabel, hint, required, error, disabled } = props;
 
   const parsed = React.useMemo(() => parseStoredJson<EngineNode>(value, EMPTY_TREE), [value]);
@@ -116,12 +137,9 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  // PERF: Delayed interactivity — drag/connect disabled until first user interaction.
-  // This reduces initial render cost on large flows by deferring interactivity setup.
-  const [interactionEnabled, setInteractionEnabled] = React.useState(false);
-  const enableInteraction = React.useCallback(() => {
-    if (!interactionEnabled) setInteractionEnabled(true);
-  }, [interactionEnabled]);
+  // The flow instance (from the surrounding ReactFlowProvider) — used by the
+  // canvas drop handler to map screen coords to canvas coords.
+  const { screenToFlowPosition } = useReactFlow();
 
   // Sidecar x/y layout, kept OUT of the engine tree. Positions a drag produces
   // live here so re-deriving the canvas from the (layout-free) engine tree does
@@ -257,14 +275,8 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
 
   const addNode = React.useCallback(
     (nodeType: string) => {
-      const id = `${nodeType}-${Math.random().toString(36).slice(2, 8)}`;
       const position = { x: 120 + nodes.length * 24, y: 80 + nodes.length * 24 };
-      const node: Node = {
-        id,
-        position,
-        data: { nodeType, spec: {}, label: `${nodeType} · ${id}` },
-        type: 'default',
-      };
+      const node = makeFlowNode(nodeType, position);
       setNodes((cur) => {
         const next = [...cur, node];
         reserialize(next, edges);
@@ -272,6 +284,44 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
       });
     },
     [nodes.length, edges, reserialize]
+  );
+
+  // Palette drag source: stash the node type on the drag's dataTransfer so the
+  // canvas drop handler knows what to create. Click-to-add (addNode) stays as a
+  // fallback for environments without HTML5 drag-and-drop.
+  const onPaletteDragStart = React.useCallback(
+    (nodeType: string) => (e: React.DragEvent<HTMLElement>) => {
+      e.dataTransfer.setData(DND_MIME, nodeType);
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    []
+  );
+
+  // Canvas drop target: allow the drop and show the move cursor.
+  const onDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  // Canvas drop: read the palette node type, map the pointer to canvas coords
+  // via screenToFlowPosition, append the node and reserialize so the engine tree
+  // (onChange value) gains the new node.
+  const onDrop = React.useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      if (disabled) return;
+      const nodeType = e.dataTransfer.getData(DND_MIME);
+      if (!nodeType) return;
+      const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const node = makeFlowNode(nodeType, position);
+      layoutRef.current[node.id] = position;
+      setNodes((cur) => {
+        const next = [...cur, node];
+        reserialize(next, edges);
+        return next;
+      });
+    },
+    [disabled, screenToFlowPosition, edges, reserialize]
   );
 
   const onSelectionChange = React.useCallback((params: { nodes: Node[] }) => {
@@ -353,7 +403,11 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
           borderColor="neutral200"
           borderWidth="1px"
         >
-          <div style={{ width: '100%', height: '100%', minWidth: 480 }}>
+          <div
+            style={{ width: '100%', height: '100%', minWidth: 480 }}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
+          >
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -361,10 +415,8 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
               onEdgesChange={disabled ? undefined : onEdgesChange}
               onConnect={disabled ? undefined : onConnect}
               onSelectionChange={onSelectionChange}
-              nodesDraggable={!disabled && interactionEnabled}
-              nodesConnectable={!disabled && interactionEnabled}
-              onPaneClick={enableInteraction}
-              onNodeClick={enableInteraction}
+              nodesDraggable={!disabled}
+              nodesConnectable={!disabled}
               fitView
             >
               <Background />
@@ -383,6 +435,8 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
                   size="S"
                   variant="tertiary"
                   disabled={disabled}
+                  draggable={!disabled}
+                  onDragStart={onPaletteDragStart(t)}
                   onClick={() => addNode(t)}
                 >
                   {t}
@@ -410,6 +464,19 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     </Field.Root>
   );
 });
+
+FlowCanvasInner.displayName = 'FlowCanvasInner';
+
+/**
+ * Public custom-field Input. Wraps the canvas in <ReactFlowProvider> so the
+ * inner component's useReactFlow()/screenToFlowPosition resolve, enabling the
+ * palette->canvas HTML5 drag-and-drop drop handler.
+ */
+const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref) => (
+  <ReactFlowProvider>
+    <FlowCanvasInner ref={ref} {...props} />
+  </ReactFlowProvider>
+));
 
 FlowCanvasField.displayName = 'FlowCanvasField';
 
