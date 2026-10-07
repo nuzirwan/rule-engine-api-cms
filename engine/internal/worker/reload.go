@@ -124,6 +124,10 @@ func (r *Reloader) reload(ctx context.Context, forced bool) {
 			"error":  err.Error(),
 			"forced": forced,
 		})
+		// Record reload failure metric.
+		if m := r.worker.Metrics(); m != nil {
+			m.IncReload(r.worker.GroupID(), "failure")
+		}
 		if r.cfg.OnError != nil {
 			r.cfg.OnError(err)
 		}
@@ -135,6 +139,11 @@ func (r *Reloader) reload(ctx context.Context, forced bool) {
 		"version": newVersion,
 		"forced":  forced,
 	})
+
+	// Record reload success metric.
+	if m := r.worker.Metrics(); m != nil {
+		m.IncReload(r.worker.GroupID(), "success")
+	}
 
 	if r.cfg.OnReload != nil {
 		r.cfg.OnReload(newVersion)

@@ -115,8 +115,13 @@ func (s *Scaler) ensureDynamicDeployment(ctx context.Context, group string) erro
 		return nil
 	}
 
+	// Track cold start timing when scaling from zero.
+	var coldStartTime time.Time
+	isColdStart := replicas == 0
+
 	// If replicas is 0, scale up to 1.
 	if replicas == 0 {
+		coldStartTime = time.Now()
 		if err := s.ScaleUp(ctx, group, 1); err != nil {
 			return err
 		}
@@ -125,7 +130,16 @@ func (s *Scaler) ensureDynamicDeployment(ctx context.Context, group string) erro
 	s.incMetric(group, "ensure_ready")
 
 	// Wait for at least 1 ready pod.
-	return s.waitForReady(ctx, group, 1)
+	if err := s.waitForReady(ctx, group, 1); err != nil {
+		return err
+	}
+
+	// Record cold start duration if this was a scale-from-zero.
+	if isColdStart && s.metrics != nil {
+		s.metrics.ObserveColdStart(group, time.Since(coldStartTime))
+	}
+
+	return nil
 }
 
 // ScaleUp sets the deployment replicas to at least the given minimum.

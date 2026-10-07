@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -29,6 +30,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 // handleExecute processes POST /execute requests.
 func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	start := time.Now()
 
 	// Decode the request first.
 	var req ExecuteRequest
@@ -87,7 +89,14 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	// Execute the flow.
 	response, err := h.worker.Execute(ctx, req.FlowID, reqID, traceID, req.Input)
+	duration := time.Since(start)
+
 	if err != nil {
+		// Record metrics for failed request.
+		if m := h.worker.Metrics(); m != nil {
+			m.ObserveRequest(h.worker.GroupID(), req.FlowID, "error", duration)
+		}
+
 		// Classify the error for the response.
 		code, status := classifyError(err)
 		writeJSON(w, status, ExecuteResponse{
@@ -99,6 +108,11 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 		return
+	}
+
+	// Record metrics for successful request.
+	if m := h.worker.Metrics(); m != nil {
+		m.ObserveRequest(h.worker.GroupID(), req.FlowID, "ok", duration)
 	}
 
 	// Success response.
