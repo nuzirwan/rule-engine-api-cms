@@ -42,9 +42,14 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
   // Local working copy of the graph while editing (so the editor stays
   // responsive and the debounced writer flushes to Strapi).
   const [graph, setGraph] = React.useState<DecisionGraphType>(parsed.value ?? EMPTY_GRAPH);
+  
+  // Sync external value changes into local state. Use stringified value as the
+  // dependency because parsed.value may be the same EMPTY_GRAPH reference when
+  // value is undefined, which wouldn't trigger the effect when real data arrives.
+  const valueKey = React.useMemo(() => safeStringify(value), [value]);
   React.useEffect(() => {
     if (parsed.ok && parsed.value) setGraph(parsed.value);
-  }, [parsed.ok, parsed.value]);
+  }, [valueKey, parsed.ok, parsed.value]);
 
   const emit = React.useCallback(
     (next: unknown) => {

@@ -1,0 +1,32 @@
+{
+  "project_type": "Go monolith with dual-binary architecture (engine gateway + worker). Phase 3 adds gateway dispatcher to route requests to workers.",
+  "language": "Go 1.26",
+  "build_system": "go build, no custom Makefile. CGO_ENABLED=1 required for zen-go JDM library.",
+  "test_framework": "go test with stdlib testing package. Integration tests in *_integration_test.go files.",
+  "build_command": "go build ./cmd/engine && go build ./cmd/worker",
+  "test_command": "go test ./...",
+  "verification_instructions": "1. Run 'go build ./cmd/engine' to verify compilation. 2. Run 'go test ./internal/gateway/...' for new gateway tests. 3. Run 'go vet ./...' for static analysis. 4. Verify no circular imports with 'go build ./...'",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "k8s.io/client-go not yet in go.mod - must be added. sony/gobreaker/v2 already present for circuit breaker pattern (see internal/connect/resilience.go).",
+  "contribution_requirements": "Follow existing patterns in internal/connect for resilience (gobreaker). Follow internal/worker/handler.go pattern for HTTP handlers. Use stdlib net/http, no chi/gin. Use log/slog for logging. Error classification follows internal/config/errors.go pattern.",
+  "key_patterns": [
+    "Resilience envelope: timeout→breaker→retry (internal/connect/client.go)",
+    "Circuit breaker: sony/gobreaker/v2 with configurable thresholds (internal/connect/resilience.go)",
+    "Worker types: ExecuteRequest/ExecuteResponse in internal/worker/types.go - REUSE for gateway",
+    "HTTP handler pattern: stdlib net/http with manual mux registration (internal/worker/handler.go)",
+    "Config types: internal/config/group.go for Group/ScalingConfig",
+    "Store methods: internal/config/pgstore_worker.go for WorkerStore interface"
+  ],
+  "relevant_files": [
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/httpapi/server.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/worker/types.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/worker/handler.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/config/group.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/config/pgstore_worker.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/connect/resilience.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/connect/client.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/cmd/engine/main.go",
+    "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/go.mod"
+  ],
+  "directory_structure": "engine/cmd/{engine,worker} - binaries. engine/internal/{config,connect,decision,flow,httpapi,observ,scheduler,webhook,worker} - packages. Phase 3 adds engine/internal/gateway/."
+}

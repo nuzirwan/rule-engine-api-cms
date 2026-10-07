@@ -1,0 +1,90 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "label": "Flow webhook handler missing",
+      "description": "The flow publish transform (TransformCMSFlow) is shown but the webhook handler that receives CMS flow publish events, calls the transform, and stores the flow with its group_id is not shown. Add HandleCMSFlowPublish or clarify if existing handler just needs modification.",
+      "confidence": "confirmed",
+      "severity": "blocking"
+    },
+    {
+      "id": 2,
+      "label": "Connection-only update version increment path unclear",
+      "description": "The replaceGroupConnections function correctly increments groups.version, but HandlePutGroup doesn't show connection update logic. Clarify whether HandlePutGroup handles connections array and calls replaceGroupConnections.",
+      "confidence": "confirmed",
+      "severity": "blocking"
+    },
+    {
+      "id": 3,
+      "label": "Canary manifest generation not specified",
+      "description": "Canary deployment requires separate worker-{group}-canary deployment/service but generate-manifests CLI doesn't show how to generate them. Add --canary flag or clarify if canary manifests are created ad-hoc.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 4,
+      "label": "Default group K8s manifest timing unspecified",
+      "description": "The chicken-egg problem is explained but who/when generates default group's K8s manifests during initial cluster setup is not specified. Add explicit bootstrap runbook instructions.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 5,
+      "label": "Full group deletion RTO is optimistic",
+      "description": "Stated 5-15 min RTO assumes fast GitOps sync. With PR review required, realistic RTO is 30+ minutes. Update RTO to reflect normal path vs emergency path separately.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 6,
+      "label": "Auto-rollback health check signal source undefined",
+      "description": "DeploymentWatcher checks worker.Ready but what makes Ready=false isn't defined. Is it K8s readiness probe? Prometheus metric? Clarify the health signal source.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 7,
+      "label": "KEDA metric source clarification needed",
+      "description": "KEDA trigger uses gateway_dispatch_total metric. Clarify that this metric is emitted by the gateway (always running) so KEDA can scale from 0.",
+      "confidence": "likely",
+      "severity": "minor"
+    },
+    {
+      "id": 8,
+      "label": "Scaling.Mode validation gap",
+      "description": "ValidateGroup doesn't validate that mode is one of the three valid values (static|dynamic|ephemeral). SQL CHECK constraint catches it but API should fail earlier. Add mode validation.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 9,
+      "label": "Flow reassignment audit capture code missing",
+      "description": "flow_group_audit table schema is shown but no code captures changes to flow_versions.group_id. Add FlowStore audit capture code or reference where it will live.",
+      "confidence": "confirmed",
+      "severity": "blocking"
+    },
+    {
+      "id": 10,
+      "label": "Circuit breaker state not persisted",
+      "description": "Circuit breaker for cross-group calls is in-memory. Gateway restart resets all breakers to closed, potentially causing thundering herd to broken group. Document if this is acceptable or consider shared state.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 11,
+      "label": "Delete group flow count check race condition",
+      "description": "Delete checks COUNT(*) then deletes. Concurrent flow assignment between check and delete causes generic FK violation error, not friendly message. Consider SELECT FOR UPDATE or document the race.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    },
+    {
+      "id": 12,
+      "label": "CMS Group flows relation bypass not enforced",
+      "description": "Comment says flows relation is intentionally omitted from group content type, but nothing prevents CMS operator from adding it manually. Consider webhook validation that ignores/warns if populated.",
+      "confidence": "confirmed",
+      "severity": "minor"
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/dynamic-grouped-workers/design-grill.md"
+}

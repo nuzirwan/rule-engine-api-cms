@@ -148,7 +148,11 @@ const FlowCanvasField = React.forwardRef<HTMLDivElement, InputProps>((props, ref
   // echo is detected by comparing the incoming value against the last tree we
   // emitted; a drag/edge/spec edit flows through emit() and is skipped here so
   // the live node positions survive.
-  const valueKey = React.useMemo(() => safeStringify(parsed.ok ? parsed.value : null), [parsed]);
+  // 
+  // Use the RAW value (not parsed.value) for the dependency key, because
+  // parsed.value may be the same EMPTY_TREE reference for both undefined and
+  // the actual loaded data, which wouldn't trigger re-render.
+  const valueKey = React.useMemo(() => safeStringify(value), [value]);
   React.useEffect(() => {
     if (lastEmittedRef.current !== null && valueKey === lastEmittedRef.current) {
       return; // our own round-trip — keep the live canvas

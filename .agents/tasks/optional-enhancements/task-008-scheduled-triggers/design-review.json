@@ -1,0 +1,94 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "HIGH",
+      "title": "withLocation timezone wrapper is mathematically incorrect",
+      "location": "§2 cron.go — withLocation / locSchedule",
+      "problem": "l.inner.Next(t.In(l.loc)) has no effect on scheduling. t.In(l.loc) only changes the display representation; robfig/cron v3 specSchedule.Next internally does t.In(s.Location) where s.Location is UTC, overwriting the caller-supplied location. All schedules fire in UTC regardless of configured timezone. TestNextRun_timezone would fail.",
+      "fix": "Use the TZ= prefix that robfig/cron v3 supports with the Descriptor flag: prepend 'TZ='+loc.String()+' ' to the expression before calling cronParser.Parse. Delete the withLocation wrapper and locSchedule type entirely."
+    },
+    {
+      "id": 2,
+      "severity": "HIGH",
+      "title": "newErr is unexported; scheduler package cannot call it",
+      "location": "§2 cron.go and §3 scheduler.go — newErr(config.Validation, ...) calls",
+      "problem": "newErr is a package-internal function in engine/internal/config/errors.go (lowercase n). It is not accessible from engine/internal/scheduler/. Every call to newErr(config.Validation, ...) or newErr(config.NotFound, ...) in the scheduler package is a compile error.",
+      "fix": "Replace with fmt.Errorf wrapping exported sentinels: fmt.Errorf(\"invalid cron expression %q: %w\", expr, config.ErrValidation). errors.Is still matches and statusForAdmin maps it to 400 correctly."
+    },
+    {
+      "id": 3,
+      "severity": "HIGH",
+      "title": "valkeyClient not accessible in run(); Appendix wiring is unimplementable",
+      "location": "Appendix — cmd/engine/main.go wiring block",
+      "problem": "The Appendix references valkeyClient as a local variable in run(), but the valkey.Client is created inside buildStore() which returns (config.Store, httpapi.AdminStore, func(), error). The client is never returned. No coder can implement the Appendix wiring as written.",
+      "fix": "Choose and state one: Option A — refactor buildStore to return the optional valkey.Client as a fifth return value. Option B — the scheduler opens its own second valkey.Client using VALKEY_ADDR in run() after buildStore returns."
+    },
+    {
+      "id": 4,
+      "severity": "HIGH",
+      "title": "Migration 0004 will never be applied to existing deployments",
+      "location": "§1 migration file, cmd/engine/main.go SchemaHasConfigTables gate",
+      "problem": "SchemaHasConfigTables checks only for the flows table. Any deployment that already has migrations 0001-0003 returns hasTables=true and migrations.Apply is skipped entirely. The schedules and schedule_runs tables are never created on existing deployments, causing a runtime error on every ListEnabledSchedules call.",
+      "fix": "Option A (document): state explicitly in §1 and the Appendix that 0004 must be applied via 'migrate up' CLI before rolling out the new binary. Option B (code): use CREATE TABLE IF NOT EXISTS in the SQL and update SchemaHasConfigTables to also check for the schedules table, making re-apply safe."
+    },
+    {
+      "id": 5,
+      "severity": "MEDIUM",
+      "title": "generateRunID() is not defined or specified",
+      "location": "§3 fireSchedule pseudocode",
+      "problem": "fireSchedule calls generateRunID() which does not exist in the engine codebase. There is no uuid import in existing engine packages (only indirect via pgx).",
+      "fix": "Define generateRunID in scheduler/util.go using github.com/google/uuid: func generateRunID() string { return 'sched-' + uuid.New().String() }. Add github.com/google/uuid v1.6.0 as a direct dependency to the §8 go.mod change list."
+    },
+    {
+      "id": 6,
+      "severity": "MEDIUM",
+      "title": "Manual trigger does not specify next_run behavior; double-execution risk unaddressed",
+      "location": "§5 POST /admin/schedules/{id}/run description",
+      "problem": "The manual trigger records the run but does not call UpdateScheduleRunTimes. For overdue schedules (next_run in the past), the scheduler loop will also fire them on the next poll, causing double execution. The design is silent on this.",
+      "fix": "Add an explicit rule: manual triggers do NOT advance next_run. Document the double-execution risk for overdue schedules and recommend operators disable a schedule before using the manual trigger if it is overdue."
+    },
+    {
+      "id": 7,
+      "severity": "MEDIUM",
+      "title": "Adapter duplication scope is materially misstated",
+      "location": "§3 scheduler/adapters.go comment",
+      "problem": "The design describes duplicating 'pure 10-line wrappers' but httpapi/adapters.go is 330 lines implementing a full templatingRegistry (12 methods), templatingClient, branchingEvaluator, and multiple helpers. The scope is significantly larger than stated.",
+      "fix": "Replace '10-line wrappers' language with the accurate size (~330 lines). Note that a clean long-term fix is extracting them to internal/flowadapter/ (no circular dep; adapters.go only imports connect, flow, decision)."
+    },
+    {
+      "id": 8,
+      "severity": "MEDIUM",
+      "title": "uuid package not listed in go.mod change list",
+      "location": "§8 Engine changes — go.mod row",
+      "problem": "§8 lists only github.com/robfig/cron/v3 v3.0.1. If generateRunID uses github.com/google/uuid (required by Finding 5), that package must also be promoted from indirect to direct in go.mod.",
+      "fix": "Add 'github.com/google/uuid v1.6.0 // promote from indirect; used by scheduler.generateRunID' to the §8 go.mod change entry."
+    },
+    {
+      "id": 9,
+      "severity": "NIT",
+      "title": "truncateResponse and safeErrStr are referenced but not defined",
+      "location": "§3 fireSchedule pseudocode",
+      "problem": "Both helpers are called in the pseudocode but not defined anywhere in the design or existing codebase. Intent is clear but signatures and placement are missing.",
+      "fix": "Add a scheduler/util.go section defining safeErrStr(err error) string and truncateResponse(v map[string]any, maxBytes int) any with their implementations."
+    },
+    {
+      "id": 10,
+      "severity": "NIT",
+      "title": "CronBuilder @every N m/h input is under-specified for compound durations",
+      "location": "§7 ScheduleEditor/index.tsx — Preset mode",
+      "problem": "robfig/cron accepts any Go duration string after @every (e.g., @every 1h30m). The 'N m/h' two-field picker cannot represent compound durations. This is probably intentional but unstated.",
+      "fix": "Add: 'The @every preset input is limited to a single numeric value plus a unit (minutes/hours). Compound durations must be entered via Custom mode.'"
+    },
+    {
+      "id": 11,
+      "severity": "NIT",
+      "title": "SchedulesPage adds a plugin route not present for WebhooksPage",
+      "location": "§7 plugin index.tsx route addition",
+      "problem": "WebhooksPage.tsx exists in pages/ but has no registered route in index.tsx currently. The design adds /schedules as a route without noting this creates an asymmetry with the existing webhooks page.",
+      "fix": "Add a note: 'WebhooksPage currently has no plugin route in index.tsx; /schedules is intentionally the first dedicated plugin list route. A /webhooks route is out of scope for TASK-008.'"
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/optional-enhancements/task-008-scheduled-triggers/design-review.md"
+}

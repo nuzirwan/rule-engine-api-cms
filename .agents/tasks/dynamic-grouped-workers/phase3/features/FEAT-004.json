@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Integrate gateway dispatcher into httpapi/server.go. When dispatch.mode=gateway, the genericFlowHandler routes requests through Dispatcher instead of running flow.Interpreter inline. Add POST /internal/execute endpoint for cross-group calls (worker→gateway→worker). The API remains transparent to consumers - same request/response format.",
+  "status": "pending",
+  "steps": [
+    "Modify /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/httpapi/server.go Deps struct: add Dispatcher *gateway.Dispatcher field (nil when dispatch.mode=inline), add DispatchConfig *config.DispatchConfig field",
+    "Modify genericFlowHandler in server.go: after resolving flow via store.ActiveFlow, check if deps.DispatchConfig.Mode == config.DispatchGateway. If gateway mode: extract group from flow (fv.Group, fallback to config.DefaultGroup), call deps.Dispatcher.Dispatch(ctx, fv.FlowID, group, input), convert worker.ExecuteResponse to HTTP response. If inline mode: existing flow.Interpreter.Run logic unchanged",
+    "Add internal execute handler for cross-group calls: create function internalExecuteHandler(dispatcher, store, deps) returning http.HandlerFunc. Handler: 1) Decode worker.ExecuteRequest from body, 2) Resolve flow via store.ActiveFlow to get group, 3) Call dispatcher.Dispatch, 4) Encode worker.ExecuteResponse. Register as 'POST /internal/execute' in mount(mux) before the catch-all",
+    "Modify /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/cmd/engine/main.go run() function: 1) Call config.LoadDispatchConfig(), 2) If mode=gateway: build k8s client via rest.InClusterConfig or kubeconfig, create WorkerRegistry, start registry.Watch(ctx), create WorkerClient, create Dispatcher, 3) Pass Dispatcher and DispatchConfig to httpapi.Deps, 4) Add defer for registry.Close()",
+    "Add k8s client building to cmd/engine/main.go: create buildK8sClient() function that tries rest.InClusterConfig() first (running in-cluster), falls back to clientcmd.BuildConfigFromFlags for local dev with KUBECONFIG env var, returns nil with warning log if neither works (allows inline mode without K8s)",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/httpapi/dispatch_test.go with tests: TestGenericFlowHandler_InlineMode verifies interpreter is called when mode=inline, TestGenericFlowHandler_GatewayMode verifies dispatcher is called when mode=gateway, TestInternalExecute_Success verifies cross-group routing works"
+  ],
+  "acceptance_criteria": [
+    "go build ./cmd/engine compiles without error",
+    "With DISPATCH_MODE=inline (default), requests execute via flow.Interpreter (existing behavior)",
+    "With DISPATCH_MODE=gateway, requests route through gateway.Dispatcher to workers",
+    "POST /internal/execute endpoint available for worker-to-gateway cross-group calls",
+    "Same request/response format regardless of dispatch mode (transparent to API consumers)",
+    "Engine starts successfully even without K8s access when mode=inline"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go build ./cmd/engine",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go test ./internal/httpapi/... -v",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go vet ./..."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

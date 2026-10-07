@@ -1,0 +1,38 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "HIGH",
+      "title": "Response spec uses '\"body\"' instead of '\"bodyFrom\"'",
+      "location": "Section 4 — CRUD parameterized flow skeleton, all template response node descriptions",
+      "problem": "The skeleton shows \"spec\": { \"status\": 200, \"body\": \"{{data.row}}\" }. ResponseSpec (engine/internal/flow/spec.go) only has a 'bodyFrom' field. parseSpec uses DisallowUnknownFields, so 'body' triggers bad_spec in ValidateTree. SubstituteTemplate returns a Validation error for every template — no flows are ever created.",
+      "fix": "Replace \"body\" with \"bodyFrom\" everywhere in Section 4 response specs. Use \"bodyFrom\": \"\" (matching the existing seed.json pattern — returns full Ctx.Response) since non-empty bodyFrom path navigation is not yet wired in responseHandler.Exec."
+    },
+    {
+      "id": 2,
+      "severity": "HIGH",
+      "title": "CRUD template uses invalid Postgres operation kind '\"sql\"'",
+      "location": "Section 4 — CRUD-REST-Postgres skeleton; data-sync template description",
+      "problem": "The skeleton uses \"Kind\": \"sql\" for all SQL operations. The Postgres driver (engine/internal/connect/drivers/postgres.go) only handles \"query\" (SELECT), \"exec\" (INSERT/UPDATE/DELETE), and \"ping\". The \"sql\" kind returns 'unsupported operation kind for postgres' at runtime. ValidateTree does not check operation kind, so the flaw passes instantiation silently and breaks at execution time.",
+      "fix": "Use \"Kind\": \"query\" for SELECT operations (list, get) and \"Kind\": \"exec\" for mutation operations (create/INSERT, update/UPDATE, delete/DELETE). Apply the same fix to the data-sync template's read (query) and write (exec) actions."
+    },
+    {
+      "id": 3,
+      "severity": "MEDIUM",
+      "title": "Partial create success — UI 'done' step rendering not specified",
+      "location": "Section 7 — TemplatesPage state machine, TemplatePreview component",
+      "problem": "The controller returns HTTP 200 with { created, errors } on partial failure, but the UI state machine defines 'done' as only { name: 'done'; created: CreatedFlowRef[] }. Section 7 only describes the full-success rendering. Implementer has no guidance on whether partial failure goes to 'done' with a warning or stays on 'preview' with an error.",
+      "fix": "Update the done step type to: { name: 'done'; created: CreatedFlowRef[]; errors?: Array<{ flowId: string; message: string }> }. Specify in Section 7 that partial failure (200 with non-empty errors) transitions to 'done' and renders a warning callout listing failed flows below the created flow links."
+    },
+    {
+      "id": 4,
+      "severity": "NIT",
+      "title": "Webhook and data-sync response node 'bodyFrom' value never specified",
+      "location": "Section 4 — webhook-handler.json and data-sync.json descriptions",
+      "problem": "Both templates are described as 'response 200' or 'response 200 with result' but no ResponseSpec JSON is given. After fixing Finding 1, implementers still need to know the exact bodyFrom value.",
+      "fix": "Add explicit response node specs: webhook handler: \"spec\": { \"status\": 200, \"bodyFrom\": \"\" }; data-sync: same pattern. Both return full Ctx.Response until BodyFrom path navigation is wired."
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/flow-templates/design-review.md"
+}

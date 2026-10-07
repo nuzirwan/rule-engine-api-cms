@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Create gateway package with WorkerRegistry and K8s Endpoints watcher. The registry tracks active workers per group with their health state and endpoints. It watches K8s Endpoints resources to discover worker pod IPs for services named worker-{group}. Includes WorkerState struct with Group, Endpoint, Ready, Replicas, LastRequest, Health fields and HealthStatus enum. Background Watch goroutine polls /healthz on discovered endpoints.",
+  "status": "pending",
+  "steps": [
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/gateway/types.go with HealthStatus type (HealthUnknown, HealthHealthy, HealthUnhealthy), WorkerState struct (Group string, Endpoint string, Ready bool, Replicas int, LastRequest time.Time, Health HealthStatus)",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/gateway/registry.go with WorkerRegistry struct containing: mu sync.RWMutex, workers map[string]*WorkerState, k8sClient kubernetes.Interface, namespace string, log observ.Logger. Methods: NewRegistry(k8sClient, namespace, log), GetWorker(group)(*WorkerState,bool), UpdateHealth(group,health), listWorkers()[]string, Close()",
+    "Add Watch(ctx context.Context) method to registry that starts a goroutine: 1) Uses k8s.io/client-go informers/cache to watch Endpoints in namespace, 2) For each Endpoints named worker-{group}, extracts pod IPs from subsets, builds endpoint URL as http://worker-{group}.{namespace}.svc:8080, 3) Updates workers map with new state, 4) Starts background health check goroutine that pings /healthz every 10s per worker",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/gateway/registry_test.go with unit tests: TestRegistryGetWorker_NotFound returns false for unknown group, TestRegistryGetWorker_Found returns true and correct state, TestRegistryUpdateHealth updates health status correctly, TestRegistryWatch_DiscoveryFromEndpoints (mock K8s client) verifies endpoint discovery"
+  ],
+  "acceptance_criteria": [
+    "go build ./internal/gateway compiles without error",
+    "WorkerRegistry.GetWorker returns correct WorkerState for registered groups",
+    "WorkerRegistry.Watch discovers endpoints from K8s Endpoints resource",
+    "Health check goroutine updates WorkerState.Health based on /healthz response",
+    "All unit tests pass"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go build ./internal/gateway",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go test ./internal/gateway/... -run TestRegistry -v"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

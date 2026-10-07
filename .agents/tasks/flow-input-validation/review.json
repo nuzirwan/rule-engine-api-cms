@@ -1,0 +1,18 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "severity": "info",
+      "confidence": "likely",
+      "title": "Query params stored as strings",
+      "description": "ExtractInput extracts query params via Query.Get(name) and stores them as strings. JSON Schema validates the Go type, not the string representation, so a schema with \"type\":\"integer\" for a query param will always fail. Document this constraint or use \"type\":\"string\" with pattern constraints for query params."
+    },
+    {
+      "severity": "info",
+      "confidence": "possible",
+      "title": "Admin GetFlowVersion doesn't compile schema",
+      "description": "pgstore_admin.GetFlowVersion builds FlowVersion directly from DB without calling decodeFlow, so CompiledInputSchema is nil. This doesn't affect the hot path but could surprise future admin features that assume a compiled schema."
+    }
+  ],
+  "reviewDoc": "/home/nuzirwan/project/rule-engine-api/.agents/tasks/flow-input-validation/review.md"
+}

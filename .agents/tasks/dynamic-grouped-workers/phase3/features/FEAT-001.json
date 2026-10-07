@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create dispatch config types and k8s client-go dependency. Add DispatchConfig struct with Mode, WorkerImage, Namespace, ServiceAccount, DefaultGroup, StartupTimeout, RequestTimeout fields. Add DispatchMode type with DispatchInline and DispatchGateway constants. Add env var parsing for DISPATCH_* variables. Add k8s.io/client-go to go.mod for endpoints watching.",
+  "status": "completed",
+  "steps": [
+    "Add k8s.io/client-go dependency to /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/go.mod using 'go get k8s.io/client-go@latest' from engine directory",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/config/dispatch.go with DispatchMode type (const DispatchInline='inline', DispatchGateway='gateway'), DispatchConfig struct (Mode DispatchMode, WorkerImage string, Namespace string, ServiceAccount string, DefaultGroup string, StartupTimeout time.Duration, RequestTimeout time.Duration), and LoadDispatchConfig function that reads from env vars: DISPATCH_MODE (default 'inline'), DISPATCH_WORKER_IMAGE, DISPATCH_WORKER_NAMESPACE (default 'flow-workers'), DISPATCH_SERVICE_ACCOUNT, DISPATCH_DEFAULT_GROUP (default 'default'), DISPATCH_STARTUP_TIMEOUT (default 30s), DISPATCH_REQUEST_TIMEOUT (default 60s)",
+    "Add unit tests in /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine/internal/config/dispatch_test.go verifying: LoadDispatchConfig returns inline mode by default, LoadDispatchConfig parses all env vars correctly, invalid DISPATCH_MODE returns error, timeout parsing handles duration strings"
+  ],
+  "acceptance_criteria": [
+    "go mod tidy succeeds and k8s.io/client-go is in go.sum",
+    "go build ./internal/config compiles without error",
+    "go test ./internal/config/... -run TestDispatch passes all new tests",
+    "DispatchConfig.Mode defaults to DispatchInline when DISPATCH_MODE unset"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go mod tidy && go build ./internal/config",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase3/engine && go test ./internal/config/... -run TestDispatch -v"
+  ],
+  "blocked_reason": null,
+  "findings": "Added blank import of k8s.io/client-go/kubernetes to dispatch.go to ensure dependency persists after go mod tidy. Later features should replace with actual imports when implementing endpoint watching."
+}

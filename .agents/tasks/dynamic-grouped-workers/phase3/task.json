@@ -1,0 +1,7 @@
+{
+  "task_id": "task-phase3-gateway-dispatcher",
+  "task_description": "Implement Gateway Dispatcher for the rule-engine-api: dispatch config, worker registry with K8s endpoints watcher, HTTP client with connection pooling, circuit breaker per group, dispatcher to route requests to workers, and httpapi integration to switch between inline/gateway mode.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}
