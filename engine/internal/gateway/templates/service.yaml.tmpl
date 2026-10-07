@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-{{.Group}}
+  namespace: {{.Namespace}}
+spec:
+  selector:
+    app: flow-worker
+    group: {{.Group}}
+  ports:
+  - port: 8080
+    targetPort: 8080

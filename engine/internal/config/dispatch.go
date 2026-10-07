@@ -41,6 +41,12 @@ type DispatchConfig struct {
 	StartupTimeout time.Duration
 	// RequestTimeout is how long to wait for a worker to process a request.
 	RequestTimeout time.Duration
+	// PrometheusAddress is the Prometheus server URL for KEDA triggers.
+	// Default: "http://prometheus:9090"
+	PrometheusAddress string
+	// ManifestOutputDir is the default output directory for generated manifests.
+	// Default: "./k8s/workers"
+	ManifestOutputDir string
 }
 
 // LoadDispatchConfig reads dispatch configuration from environment variables.
@@ -62,13 +68,15 @@ func LoadDispatchConfig() (*DispatchConfig, error) {
 	}
 
 	return &DispatchConfig{
-		Mode:           mode,
-		WorkerImage:    os.Getenv("DISPATCH_WORKER_IMAGE"),
-		Namespace:      getEnvOrDefault("DISPATCH_WORKER_NAMESPACE", "flow-workers"),
-		ServiceAccount: os.Getenv("DISPATCH_SERVICE_ACCOUNT"),
-		DefaultGroup:   getEnvOrDefault("DISPATCH_DEFAULT_GROUP", "default"),
-		StartupTimeout: startupTimeout,
-		RequestTimeout: requestTimeout,
+		Mode:              mode,
+		WorkerImage:       os.Getenv("DISPATCH_WORKER_IMAGE"),
+		Namespace:         getEnvOrDefault("DISPATCH_WORKER_NAMESPACE", "flow-workers"),
+		ServiceAccount:    os.Getenv("DISPATCH_SERVICE_ACCOUNT"),
+		DefaultGroup:      getEnvOrDefault("DISPATCH_DEFAULT_GROUP", "default"),
+		StartupTimeout:    startupTimeout,
+		RequestTimeout:    requestTimeout,
+		PrometheusAddress: getEnvOrDefault("DISPATCH_PROMETHEUS_ADDRESS", "http://prometheus:9090"),
+		ManifestOutputDir: getEnvOrDefault("DISPATCH_MANIFEST_OUTPUT_DIR", "./k8s/workers"),
 	}, nil
 }
 

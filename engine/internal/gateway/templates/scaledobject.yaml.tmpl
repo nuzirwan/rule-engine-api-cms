@@ -1,0 +1,17 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-{{.Group}}-scaler
+  namespace: {{.Namespace}}
+spec:
+  scaleTargetRef:
+    name: worker-{{.Group}}
+  minReplicaCount: {{.MinReplicas}}
+  maxReplicaCount: {{.MaxReplicas}}
+  cooldownPeriod: {{.ScaleDownDelay}}
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: {{.PrometheusAddr}}
+      query: sum(rate(gateway_dispatch_total{group="{{.Group}}"}[1m]))
+      threshold: "10"

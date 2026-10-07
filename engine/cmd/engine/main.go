@@ -64,6 +64,16 @@ const shutdownTimeout = 15 * time.Second
 const defaultConfigSchema = "rule_engine"
 
 func main() {
+	// Handle "groups" subcommand before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "groups" {
+		cmd := newGroupsCmd()
+		if err := cmd.run(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	addr := flag.String("addr", ":8080", "HTTP listen address (overridden by ENGINE_ADDR when set)")
 	seedPath := flag.String("seed", "internal/config/testdata/seed.json", "path to the config seed JSON")
 	envPath := flag.String("env", ".env", "path to an optional .env file (KEY=VALUE); missing is fine")
@@ -175,6 +185,13 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 	var dispatcher *gateway.Dispatcher
 	var workerRegistry *gateway.WorkerRegistry
 	if dispatchCfg.Mode == config.DispatchGateway {
+		// Gateway mode requires config-store mode because the Scaler needs
+		// GetGroup from PgStore to read group configuration.
+		groupReader, ok := adminStore.(gateway.GroupReader)
+		if !ok || adminStore == nil {
+			return fmt.Errorf("gateway mode requires config-store mode (CONFIG_DSN must be set)")
+		}
+
 		k8sClient, kerr := buildK8sClient(logger)
 		if kerr != nil {
 			return fmt.Errorf("gateway mode requires k8s access: %w", kerr)
@@ -184,11 +201,24 @@ func run(addr, seedPath string, logger *slog.Logger) error {
 		workerRegistry.Watch(ctx)
 		logger.Info("worker registry started", slog.String("namespace", dispatchCfg.Namespace))
 
+		// Create gateway metrics for KEDA scaling.
+		gatewayMetrics := gateway.NewGatewayMetrics(metricsReg)
+
+		// Create scaler for dynamic worker scaling.
+		scaler := gateway.NewScaler(gateway.ScalerConfig{
+			K8sClient:      k8sClient,
+			Namespace:      dispatchCfg.Namespace,
+			Store:          groupReader,
+			Log:            obsLog,
+			Metrics:        gatewayMetrics,
+			StartupTimeout: dispatchCfg.StartupTimeout,
+		})
+
 		workerClient := gateway.NewWorkerClient(obsLog)
-		dispatcher = gateway.NewDispatcher(workerRegistry, workerClient, gateway.DispatchConfig{
+		dispatcher = gateway.NewDispatcherWithScaler(workerRegistry, workerClient, gateway.DispatchConfig{
 			RequestTimeout: dispatchCfg.RequestTimeout,
-		}, obsLog)
-		logger.Info("gateway dispatcher initialized")
+		}, obsLog, scaler, gatewayMetrics)
+		logger.Info("gateway dispatcher initialized with scaler and metrics")
 	}
 
 	srv, err := httpapi.NewServer(addr, store, interp, httpapi.Deps{

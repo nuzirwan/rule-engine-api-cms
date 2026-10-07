@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-{{.Group}}
+  namespace: {{.Namespace}}
+  labels:
+    app: flow-worker
+    group: {{.Group}}
+spec:
+  replicas: {{.MinReplicas}}
+  selector:
+    matchLabels:
+      app: flow-worker
+      group: {{.Group}}
+  template:
+    metadata:
+      labels:
+        app: flow-worker
+        group: {{.Group}}
+    spec:
+      serviceAccountName: {{.ServiceAccount}}
+      containers:
+      - name: worker
+        image: {{.WorkerImage}}
+        args:
+        - --group={{.Group}}
+        - --addr=:8080
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CONFIG_DSN
+          valueFrom:
+            secretKeyRef:
+              name: worker-{{.Group}}
+              key: config-dsn
+        resources:
+          requests:
+            cpu: {{.CPURequest}}
+            memory: {{.MemoryRequest}}
+          limits:
+            cpu: {{.CPULimit}}
+            memory: {{.MemoryLimit}}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 5

@@ -51,6 +51,12 @@ func TestDispatchConfigDefaults(t *testing.T) {
 	if cfg.RequestTimeout != 60*time.Second {
 		t.Errorf("RequestTimeout = %v; want %v", cfg.RequestTimeout, 60*time.Second)
 	}
+	if cfg.PrometheusAddress != "http://prometheus:9090" {
+		t.Errorf("PrometheusAddress = %q; want %q", cfg.PrometheusAddress, "http://prometheus:9090")
+	}
+	if cfg.ManifestOutputDir != "./k8s/workers" {
+		t.Errorf("ManifestOutputDir = %q; want %q", cfg.ManifestOutputDir, "./k8s/workers")
+	}
 }
 
 // TestDispatchConfigParsesAllEnvVars proves LoadDispatchConfig parses all env vars.
@@ -64,6 +70,8 @@ func TestDispatchConfigParsesAllEnvVars(t *testing.T) {
 	t.Setenv("DISPATCH_DEFAULT_GROUP", "priority")
 	t.Setenv("DISPATCH_STARTUP_TIMEOUT", "45s")
 	t.Setenv("DISPATCH_REQUEST_TIMEOUT", "120s")
+	t.Setenv("DISPATCH_PROMETHEUS_ADDRESS", "http://prom.custom:9090")
+	t.Setenv("DISPATCH_MANIFEST_OUTPUT_DIR", "/custom/manifests")
 
 	cfg, err := LoadDispatchConfig()
 	if err != nil {
@@ -91,6 +99,12 @@ func TestDispatchConfigParsesAllEnvVars(t *testing.T) {
 	if cfg.RequestTimeout != 120*time.Second {
 		t.Errorf("RequestTimeout = %v; want %v", cfg.RequestTimeout, 120*time.Second)
 	}
+	if cfg.PrometheusAddress != "http://prom.custom:9090" {
+		t.Errorf("PrometheusAddress = %q; want %q", cfg.PrometheusAddress, "http://prom.custom:9090")
+	}
+	if cfg.ManifestOutputDir != "/custom/manifests" {
+		t.Errorf("ManifestOutputDir = %q; want %q", cfg.ManifestOutputDir, "/custom/manifests")
+	}
 }
 
 // TestDispatchModeInvalid proves an invalid DISPATCH_MODE returns a Validation error.
@@ -113,32 +127,32 @@ func TestDispatchModeInvalid(t *testing.T) {
 // TestDispatchTimeoutParsesDurationStrings proves timeout env vars accept duration strings.
 func TestDispatchTimeoutParsesDurationStrings(t *testing.T) {
 	cases := []struct {
-		name         string
-		startupEnv   string
-		requestEnv   string
-		wantStartup  time.Duration
-		wantRequest  time.Duration
+		name        string
+		startupEnv  string
+		requestEnv  string
+		wantStartup time.Duration
+		wantRequest time.Duration
 	}{
 		{
-			name:         "milliseconds",
-			startupEnv:   "500ms",
-			requestEnv:   "1500ms",
-			wantStartup:  500 * time.Millisecond,
-			wantRequest:  1500 * time.Millisecond,
+			name:        "milliseconds",
+			startupEnv:  "500ms",
+			requestEnv:  "1500ms",
+			wantStartup: 500 * time.Millisecond,
+			wantRequest: 1500 * time.Millisecond,
 		},
 		{
-			name:         "minutes",
-			startupEnv:   "2m",
-			requestEnv:   "5m",
-			wantStartup:  2 * time.Minute,
-			wantRequest:  5 * time.Minute,
+			name:        "minutes",
+			startupEnv:  "2m",
+			requestEnv:  "5m",
+			wantStartup: 2 * time.Minute,
+			wantRequest: 5 * time.Minute,
 		},
 		{
-			name:         "mixed",
-			startupEnv:   "1m30s",
-			requestEnv:   "2m30s",
-			wantStartup:  90 * time.Second,
-			wantRequest:  150 * time.Second,
+			name:        "mixed",
+			startupEnv:  "1m30s",
+			requestEnv:  "2m30s",
+			wantStartup: 90 * time.Second,
+			wantRequest: 150 * time.Second,
 		},
 	}
 
@@ -207,6 +221,8 @@ func clearDispatchEnv(t *testing.T) {
 		"DISPATCH_DEFAULT_GROUP",
 		"DISPATCH_STARTUP_TIMEOUT",
 		"DISPATCH_REQUEST_TIMEOUT",
+		"DISPATCH_PROMETHEUS_ADDRESS",
+		"DISPATCH_MANIFEST_OUTPUT_DIR",
 	}
 	for _, v := range envVars {
 		os.Unsetenv(v)
