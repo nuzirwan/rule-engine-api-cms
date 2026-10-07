@@ -62,7 +62,10 @@ type ConnectionPool struct {
 	// reaper control
 	stopReaper chan struct{}
 	reaperDone chan struct{}
-	nowFunc    func() time.Time // injectable for testing
+
+	// nowFunc is injectable for testing; protected by nowMu
+	nowMu   sync.RWMutex
+	nowFunc func() time.Time
 }
 
 // NewConnectionPool creates a new lazy connection pool. It does NOT open any
@@ -172,7 +175,7 @@ func (p *ConnectionPool) Get(ctx context.Context, key string) (Client, error) {
 
 	// Check if client is ready
 	if entry.client != nil && !entry.closed {
-		entry.lastUse = p.nowFunc()
+		entry.lastUse = p.now()
 		return entry.client, nil
 	}
 
@@ -190,7 +193,7 @@ func (p *ConnectionPool) Get(ctx context.Context, key string) (Client, error) {
 		return nil, err
 	}
 	entry.client = client
-	entry.lastUse = p.nowFunc()
+	entry.lastUse = p.now()
 	entry.openCond.Broadcast()
 
 	return client, nil
@@ -292,7 +295,7 @@ func (p *ConnectionPool) runReaper() {
 
 // reapIdle closes connections that have been idle beyond IdleTimeout.
 func (p *ConnectionPool) reapIdle() {
-	now := p.nowFunc()
+	now := p.now()
 	cutoff := now.Add(-p.config.IdleTimeout)
 
 	p.mu.RLock()
@@ -370,6 +373,22 @@ func (p *ConnectionPool) Stats() PoolStats {
 		entry.mu.Unlock()
 	}
 	return stats
+}
+
+// now returns the current time, using the injectable nowFunc for testing.
+func (p *ConnectionPool) now() time.Time {
+	p.nowMu.RLock()
+	fn := p.nowFunc
+	p.nowMu.RUnlock()
+	return fn()
+}
+
+// setNowFunc sets the time function for testing. Must be called with care to
+// avoid races with the reaper goroutine.
+func (p *ConnectionPool) setNowFunc(fn func() time.Time) {
+	p.nowMu.Lock()
+	p.nowFunc = fn
+	p.nowMu.Unlock()
 }
 
 // PoolStats holds pool statistics.
