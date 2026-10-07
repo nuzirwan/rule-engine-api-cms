@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Admin UI components for version history, comparison, preview, and rollback. Create the VersionHistory panel (collapsible, shows all versions with badges, pagination), VersionDiff modal (JSON diff of two versions with visual highlighting), VersionPreview modal (read-only flow canvas), and integrate rollback action with confirmation modal. Follow SyncPanel/AuditViewer patterns for state management and design-system usage.",
-  "status": "pending",
+  "status": "completed",
   "steps": [
     "1. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/types.ts: define VersionSummary, FlowVersionsResponse, RollbackResponse interfaces mirroring engine types (keep local to admin bundle per AuditViewer pattern).",
     "2. Create cms/src/plugins/rule-engine/admin/src/components/VersionHistory/VersionItem.tsx: single version row component showing version number, createdAt (relative time), createdBy, validation status badge (success/warning), active badge. Include 'View' button, 'Compare' checkbox, 'Rollback' button (disabled if active). Follow EntryCard pattern from AuditViewer.",
@@ -28,5 +28,5 @@
     "cd /home/nuzirwan/project/rule-engine-api/.worktrees/flow-versioning-ui/cms && npm run build && npm run test"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 9 steps implemented. Components: VersionHistory panel (collapsible, paginated, comparison selection), VersionItem row, VersionDiff modal (jsonDiff pure logic with green/red/yellow highlighting), VersionPreview modal (read-only FlowCanvasField), FlowDetailPage route at /flows/:flowId. Route registered in admin/src/index.tsx. 61 new unit tests (30 VersionHistory + 31 diff). Build and all 235 tests pass. One test fix: createdAt ISO test used getTime() instead of toISOString() comparison since engine timestamps use Z without milliseconds."
 }
