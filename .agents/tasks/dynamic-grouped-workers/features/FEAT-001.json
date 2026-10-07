@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create Go types for Group, ScalingConfig, Resources, and the ValidateGroup function in engine/internal/config/group.go. This is the shared validation logic used by both Admin API and CMS transform for parity (grill finding: validation parity).",
+  "status": "completed",
+  "steps": [
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/group.go with: ScalingMode constants (static, dynamic, ephemeral), Resources struct (CPURequest, CPULimit, MemoryRequest, MemoryLimit), ScalingConfig struct (Mode, MinReplicas, MaxReplicas, ScaleDownDelay, StartupTimeout, Resources), Group struct (ID, Name, Description, Version, Connections, Scaling, Enabled, CreatedAt, UpdatedAt).",
+    "Implement ValidateGroup(g *Group) error with: ID required and regex ^[a-z][a-z0-9-]*$, Name required, MinReplicas >= 0, MaxReplicas >= MinReplicas, static mode requires MinReplicas > 0, Scaling.Mode must be one of static|dynamic|ephemeral (grill finding #8).",
+    "Add GroupAuditData struct that holds Group pointer plus Connections slice for denormalized audit storage (design specifies audit stores full state including connections for rollback).",
+    "Add GroupSummary struct for list response (ID, Name, Enabled, Version, UpdatedAt)."
+  ],
+  "acceptance_criteria": [
+    "go build ./... passes from engine/ directory",
+    "Group struct has all fields from design: ID, Name, Description, Version, Connections []string, Scaling ScalingConfig, Enabled bool, CreatedAt, UpdatedAt",
+    "ValidateGroup rejects invalid IDs (uppercase, special chars, empty), rejects static mode with minReplicas=0, rejects invalid ScalingMode values",
+    "ScalingMode constants exist for static, dynamic, ephemeral"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go build ./..."
+  ],
+  "blocked_reason": null,
+  "findings": "ValidateGroup uses newErr(Validation, ...) from errors.go for classified errors. Resources struct fields are optional (omitempty) to allow partial resource specs. ScalingConfig.Resources is a pointer so it can be nil when no resource overrides are needed. GroupAuditData includes a redundant Connections field alongside Group.Connections for audit log completeness per design requirement."
+}
