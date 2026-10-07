@@ -68,10 +68,11 @@ func (s *PgStore) GetFlowVersion(ctx context.Context, env, flowID string, versio
 
 	var treeRaw []byte
 	var method, path string
+	var groupID *string
 	err = pool.QueryRow(ctx,
-		`SELECT fv.tree, f.method, f.path
+		`SELECT fv.tree, f.method, f.path, fv.group_id
 		   FROM flow_versions fv JOIN flows f ON f.id = fv.flow_id
-		  WHERE fv.flow_id=$1 AND fv.version=$2`, flowID, version).Scan(&treeRaw, &method, &path)
+		  WHERE fv.flow_id=$1 AND fv.version=$2`, flowID, version).Scan(&treeRaw, &method, &path, &groupID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return FlowVersion{}, newErr(NotFound, "no such flow version")
 	}
@@ -89,14 +90,18 @@ func (s *PgStore) GetFlowVersion(ctx context.Context, env, flowID string, versio
 		return FlowVersion{}, err
 	}
 
-	return FlowVersion{
+	fv := FlowVersion{
 		FlowID:   flowID,
 		Version:  version,
 		Method:   method,
 		Path:     path,
 		Tree:     tree,
 		Fixtures: fixtures,
-	}, nil
+	}
+	if groupID != nil {
+		fv.Group = *groupID
+	}
+	return fv, nil
 }
 
 // ListFlows returns all flows for env with their active versions (if any).

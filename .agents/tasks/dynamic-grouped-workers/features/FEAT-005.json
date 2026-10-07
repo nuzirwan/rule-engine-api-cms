@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-005",
+  "type": "feat",
+  "description": "Create CMS Group content type and resource-limits component, update Flow content type with group relation. Backward compatible - existing flows work without group.",
+  "status": "pending",
+  "steps": [
+    "Create directory structure: mkdir -p /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/content-types/group /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/controllers /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/routes /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/services /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/config",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/config/resource-limits.json component with attributes: cpuRequest (string, default '100m', regex ^[0-9]+m?$), cpuLimit (string, default '500m'), memoryRequest (string, default '128Mi', regex ^[0-9]+(Mi|Gi)$), memoryLimit (string, default '512Mi').",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/content-types/group/schema.json with: kind collectionType, draftAndPublish true, attributes: groupId (uid, required, unique, regex ^[a-z][a-z0-9-]*$, maxLength 64), name (string, required, maxLength 128), description (text), enabled (boolean, default true), scalingMode (enumeration [static, dynamic, ephemeral], default dynamic, required), minReplicas (integer, min 0, default 0, required), maxReplicas (integer, min 1, default 10, required), scaleDownDelaySeconds (integer, min 60, default 300), startupTimeoutSeconds (integer, min 5, default 30), resources (component config.resource-limits), connections (relation manyToMany to api::connection.connection). NOTE: flows relation is intentionally OMITTED - flow-to-group assignment is via flow's group field, not group's flows list.",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/controllers/group.ts using factories.createCoreController('api::group.group').",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/routes/group.ts using factories.createCoreRouter('api::group.group').",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/services/group.ts using factories.createCoreService('api::group.group').",
+    "Update /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/flow/content-types/flow/schema.json: add 'group' attribute with type relation, relation manyToOne, target api::group.group. This is the flow's FK to group.",
+    "Update /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/connection/content-types/connection/schema.json: add 'groups' attribute for the inverse manyToMany relation from group.connections."
+  ],
+  "acceptance_criteria": [
+    "npm run build passes from cms/ directory",
+    "Group content type has all fields from design: groupId, name, description, enabled, scalingMode, minReplicas, maxReplicas, scaleDownDelaySeconds, startupTimeoutSeconds, resources, connections",
+    "Flow content type has optional 'group' relation (manyToOne to group)",
+    "resource-limits component exists with cpu/memory fields",
+    "scalingMode enumeration has exactly: static, dynamic, ephemeral",
+    "groupId has regex validation matching Go ValidateGroup",
+    "No flows relation on group (intentional per design)"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms && npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

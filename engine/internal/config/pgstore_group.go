@@ -506,6 +506,89 @@ func (s *PgStore) CountFlowsByGroup(ctx context.Context, env, groupID string) (i
 	return count, nil
 }
 
+// UpdateFlowGroup updates the group_id of the ACTIVE flow version and records
+// the change in flow_group_audit. It looks up the active version from
+// active_pointers, captures the old group_id, updates the flow_version row, and
+// inserts an audit record. Returns NotFound if the flow has no active version.
+func (s *PgStore) UpdateFlowGroup(ctx context.Context, env, flowID, groupID, changedBy, reason string) error {
+	pool, err := s.pool(env)
+	if err != nil {
+		return err
+	}
+
+	// Validate groupID exists if non-empty (empty means unassign from group).
+	if groupID != "" {
+		var exists int
+		err := pool.QueryRow(ctx, `SELECT 1 FROM groups WHERE id=$1`, groupID).Scan(&exists)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return newErr(NotFound, "group not found: "+groupID)
+		}
+		if err != nil {
+			return classifyPg("check group exists", err)
+		}
+	}
+
+	return withTx(ctx, pool, func(tx pgx.Tx) error {
+		// Get the active version for this flow.
+		var activeVersion int
+		err := tx.QueryRow(ctx,
+			`SELECT version FROM active_pointers WHERE object_type=$1 AND object_id=$2`,
+			objFlow, flowID).Scan(&activeVersion)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return newErr(NotFound, "no active version for flow "+flowID)
+		}
+		if err != nil {
+			return classifyPg("get active flow version", err)
+		}
+
+		// Get the current group_id from the active flow version.
+		var oldGroupID *string
+		err = tx.QueryRow(ctx,
+			`SELECT group_id FROM flow_versions WHERE flow_id=$1 AND version=$2`,
+			flowID, activeVersion).Scan(&oldGroupID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return newErr(NotFound, "flow version not found: "+flowID)
+		}
+		if err != nil {
+			return classifyPg("get current group_id", err)
+		}
+
+		// Determine the new group_id (NULL if empty string).
+		var newGroupID *string
+		if groupID != "" {
+			newGroupID = &groupID
+		}
+
+		// Skip if unchanged.
+		if (oldGroupID == nil && newGroupID == nil) ||
+			(oldGroupID != nil && newGroupID != nil && *oldGroupID == *newGroupID) {
+			return nil // No change needed.
+		}
+
+		// Update the flow_version row with the new group_id.
+		tag, err := tx.Exec(ctx,
+			`UPDATE flow_versions SET group_id=$1 WHERE flow_id=$2 AND version=$3`,
+			newGroupID, flowID, activeVersion)
+		if err != nil {
+			return classifyPg("update flow group", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return newErr(NotFound, "flow version not found: "+flowID)
+		}
+
+		// Record in flow_group_audit.
+		_, err = tx.Exec(ctx,
+			`INSERT INTO flow_group_audit (flow_id, old_group, new_group, changed_by, reason)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			flowID, oldGroupID, newGroupID, changedBy, reason)
+		if err != nil {
+			return classifyPg("audit flow group change", err)
+		}
+
+		return nil
+	})
+}
+
 // ---- helpers ----
 
 // formatSeconds converts seconds to a duration string like "5m" or "30s".

@@ -1,0 +1,55 @@
+{
+  "project_type": "Go monorepo (engine/) + Strapi 5 CMS (cms/)",
+  "language": "Go 1.26, TypeScript (Strapi)",
+  "build_system": "go build for engine, npm scripts for CMS",
+  "test_framework": "go test, vitest for CMS",
+  "build_command": "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go build ./...",
+  "test_command": "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go test ./internal/config/... ./internal/httpapi/...",
+  "verification_instructions": "1. Run go build ./... from engine/ to verify compilation. 2. Run go test ./internal/config/... ./internal/httpapi/... from engine/ for unit tests. 3. Run npm run build from cms/ to verify Strapi builds. 4. Verify SQL syntax by reading migration files (no live DB required for Phase 1).",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Go 1.26+ required. Node 22.x for CMS. No live database required for Phase 1 implementation.",
+  "contribution_requirements": "Match existing code style: pgxpool for Postgres, chi-style URL params via r.PathValue(), JSON encoding patterns from pgstore.go. CMS content types follow Strapi 5 schema format.",
+  "key_patterns": {
+    "store_pattern": "PgStore in internal/config/pgstore.go: withTx for transactions, classifyPg for error mapping, singleflight for cache miss collapse",
+    "admin_api_pattern": "handlers in internal/httpapi/admin_handlers.go: decodeJSON, writeJSON, writeError helpers, a.fail for error mapping, r.PathValue for URL params",
+    "migration_pattern": "migrations/000N_name.up.sql and .down.sql files, registered in migrations/migrations.go",
+    "cms_content_type_pattern": "api/{name}/content-types/{name}/schema.json + controllers/{name}.ts + routes/{name}.ts + services/{name}.ts using factories",
+    "cms_component_pattern": "components/{category}/{name}.json with collectionName and attributes"
+  },
+  "relevant_files": {
+    "study_patterns": [
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/pgstore.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/store.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/httpapi/admin_handlers.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/0001_init.up.sql",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/flow/content-types/flow/schema.json",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/connection/content-types/connection/schema.json",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/connection/resilience-policy.json"
+    ],
+    "modify": [
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/store.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/httpapi/admin.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/migrations.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/flow/content-types/flow/schema.json"
+    ],
+    "create": [
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/group.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/config/pgstore_group.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/internal/httpapi/admin_groups.go",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/0004_groups.up.sql",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/0004_groups.down.sql",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/content-types/group/schema.json",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/controllers/group.ts",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/routes/group.ts",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/api/group/services/group.ts",
+      "/home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/cms/src/components/config/resource-limits.json"
+    ]
+  },
+  "directory_structure": {
+    "engine/internal/config": "Config store seam: memStore, PgStore, cache, codecs. Group types and store methods go here.",
+    "engine/internal/httpapi": "HTTP handlers: server.go wires routes, admin.go/admin_handlers.go for admin API. New admin_groups.go for group endpoints.",
+    "engine/migrations": "SQL migrations: 000N_name.up.sql/.down.sql. migrations.go registers them for embed.",
+    "cms/src/api": "Strapi content types: each has content-types/, controllers/, routes/, services/ subdirs.",
+    "cms/src/components": "Strapi reusable components: connection/, flow/, webhook/ categories."
+  }
+}
