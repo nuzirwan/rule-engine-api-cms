@@ -2,7 +2,15 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // switchHandler is the N-way branch. It projects the named ctx paths into a
@@ -689,4 +697,229 @@ func (reduceHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walke
 	}
 	c.Data[spec.SaveAs] = acc
 	return Directive{}, nil
+}
+
+// loadHandler loads JSON data from inline data, a local file, or a URL mid-flow.
+// The loaded data (optionally extracted via JSONPath) is stored under SaveAs in
+// Ctx.Data. It is a leaf node (no children). Exactly one of Data, Path, or URL
+// must be provided.
+type loadHandler struct{}
+
+// loadHTTPTimeout is the timeout for HTTP requests to load data from URLs.
+const loadHTTPTimeout = 30 * time.Second
+
+// sharedLoadHTTPClient is a shared HTTP client for load node URL fetches. It is
+// initialized once and reused across all load operations to benefit from
+// connection pooling.
+var (
+	sharedLoadHTTPClientOnce sync.Once
+	sharedLoadHTTPClient     *http.Client
+)
+
+// getLoadHTTPClient returns the shared HTTP client, initializing it on first use.
+func getLoadHTTPClient() *http.Client {
+	sharedLoadHTTPClientOnce.Do(func() {
+		sharedLoadHTTPClient = &http.Client{
+			Timeout: loadHTTPTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		}
+	})
+	return sharedLoadHTTPClient
+}
+
+// Exec implements NodeHandler.
+func (loadHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[LoadSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	if spec.SaveAs == "" {
+		return Directive{}, validationf("load %q requires saveAs", n.ID)
+	}
+
+	// Validate exactly one source is provided
+	sources := 0
+	if spec.Data != nil {
+		sources++
+	}
+	if spec.Path != "" {
+		sources++
+	}
+	if spec.URL != "" {
+		sources++
+	}
+	if sources == 0 {
+		return Directive{}, validationf("load %q requires one of data, path, or url", n.ID)
+	}
+	if sources > 1 {
+		return Directive{}, validationf("load %q requires exactly one of data, path, or url", n.ID)
+	}
+
+	var data any
+
+	switch {
+	case spec.Data != nil:
+		// Inline data: use directly (already parsed from JSON spec)
+		data = spec.Data
+		// Apply JSONPath if specified
+		if spec.JSONPath != "" {
+			data, err = applyLoadJSONPath(spec.Data, spec.JSONPath)
+			if err != nil {
+				return Directive{}, wrapErr(ClassValidation, "load jsonPath", err)
+			}
+		}
+
+	case spec.Path != "":
+		// Local file: read and parse
+		data, err = loadFromFile(ctx, spec.Path, spec.JSONPath)
+		if err != nil {
+			return Directive{}, err
+		}
+
+	case spec.URL != "":
+		// URL: fetch and parse
+		data, err = loadFromURL(ctx, spec.URL, spec.JSONPath)
+		if err != nil {
+			return Directive{}, err
+		}
+	}
+
+	if c.Data == nil {
+		c.Data = map[string]any{}
+	}
+	c.Data[spec.SaveAs] = data
+	return Directive{}, nil
+}
+
+// loadFromFile reads and parses a JSON file, optionally applying a JSONPath.
+func loadFromFile(ctx context.Context, path, jsonPath string) (any, error) {
+	// Check context deadline
+	if err := ctx.Err(); err != nil {
+		return nil, wrapErr(ClassTimeout, "load file cancelled", err)
+	}
+
+	// Read the file
+	fileData, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, wrapErr(ClassValidation, "load file not found: "+path, err)
+		}
+		if os.IsPermission(err) {
+			return nil, wrapErr(ClassValidation, "load file permission denied: "+path, err)
+		}
+		return nil, wrapErr(ClassUpstream, "load file read error", err)
+	}
+
+	// Validate JSON
+	if !json.Valid(fileData) {
+		return nil, newErr(ClassValidation, "load file contains invalid JSON: "+path)
+	}
+
+	return applyLoadJSONPathBytes(fileData, jsonPath)
+}
+
+// loadFromURL fetches and parses JSON from a URL, optionally applying a JSONPath.
+func loadFromURL(ctx context.Context, url, jsonPath string) (any, error) {
+	// Validate URL scheme
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return nil, newErr(ClassValidation, "load url must be http or https: "+url)
+	}
+
+	// Create request with context
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, wrapErr(ClassValidation, "load url invalid", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	// Execute request
+	client := getLoadHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, wrapErr(ClassTimeout, "load url request cancelled", ctx.Err())
+		}
+		return nil, wrapErr(ClassUpstream, "load url request failed", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, newErr(ClassValidation, "load url not found: "+url)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, newErr(ClassUpstream, "load url http error: "+resp.Status)
+	}
+
+	// Read body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, wrapErr(ClassUpstream, "load url read body failed", err)
+	}
+
+	// Validate JSON
+	if !json.Valid(body) {
+		return nil, newErr(ClassValidation, "load url response is not valid JSON")
+	}
+
+	return applyLoadJSONPathBytes(body, jsonPath)
+}
+
+// applyLoadJSONPathBytes extracts data using a JSONPath from raw bytes, or parses
+// the full document if jsonPath is empty.
+func applyLoadJSONPathBytes(data []byte, jsonPath string) (any, error) {
+	if jsonPath == "" {
+		var v any
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, wrapErr(ClassValidation, "load json parse", err)
+		}
+		return v, nil
+	}
+
+	// Normalize JSONPath: strip leading $. or $
+	query := normalizeLoadJSONPath(jsonPath)
+	result := gjson.GetBytes(data, query)
+	if !result.Exists() {
+		// Path not found returns nil (not an error)
+		return nil, nil
+	}
+	return result.Value(), nil
+}
+
+// applyLoadJSONPath extracts data using a JSONPath from an already-parsed value.
+// For inline data, we need to re-marshal to bytes to use gjson.
+func applyLoadJSONPath(data any, jsonPath string) (any, error) {
+	if jsonPath == "" {
+		return data, nil
+	}
+
+	// Marshal to JSON bytes for gjson processing
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, wrapErr(ClassValidation, "load jsonPath marshal", err)
+	}
+
+	return applyLoadJSONPathBytes(bytes, jsonPath)
+}
+
+// normalizeLoadJSONPath converts JSONPath syntax to GJSON syntax.
+// Strips leading $. or $ prefix.
+func normalizeLoadJSONPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "$" {
+		return ""
+	}
+	// Strip leading $.
+	if strings.HasPrefix(path, "$.") {
+		return path[2:]
+	}
+	// Strip leading $ (bare root reference)
+	if strings.HasPrefix(path, "$") {
+		return path[1:]
+	}
+	return path
 }

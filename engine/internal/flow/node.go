@@ -33,6 +33,7 @@ const (
 	TypeFind           NodeType = "find"
 	TypeMap            NodeType = "map"
 	TypeReduce         NodeType = "reduce"
+	TypeLoad           NodeType = "load"
 )
 
 // Node is one node in the flow tree. Control nodes carry Children; leaves do not.

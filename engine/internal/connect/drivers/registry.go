@@ -20,7 +20,6 @@ func All() []connect.Connector {
 		restAlias,
 		newKafkaConnector(),
 		newRabbitMQConnector(),
-		newJSONFileConnector(),
 	}
 }
 

@@ -70,6 +70,7 @@ func New() *Interpreter {
 		TypeFind:           findHandler{},
 		TypeMap:            mapHandler{},
 		TypeReduce:         reduceHandler{},
+		TypeLoad:           loadHandler{},
 	}}
 }
 

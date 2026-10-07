@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"nzr-rules-engine/internal/connect"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -1096,5 +1099,386 @@ func TestReduce_CtxCancelled(t *testing.T) {
 	}
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("expected timeout error, got: %v", err)
+	}
+}
+
+// --- load node tests --------------------------------------------------------
+
+// loadTree builds a minimal trigger + load + response tree.
+func loadTree(t *testing.T, spec LoadSpec) *Node {
+	t.Helper()
+	return &Node{
+		ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{
+			{ID: "l", Type: TypeLoad, Spec: rawSpec(t, spec)},
+			{ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+}
+
+func TestLoad_InlineData(t *testing.T) {
+	data := []any{float64(1), float64(2), float64(3)}
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: data, SaveAs: "items"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["items"].([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", c.Data["items"])
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(result))
+	}
+	if result[0] != float64(1) || result[1] != float64(2) || result[2] != float64(3) {
+		t.Fatalf("unexpected items: %v", result)
+	}
+}
+
+func TestLoad_InlineDataMap(t *testing.T) {
+	data := map[string]any{"name": "test", "value": float64(42)}
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: data, SaveAs: "obj"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["obj"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", c.Data["obj"])
+	}
+	if result["name"] != "test" || result["value"] != float64(42) {
+		t.Fatalf("unexpected obj: %v", result)
+	}
+}
+
+func TestLoad_InlineDataWithJSONPath(t *testing.T) {
+	data := map[string]any{
+		"items": []any{
+			map[string]any{"id": float64(1)},
+			map[string]any{"id": float64(2)},
+		},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: data, JSONPath: "$.items", SaveAs: "result"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["result"].([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", c.Data["result"])
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result))
+	}
+}
+
+func TestLoad_InlineDataJSONPathNested(t *testing.T) {
+	data := map[string]any{
+		"items": []any{
+			map[string]any{"name": "first"},
+			map[string]any{"name": "second"},
+		},
+	}
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: data, JSONPath: "$.items.0.name", SaveAs: "result"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Data["result"] != "first" {
+		t.Fatalf("expected 'first', got %v", c.Data["result"])
+	}
+}
+
+func TestLoad_InlineDataJSONPathNotFound(t *testing.T) {
+	data := map[string]any{"a": float64(1)}
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: data, JSONPath: "$.nonexistent", SaveAs: "result"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Data["result"] != nil {
+		t.Fatalf("expected nil for nonexistent path, got %v", c.Data["result"])
+	}
+}
+
+func TestLoad_LocalFile(t *testing.T) {
+	// Create temp file with JSON content
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.json"
+	testData := `{"products":[{"id":1,"name":"Widget"},{"id":2,"name":"Gadget"}]}`
+	if err := os.WriteFile(testFile, []byte(testData), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Path: testFile, SaveAs: "data"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", c.Data["data"])
+	}
+	products, ok := result["products"].([]any)
+	if !ok || len(products) != 2 {
+		t.Fatalf("expected 2 products, got %v", result["products"])
+	}
+}
+
+func TestLoad_LocalFileWithJSONPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.json"
+	testData := `{"products":[{"id":1,"name":"Widget"},{"id":2,"name":"Gadget"}]}`
+	if err := os.WriteFile(testFile, []byte(testData), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Path: testFile, JSONPath: "$.products", SaveAs: "items"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["items"].([]any)
+	if !ok || len(result) != 2 {
+		t.Fatalf("expected 2 items, got %v", c.Data["items"])
+	}
+}
+
+func TestLoad_LocalFileNotFound(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Path: "/nonexistent/file.json", SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for nonexistent file")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_LocalFileInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/invalid.json"
+	if err := os.WriteFile(testFile, []byte("{invalid json}"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Path: testFile, SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for invalid JSON")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_URL(t *testing.T) {
+	// Create test server
+	validJSON := map[string]any{"message": "hello from server", "count": float64(42)}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(validJSON)
+	}))
+	defer ts.Close()
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: ts.URL, SaveAs: "data"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", c.Data["data"])
+	}
+	if result["message"] != "hello from server" {
+		t.Fatalf("unexpected message: %v", result["message"])
+	}
+}
+
+func TestLoad_URLWithJSONPath(t *testing.T) {
+	data := map[string]any{
+		"results": []any{
+			map[string]any{"id": float64(1)},
+			map[string]any{"id": float64(2)},
+		},
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
+	}))
+	defer ts.Close()
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: ts.URL, JSONPath: "$.results", SaveAs: "items"})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	result, ok := c.Data["items"].([]any)
+	if !ok || len(result) != 2 {
+		t.Fatalf("expected 2 items, got %v", c.Data["items"])
+	}
+}
+
+func TestLoad_URLNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: ts.URL, SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for 404")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_URLServerError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: ts.URL, SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for 500")
+	}
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("expected upstream error, got: %v", err)
+	}
+}
+
+func TestLoad_URLInvalidJSON(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{invalid json}"))
+	}))
+	defer ts.Close()
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: ts.URL, SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for invalid JSON")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_URLInvalidScheme(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{URL: "ftp://example.com/data.json", SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for invalid URL scheme")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_MissingSaveAs(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: []any{1, 2, 3}, SaveAs: ""})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for missing saveAs")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_NoSource(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for no source")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_MultipleSources(t *testing.T) {
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Data: []any{1}, Path: "/some/file.json", SaveAs: "data"})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected error for multiple sources")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got: %v", err)
+	}
+}
+
+func TestLoad_CtxCancelled(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.json"
+	if err := os.WriteFile(testFile, []byte(`{"a":1}`), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	c := NewCtx("r", "t", "e", nil)
+	tree := loadTree(t, LoadSpec{Path: testFile, SaveAs: "data"})
+	err := New().Run(ctx, tree, Version{}, c, Deps{})
+	if err == nil {
+		t.Fatalf("expected timeout error for cancelled context")
+	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected timeout error, got: %v", err)
+	}
+}
+
+func TestLoad_CombinedWithFilter(t *testing.T) {
+	// Test load node followed by filter - a common use case
+	data := []any{
+		map[string]any{"id": float64(1), "price": float64(50)},
+		map[string]any{"id": float64(2), "price": float64(150)},
+		map[string]any{"id": float64(3), "price": float64(75)},
+	}
+	loadNode := Node{ID: "load", Type: TypeLoad, Spec: rawSpec(t, LoadSpec{Data: data, SaveAs: "items"})}
+	filterNode := Node{
+		ID:   "filter",
+		Type: TypeFilter,
+		Spec: rawSpec(t, FilterSpec{Over: "items", JDMID: "price-check", Input: []string{"price"}, SaveAs: "expensive", MaxItems: 10}),
+	}
+	tree := &Node{
+		ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}),
+		Children: []Node{
+			loadNode,
+			filterNode,
+			{ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+
+	eval := &matchEvaluator{threshold: 100}
+	c := NewCtx("r", "t", "e", nil)
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	result, ok := c.Data["expensive"].([]any)
+	if !ok {
+		t.Fatalf("filter result not stored: %#v", c.Data["expensive"])
+	}
+	if len(result) != 1 {
+		t.Fatalf("filter result len=%d, want 1", len(result))
+	}
+	item := result[0].(map[string]any)
+	if item["id"] != float64(2) {
+		t.Fatalf("filter result item id=%v, want 2", item["id"])
 	}
 }

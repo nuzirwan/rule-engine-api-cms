@@ -35,7 +35,7 @@ Every connection follows this shape:
 | Field      | Type   | Description                                        |
 |------------|--------|----------------------------------------------------|
 | `key`      | string | Unique identifier referenced by action nodes       |
-| `type`     | string | Driver type: `postgres`, `mysql`, `valkey`, `rest`, `kafka`, `json-file` |
+| `type`     | string | Driver type: `postgres`, `mysql`, `valkey`, `rest`, `kafka` |
 | `settings` | object | Driver-specific configuration                      |
 | `secretRef`| string | Secret reference (e.g., `env:VAR_NAME`)            |
 | `resilience` | object | Timeout, retry, and circuit breaker config       |
@@ -49,7 +49,6 @@ Every connection follows this shape:
 | `valkey`   | get, set, del       | pooled     |
 | `rest`/`http` | http             | ephemeral  |
 | `kafka`    | publish, subscribe  | pooled     |
-| `json-file`| read, write         | ephemeral  |
 
 ---
 
@@ -431,182 +430,6 @@ Connects to Kafka for message publishing and consumption.
   }
 }
 ```
-
----
-
-## JSON File Connector
-
-Loads JSON data from local files or HTTP URLs mid-flow for querying and manipulation.
-Works with `filter`, `find`, `map`, `reduce` nodes for collection operations.
-
-### Configuration
-
-```json
-{
-  "key": "pricing-data",
-  "type": "json-file",
-  "settings": {
-    "basePath": "/data/config",
-    "allowHttp": false,
-    "cacheSeconds": 300
-  }
-}
-```
-
-| Setting        | Type   | Default | Description                              |
-|----------------|--------|---------|------------------------------------------|
-| `basePath`     | string | cwd     | Base directory for relative paths        |
-| `allowHttp`    | bool   | false   | Allow loading from HTTP/HTTPS URLs       |
-| `cacheSeconds` | int    | 0       | Cache parsed JSON (0 = no caching)       |
-
-### Read Operation
-
-Load a JSON file and optionally extract a subset with JSONPath:
-
-```json
-{
-  "id": "load-pricing",
-  "type": "action",
-  "spec": {
-    "connection": "pricing-data",
-    "operation": {
-      "kind": "read",
-      "payload": {
-        "path": "pricing.json",
-        "jsonPath": "$.products"
-      }
-    },
-    "saveAs": "ctx.products"
-  }
-}
-```
-
-| Payload Field | Type   | Description                              |
-|---------------|--------|------------------------------------------|
-| `path`        | string | File path (relative to basePath) or URL  |
-| `jsonPath`    | string | JSONPath expression to extract subset    |
-
-### Write Operation
-
-Write data to a JSON file:
-
-```json
-{
-  "id": "save-result",
-  "type": "action",
-  "spec": {
-    "connection": "pricing-data",
-    "operation": {
-      "kind": "write",
-      "payload": {
-        "path": "output/result.json",
-        "data": "{{ctx.processedData}}",
-        "pretty": true
-      }
-    }
-  }
-}
-```
-
-| Payload Field | Type   | Description                              |
-|---------------|--------|------------------------------------------|
-| `path`        | string | Output file path (relative to basePath)  |
-| `data`        | any    | Data to write as JSON                    |
-| `pretty`      | bool   | Pretty-print with indentation            |
-
-### HTTP URL Loading
-
-Enable `allowHttp` to load JSON from URLs:
-
-```json
-{
-  "key": "remote-config",
-  "type": "json-file",
-  "settings": {
-    "allowHttp": true,
-    "cacheSeconds": 600
-  }
-}
-```
-
-```json
-{
-  "operation": {
-    "kind": "read",
-    "payload": {
-      "path": "https://config.example.com/rules.json"
-    }
-  },
-  "saveAs": "ctx.rules"
-}
-```
-
-### Example: Load and Query JSON Data
-
-A common pattern is loading reference data and querying it with collection nodes:
-
-**1. Define the connection:**
-```json
-{
-  "key": "product-catalog",
-  "type": "json-file",
-  "settings": {
-    "basePath": "/data",
-    "cacheSeconds": 300
-  }
-}
-```
-
-**2. Load the data in a flow:**
-```json
-{
-  "id": "load-catalog",
-  "type": "action",
-  "spec": {
-    "connection": "product-catalog",
-    "operation": {
-      "kind": "read",
-      "payload": {
-        "path": "products.json"
-      }
-    },
-    "saveAs": "ctx.catalog"
-  }
-}
-```
-
-**3. Find a product by SKU using a ZEN decision:**
-```json
-{
-  "id": "find-product",
-  "type": "find",
-  "spec": {
-    "source": "ctx.catalog.products",
-    "jdmId": "match-product-sku",
-    "saveAs": "ctx.product"
-  }
-}
-```
-
-**4. Apply pricing rules with map:**
-```json
-{
-  "id": "apply-discount",
-  "type": "map",
-  "spec": {
-    "source": "ctx.product.variants",
-    "jdmId": "calculate-discount",
-    "saveAs": "ctx.pricedVariants"
-  }
-}
-```
-
-### Security Notes
-
-- **Path traversal protection**: Paths like `../../../etc/passwd` are rejected
-- **basePath confinement**: Files outside `basePath` cannot be accessed
-- **HTTP disabled by default**: Set `allowHttp: true` explicitly to enable URL loading
-- **No secret injection**: Unlike database connectors, JSON files don't use `secretRef`
 
 ---
 

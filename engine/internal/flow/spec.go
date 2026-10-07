@@ -224,6 +224,22 @@ type LoggerSpec struct {
 	SampleRate *float64 `json:"sampleRate,omitempty"`
 }
 
+// LoadSpec loads JSON data from inline data, a local file, or a URL mid-flow.
+// Exactly one of Data, Path, or URL must be provided. The loaded data is stored
+// under SaveAs in Ctx.Data. Optional JSONPath extracts a subset of the data.
+type LoadSpec struct {
+	// Data is inline JSON data (used as-is, no parsing needed).
+	Data any `json:"data,omitempty"`
+	// Path is a local file path to read JSON from.
+	Path string `json:"path,omitempty"`
+	// URL is an HTTP(S) URL to fetch JSON from.
+	URL string `json:"url,omitempty"`
+	// JSONPath is an optional JSONPath expression to extract a subset.
+	JSONPath string `json:"jsonPath,omitempty"`
+	// SaveAs is the context variable to store loaded data (required).
+	SaveAs string `json:"saveAs"`
+}
+
 // specValidators drives DisallowUnknownFields validation per node type. Every
 // node type has an entry so an unknown field in any spec is rejected cleanly.
 var specValidators = map[NodeType]func(json.RawMessage) error{
@@ -242,5 +258,6 @@ var specValidators = map[NodeType]func(json.RawMessage) error{
 	TypeReduce:         func(r json.RawMessage) error { _, e := parseSpec[ReduceSpec](r); return e },
 	TypeSet:            func(r json.RawMessage) error { _, e := parseSpec[SetSpec](r); return e },
 	TypeLogger:         func(r json.RawMessage) error { _, e := parseSpec[LoggerSpec](r); return e },
+	TypeLoad:           func(r json.RawMessage) error { _, e := parseSpec[LoadSpec](r); return e },
 	TypeResponse:       func(r json.RawMessage) error { _, e := parseSpec[ResponseSpec](r); return e },
 }
