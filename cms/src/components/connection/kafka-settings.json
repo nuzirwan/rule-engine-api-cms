@@ -1,0 +1,30 @@
+{
+  "collectionName": "components_connection_kafka_settings",
+  "info": {
+    "displayName": "kafka-settings",
+    "description": "Credential-free kafka connection settings (design §3.3.1). Brokers as comma-separated string. Auth credentials from Connection `secretRef`."
+  },
+  "options": {},
+  "attributes": {
+    "brokers": {
+      "type": "string",
+      "required": true
+    },
+    "topic": {
+      "type": "string",
+      "required": true
+    },
+    "groupID": {
+      "type": "string"
+    },
+    "partition": {
+      "type": "integer"
+    },
+    "dlqTopic": {
+      "type": "string"
+    },
+    "maxRetries": {
+      "type": "integer"
+    }
+  }
+}
