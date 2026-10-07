@@ -24,28 +24,17 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /engine ./cmd/engine
 
 # =============================================================================
-# Stage 2: Runtime — minimal glibc-based image (ADR-003/R9: NOT alpine/musl)
+# Stage 2: Runtime — Google Distroless (minimal attack surface)
 # =============================================================================
-FROM debian:bookworm-slim
-
-# Install CA certificates for TLS connections (data sources, JWKS, etc.) and curl
-# for health checks per [[security-and-authz]]. No other runtime deps needed — the
-# binary dynamically links glibc which bookworm-slim provides.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Non-root user per [[security-and-authz]] (least privilege).
-RUN groupadd -r -g 1000 engine && useradd -r -u 1000 -g engine engine
+# distroless/base-debian12 includes glibc, CA certificates, and tzdata.
+# No shell, no package manager — minimal attack surface per [[security-and-authz]].
+FROM gcr.io/distroless/base-debian12:nonroot
 
 WORKDIR /app
 
 # Copy only the binary from builder (multi-stage minimizes image per
-# [[ci-cd-and-delivery]]). Use --chown to avoid an extra layer.
-COPY --from=builder --chown=engine:engine /engine /engine
-
-USER engine
+# [[ci-cd-and-delivery]]).
+COPY --from=builder /engine /engine
 
 # Default config per [[config-and-secrets]] — all config via env at runtime.
 # These are documented defaults; actual values injected at deployment.
@@ -54,9 +43,8 @@ ENV ENGINE_ADDR=":8080"
 
 EXPOSE 8080
 
-# Health check against /readyz (readiness probe, 2s timeout per ops.go).
-# Interval 30s, timeout 5s, start period 5s, retries 3.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -sf http://localhost:8080/readyz || exit 1
+# Note: HEALTHCHECK not supported in distroless (no curl/shell).
+# Use Kubernetes liveness/readiness probes or Docker Compose healthcheck
+# with a sidecar/external checker against /readyz endpoint.
 
 ENTRYPOINT ["/engine"]

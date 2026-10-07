@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Add distributed tracing with OpenTelemetry trace propagation from gateway to worker. Create engine/internal/gateway/tracing.go with span creation for dispatch, scale, execute operations. Inject trace context into worker HTTP requests using otel.GetTextMapPropagator().Inject(). Extract trace context in worker handler. Enhance structured logging with request_id, trace_id, group in all log lines.",
+  "status": "completed",
+  "steps": [
+    "Read engine/internal/observ/tracer.go to understand existing OTEL setup (otelTracer, StartSpan, TraceIDFromContext)",
+    "Read engine/internal/gateway/client.go propagateTraceHeaders() to understand current header propagation (X-Request-Id, X-Trace-Id, traceparent)",
+    "Create engine/internal/gateway/tracing.go with TracingMiddleware and span utilities: StartDispatchSpan(ctx, group, flowID), StartScaleSpan(ctx, group, action), InjectTraceContext(ctx, req *http.Request)",
+    "Update InjectTraceContext to use go.opentelemetry.io/otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header)) for W3C trace context",
+    "Add go.opentelemetry.io/otel/propagation to go.mod if not present",
+    "Update engine/internal/gateway/dispatcher.go Dispatch(): wrap execution in a span using tracer.Start(ctx, 'gateway.dispatch'), set attributes group and flow_id, call span.End(err) on completion",
+    "Update engine/internal/gateway/scaler.go EnsureReady(), ScaleUp(), ScaleDown(): wrap in spans 'gateway.scale.ensure_ready', 'gateway.scale.up', 'gateway.scale.down'",
+    "Update engine/internal/gateway/client.go doExecute(): replace manual header propagation with InjectTraceContext call",
+    "Update engine/internal/worker/handler.go handleExecute(): extract trace context from headers using otel.GetTextMapPropagator().Extract(), create child span 'worker.execute', set flow_id attribute",
+    "Update all log.Emit() calls in gateway/ and worker/ to include 'group' field in addition to existing request_id, trace_id",
+    "Create engine/internal/gateway/tracing_test.go with tests for trace propagation",
+    "Update engine/internal/worker/handler_test.go to verify trace extraction"
+  ],
+  "acceptance_criteria": [
+    "go build ./cmd/engine && go build ./cmd/worker compiles without errors",
+    "go test ./internal/gateway/... passes including tracing tests",
+    "go test ./internal/worker/... passes including handler tests",
+    "When dispatching a request through gateway to worker, the trace_id in gateway logs matches trace_id in worker logs",
+    "All log lines include request_id, trace_id, and group fields"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go build ./cmd/engine && go build ./cmd/worker",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go test ./internal/gateway/... -v",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go test ./internal/worker/... -v"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented distributed tracing with OpenTelemetry for gateway-worker communication:\n\n1. Created engine/internal/gateway/tracing.go with:\n   - InjectTraceContext(ctx, req) - W3C trace context injection using otel.GetTextMapPropagator().Inject()\n   - ExtractTraceContext(ctx, r) - W3C trace context extraction using otel.GetTextMapPropagator().Extract()\n   - StartDispatchSpan(ctx, tracer, group, flowID) - Creates 'gateway.dispatch' span\n   - StartScaleSpan(ctx, tracer, action, group) - Creates 'gateway.scale.*' spans\n   - StartClientSpan(ctx, tracer, group, endpoint) - Creates 'gateway.client.execute' span\n   - StartWorkerExecuteSpan(ctx, tracer, flowID, group) - Creates 'worker.execute' span\n   - TracingFields(ctx, group) - Extracts request_id, trace_id, group from context\n   - MergeFields(base, extra) - Merges field maps for logging\n\n2. Updated client.go:\n   - propagateTraceHeaders() now calls InjectTraceContext() for W3C compliant propagation\n   - Removed manual traceparent header construction\n\n3. Updated dispatcher.go:\n   - Added tracer field and SetTracer() method\n   - Added NewDispatcherWithTracing() constructor\n   - Dispatch() now starts 'gateway.dispatch' span with group, flow_id attributes\n   - Log lines now include group via TracingFields() helper\n   - Span records error details on failure\n\n4. Updated scaler.go:\n   - Added tracer field to Scaler and ScalerConfig\n   - EnsureReady() starts 'gateway.scale.ensure_ready' span with scaling_mode attribute\n   - ScaleUp() starts 'gateway.scale.up' span with current/target replicas\n   - ScaleDown() starts 'gateway.scale.down' span with scaling_mode attribute\n\n5. Updated handler.go:\n   - Extracts trace context from headers using otel.GetTextMapPropagator().Extract()\n   - Creates 'worker.execute' span with flow_id, group, request_id attributes\n   - Sets up RequestScope in context for proper trace ID propagation\n   - Prefers OTel trace ID over header trace ID when both present\n\n6. Updated worker.go:\n   - Added Tracer() getter method to expose tracer for handler\n\n7. Created comprehensive tests in tracing_test.go:\n   - TestInjectTraceContext_WithOTelContext - Verifies traceparent and X-Trace-Id headers\n   - TestInjectTraceContext_WithRequestScope - Verifies custom headers from scope\n   - TestExtractTraceContext_WithTraceparent - Verifies trace ID extraction\n   - TestStartDispatchSpan - Verifies span name and attributes\n   - TestTracingFields - Verifies field extraction from context\n   - TestMergeFields - Verifies field merging behavior"
+}

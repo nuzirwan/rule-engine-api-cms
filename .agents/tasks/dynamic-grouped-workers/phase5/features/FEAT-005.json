@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-005",
+  "type": "docs",
+  "description": "Create runbook documentation for dynamic workers operations. Create docs/runbook-dynamic-workers.md covering: worker not starting troubleshooting, worker crash loop debugging, high latency diagnosis, config not reloading fixes, circuit breaker recovery, scale-to-zero issues. Include diagnostic commands, metrics to check, and resolution steps.",
+  "status": "completed",
+  "steps": [
+    "Create docs/runbook-dynamic-workers.md with structured runbook format",
+    "Add section '## Overview' explaining the dynamic workers architecture briefly",
+    "Add section '## Quick Reference' with key metrics, endpoints, and commands",
+    "Add section '## Worker Not Starting' with: symptoms (pod stuck in Pending/ContainerCreating), diagnostic steps (kubectl describe pod, check events, check resource limits), common causes (image pull failure, secret not found, insufficient resources), resolution steps",
+    "Add section '## Worker Crash Loop' with: symptoms (CrashLoopBackOff status), diagnostic steps (kubectl logs, check liveness probe, check CONFIG_DSN), common causes (invalid config DSN, missing secrets, OOM), resolution steps",
+    "Add section '## High Latency' with: symptoms (p99 > SLO), metrics to check (gateway_request_duration_seconds, worker_request_duration_seconds, gateway_cold_start_duration_seconds), diagnostic steps (check if cold starts, check connection latency, check CPU throttling), resolution steps",
+    "Add section '## Config Not Reloading' with: symptoms (worker_config_version stale, worker_reload_total{status=error} increasing), diagnostic steps (check version endpoint, check reload logs), common causes (network to gateway, parsing errors), resolution steps",
+    "Add section '## Circuit Breaker Open' with: symptoms (gateway_circuit_breaker_state == 1, 503 responses), diagnostic steps (check worker health, check error logs), recovery steps (wait for half-open probe, manual restart if needed), prevention (tune thresholds)",
+    "Add section '## Scale-to-Zero Issues' with: symptoms (requests failing during cold start, gateway_cold_start_duration_seconds > timeout), diagnostic steps (check KEDA ScaledObject, check Prometheus metrics), common causes (KEDA misconfiguration, slow image pull, slow startup), resolution steps (pre-warm, tune timeout, optimize startup)",
+    "Add section '## Useful Commands' with kubectl, curl, and prometheus query examples",
+    "Add section '## Alert Response' mapping each alert rule to its runbook section"
+  ],
+  "acceptance_criteria": [
+    "docs/runbook-dynamic-workers.md exists and is well-formatted markdown",
+    "Runbook covers all six required troubleshooting scenarios",
+    "Each section includes symptoms, diagnostic steps, and resolution steps",
+    "Commands and queries are specific to the actual metric names used in the codebase"
+  ],
+  "verification": [
+    "test -f /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/docs/runbook-dynamic-workers.md && echo 'Runbook exists'",
+    "grep -c '## ' /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/docs/runbook-dynamic-workers.md"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

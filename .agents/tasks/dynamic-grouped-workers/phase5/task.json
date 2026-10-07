@@ -1,0 +1,7 @@
+{
+  "task_id": "task-phase5-observability-hardening",
+  "task_description": "Implement Phase 5 — Observability & Hardening for the dynamic grouped workers system: add comprehensive metrics, distributed tracing, request queueing, alerting rules, Grafana dashboards, security hardening, network policies, structured logging, and runbook documentation.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
+  "blocked_reason": null
+}

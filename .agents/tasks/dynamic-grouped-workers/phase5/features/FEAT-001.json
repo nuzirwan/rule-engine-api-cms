@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Enhance gateway and worker metrics with all Phase 5 observability counters/gauges/histograms. Adds gateway_requests_total, gateway_request_duration_seconds, gateway_worker_health, gateway_circuit_breaker_state, gateway_cold_start_duration_seconds to GatewayMetrics. Creates new WorkerMetrics in internal/worker/metrics.go with worker_requests_total, worker_request_duration_seconds, worker_config_version, worker_flows_loaded, worker_jdms_loaded, worker_connections_active, worker_reload_total. Wires metrics into existing handler and reload code.",
+  "status": "completed",
+  "steps": [
+    "Read engine/internal/gateway/metrics.go to understand existing GatewayMetrics structure (dispatchTotal, dispatchDuration, workerReady, workerReplicas, scaleOperations)",
+    "Enhance GatewayMetrics: add requestsTotal *prometheus.CounterVec (labels: group, method, path, status), requestDuration *prometheus.HistogramVec (labels: group), workerHealth *prometheus.GaugeVec (labels: group, worker_id), circuitBreakerState *prometheus.GaugeVec (labels: group), coldStartDuration *prometheus.HistogramVec (labels: group)",
+    "Add methods ObserveRequest(group, method, path, status string, duration time.Duration), SetWorkerHealth(group, workerID string, healthy bool), SetCircuitBreakerState(group string, state int), ObserveColdStart(group string, duration time.Duration) to GatewayMetrics",
+    "Create engine/internal/worker/metrics.go with WorkerMetrics struct containing: requestsTotal (group, flow_id, status), requestDuration (group, flow_id), configVersion (group), flowsLoaded (group), jdmsLoaded (group), connectionsActive (group, connection), reloadTotal (group, status)",
+    "Add methods ObserveRequest(group, flowID, status string, duration time.Duration), SetConfigVersion(group string, version int), SetFlowsLoaded(group string, count int), SetJDMsLoaded(group string, count int), SetConnectionsActive(group, connection string, active int), IncReload(group, status string) to WorkerMetrics",
+    "Update engine/internal/worker/worker.go LoadGroup() to call metrics.SetConfigVersion, SetFlowsLoaded, SetJDMsLoaded, SetConnectionsActive after successful load",
+    "Update engine/internal/worker/handler.go handleExecute() to call metrics.ObserveRequest after flow execution",
+    "Update engine/internal/worker/reload.go to call metrics.IncReload on reload success/failure",
+    "Update engine/internal/gateway/scaler.go waitForReady() to track cold start duration: record start time when replicas==0, observe duration when first pod becomes ready",
+    "Update engine/internal/gateway/client.go to expose circuit breaker state to metrics via callback or periodic sync",
+    "Create engine/internal/gateway/metrics_test.go with tests for new metrics methods",
+    "Create engine/internal/worker/metrics_test.go with tests for WorkerMetrics"
+  ],
+  "acceptance_criteria": [
+    "go build ./cmd/engine && go build ./cmd/worker compiles without errors",
+    "go test ./internal/gateway/... passes including new metrics tests",
+    "go test ./internal/worker/... passes including new metrics tests",
+    "Starting the gateway and curling /metrics shows gateway_requests_total, gateway_request_duration_seconds, gateway_worker_health, gateway_circuit_breaker_state, gateway_cold_start_duration_seconds metrics",
+    "Worker /metrics shows worker_requests_total, worker_request_duration_seconds, worker_config_version, worker_flows_loaded, worker_jdms_loaded, worker_connections_active, worker_reload_total metrics"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go build ./cmd/engine && go build ./cmd/worker",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go test ./internal/gateway/... -v",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go test ./internal/worker/... -v"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented Phase 5 metrics enhancement:\n\n1. Enhanced GatewayMetrics with 5 new metrics:\n   - gateway_requests_total{group,method,path,status} - HTTP request counter\n   - gateway_request_duration_seconds{group} - HTTP request latency histogram\n   - gateway_worker_health{group,worker_id} - Individual worker health gauge\n   - gateway_circuit_breaker_state{group} - Circuit breaker state (0=closed,1=half-open,2=open)\n   - gateway_cold_start_duration_seconds{group} - Cold start latency histogram\n\n2. Created WorkerMetrics in internal/worker/metrics.go with 7 metrics:\n   - worker_requests_total{group,flow_id,status}\n   - worker_request_duration_seconds{group,flow_id}\n   - worker_config_version{group}\n   - worker_flows_loaded{group}\n   - worker_jdms_loaded{group}\n   - worker_connections_active{group,connection}\n   - worker_reload_total{group,status}\n\n3. Wired metrics into runtime:\n   - Worker.LoadGroup() emits config/flow/jdm/connection metrics\n   - Handler.handleExecute() emits request metrics with duration\n   - Reloader.reload() emits reload success/failure counter\n   - Scaler.ensureDynamicDeployment() tracks cold start duration\n   - WorkerClient.Execute() updates circuit breaker state metric\n\n4. Added WorkerClient methods for breaker state:\n   - GetBreakerStates() for diagnostics\n   - SyncBreakerStateMetrics() for periodic sync\n   - SetMetrics() to inject metrics after construction\n\n5. Added tests for all new metrics in both packages."
+}

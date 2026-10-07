@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Implement request queueing during cold start to prevent request storms during scale-up. Create engine/internal/gateway/queue.go with RequestQueue that queues requests when workers are scaling from 0. Per-group channels with configurable maxSize and timeout. Enqueue() blocks until worker ready or timeout. Drain() called when worker becomes ready. Integrate with Dispatcher.",
+  "status": "completed",
+  "steps": [
+    "Create engine/internal/gateway/queue.go with RequestQueue struct containing: queues map[string]chan *queuedRequest (per-group), maxSize int, timeout time.Duration, mu sync.RWMutex",
+    "Define queuedRequest struct with ctx context.Context, flowID string, input map[string]any, responseCh chan *queueResponse",
+    "Define queueResponse struct with response *worker.ExecuteResponse, err error",
+    "Implement NewRequestQueue(maxSize int, timeout time.Duration) *RequestQueue",
+    "Implement Enqueue(ctx context.Context, group string, flowID string, input map[string]any) (*worker.ExecuteResponse, error) - creates channel, sends to queue, waits for response or timeout",
+    "Implement Drain(group string, dispatch func(flowID string, input map[string]any) (*worker.ExecuteResponse, error)) - drains all queued requests by calling dispatch for each",
+    "Implement IsQueueing(group string) bool - returns true if group has queued requests",
+    "Implement QueueLength(group string) int - returns number of queued requests for metrics",
+    "Update engine/internal/gateway/dispatcher.go: add queue *RequestQueue field, initialize in NewDispatcherWithScaler",
+    "Update Dispatch(): if worker not ready and scaler starts scale-up (replicas was 0), enqueue request instead of waiting synchronously",
+    "Update engine/internal/gateway/scaler.go waitForReady(): after worker becomes ready, call queue.Drain(group, dispatcher.forward) to process queued requests",
+    "Add gateway_queue_length{group} gauge and gateway_queue_timeout_total{group} counter to GatewayMetrics",
+    "Create engine/internal/gateway/queue_test.go with tests: enqueue/dequeue, timeout, drain, concurrent access"
+  ],
+  "acceptance_criteria": [
+    "go build ./cmd/engine && go build ./cmd/worker compiles without errors",
+    "go test ./internal/gateway/... passes including queue tests",
+    "RequestQueue correctly queues requests during cold start",
+    "Queued requests are drained and processed when worker becomes ready",
+    "Requests timeout correctly if worker never becomes ready",
+    "gateway_queue_length metric shows queued request count"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go build ./cmd/engine",
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5/engine && go test ./internal/gateway/... -v -run Queue"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented request queueing during cold start:\n\n1. Created engine/internal/gateway/queue.go with:\n   - RequestQueue struct with per-group channels, configurable maxSize and timeout\n   - queuedRequest struct holding ctx, flowID, input, and responseCh for async response\n   - queueResponse struct carrying ExecuteResponse and error\n   - NewRequestQueue(maxSize, timeout) constructor with sensible defaults (100 requests, 30s)\n   - SetMetrics() to inject metrics collector\n   - Enqueue() blocks until response received, timeout, or context cancelled\n   - Drain() processes all queued requests using provided dispatch function\n   - IsQueueing() and QueueLength() for status checks\n   - ErrQueueFull and ErrQueueTimeout error sentinels\n\n2. Updated engine/internal/gateway/dispatcher.go:\n   - Added queue *RequestQueue field to Dispatcher struct\n   - Updated NewDispatcherWithScaler() and NewDispatcherWithTracing() to create and wire queue\n   - Updated Dispatch() to detect cold start (replicas == 0) and enqueue requests\n   - Added isColdStart() helper to check deployment status via scaler\n   - Added GetQueue() and SetQueue() for testing integration\n   - Extracted forward() method for request execution (reused by queue drain)\n\n3. Updated engine/internal/gateway/scaler.go:\n   - Added queue and dispatchFunc fields to Scaler struct\n   - Added SetDispatchFunc() and SetQueue() setter methods\n   - Updated waitForReady() to call drainQueue() after worker becomes ready\n   - Added drainQueue() helper that wraps dispatch function with group closure\n\n4. Updated engine/internal/gateway/metrics.go:\n   - Added gateway_queue_length{group} gauge to track queued requests\n   - Added gateway_queue_timeout_total{group} counter for timeout tracking\n   - Added SetQueueLength() and IncQueueTimeout() methods\n\n5. Created comprehensive tests in queue_test.go:\n   - TestNewRequestQueue - verifies defaults and custom config\n   - TestRequestQueue_EnqueueAndDrain - happy path enqueue/drain cycle\n   - TestRequestQueue_EnqueueTimeout - verifies timeout behavior\n   - TestRequestQueue_EnqueueContextCancelled - verifies cancellation handling\n   - TestRequestQueue_QueueFull - verifies capacity limits\n   - TestRequestQueue_DrainSkipsCancelledRequests - cancelled requests are skipped\n   - TestRequestQueue_DrainWithError - errors propagate correctly\n   - TestRequestQueue_DrainEmptyQueue - empty/nonexistent queues handled\n   - TestRequestQueue_ConcurrentAccess - thread safety verification\n   - TestRequestQueue_QueueLengthAndIsQueueing - status methods\n   - TestRequestQueue_MultipleGroups - per-group isolation\n\n6. Added metrics tests in metrics_test.go:\n   - TestGatewayMetrics_SetQueueLength\n   - TestGatewayMetrics_IncQueueTimeout\n   - Updated TestNewGatewayMetrics to verify queue metrics initialization"
+}

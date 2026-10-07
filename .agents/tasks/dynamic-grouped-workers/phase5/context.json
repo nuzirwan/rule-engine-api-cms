@@ -1,0 +1,41 @@
+{
+  "project_type": "Go rules engine with gateway/worker architecture, deployed on Kubernetes",
+  "language": "Go 1.26",
+  "build_system": "Go modules (go.mod in engine/), Makefile at root",
+  "test_framework": "go test with table-driven tests",
+  "build_command": "go build ./cmd/engine && go build ./cmd/worker",
+  "test_command": "go test ./internal/gateway/... ./internal/worker/...",
+  "verification_instructions": "1. Run 'go build ./cmd/engine && go build ./cmd/worker' to verify compilation. 2. Run 'go test ./internal/gateway/... ./internal/worker/...' for unit tests. 3. Run 'kubectl apply --dry-run=client -f deploy/' to validate YAML files.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "All work in worktree at /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-workers-phase5. Go module root is engine/ subdirectory. Use absolute paths. Commit locally, never push.",
+  "contribution_requirements": "Record verification results in /home/nuzirwan/project/rule-engine-api/.agents/tasks/dynamic-grouped-workers/phase5/verification.md. No breaking changes to existing Phase 4 metrics.",
+  "key_patterns": {
+    "metrics": "Use prometheus/client_golang with NewCounterVec, NewHistogramVec, NewGaugeVec. Register on prometheus.Registerer. See internal/gateway/metrics.go and internal/observ/metrics.go for patterns.",
+    "tracing": "OTEL is already set up in internal/observ/tracer.go. Use otelTracer.StartSpan(). Use TraceIDFromContext() for trace ID extraction. Propagate via X-Request-Id, X-Trace-Id, traceparent headers.",
+    "logging": "Use observ.Logger.Emit(ctx, level, label, fields). JSON format. Include request_id, trace_id, group in all log lines. See internal/observ/logger.go.",
+    "templates": "K8s templates in internal/gateway/templates/*.yaml.tmpl using text/template and //go:embed. See manifests.go.",
+    "circuit_breaker": "Uses github.com/sony/gobreaker/v2. See internal/gateway/circuit.go."
+  },
+  "relevant_files": [
+    "engine/internal/gateway/metrics.go - Phase 4 gateway metrics to enhance",
+    "engine/internal/gateway/dispatcher.go - Dispatch flow, needs tracing spans",
+    "engine/internal/gateway/scaler.go - Scale operations, needs cold start timing",
+    "engine/internal/gateway/client.go - Worker HTTP client, needs trace propagation",
+    "engine/internal/gateway/circuit.go - Circuit breaker, expose state to metrics",
+    "engine/internal/worker/worker.go - Worker runtime, needs metrics",
+    "engine/internal/worker/handler.go - Worker HTTP handler, needs trace extraction",
+    "engine/internal/observ/tracer.go - OTEL tracer implementation",
+    "engine/internal/observ/logger.go - Structured logging",
+    "engine/internal/observ/fields.go - Canonical field names",
+    "engine/internal/gateway/templates/deployment.yaml.tmpl - Add securityContext"
+  ],
+  "directory_structure": {
+    "engine/internal/gateway/": "Gateway dispatcher, registry, scaler, metrics, manifests",
+    "engine/internal/worker/": "Worker runtime, handler, reload, types",
+    "engine/internal/observ/": "Observability: tracer, logger, metrics, redactor",
+    "engine/cmd/engine/": "Main engine binary",
+    "engine/cmd/worker/": "Worker binary (main.go)",
+    "docs/": "Documentation including MONITORING.md",
+    "deploy/": "K8s deployment manifests (to be created)"
+  }
+}
