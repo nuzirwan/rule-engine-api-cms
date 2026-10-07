@@ -26,6 +26,25 @@ export default {
           policies: [],
         },
       },
+      // --- Validate/Dry-run routes (candidate-mode, inline flow tree) ---
+      {
+        // POST /validate — validate a candidate flow tree before saving.
+        method: 'POST',
+        path: '/validate',
+        handler: 'validate.validate',
+        config: {
+          policies: [],
+        },
+      },
+      {
+        // POST /dry-run — dry-run a candidate flow tree with test input.
+        method: 'POST',
+        path: '/dry-run',
+        handler: 'validate.dryRun',
+        config: {
+          policies: [],
+        },
+      },
       // --- Sync routes (FEAT-002) ---
       {
         // GET /sync/status — compare CMS vs engine, return diff status.

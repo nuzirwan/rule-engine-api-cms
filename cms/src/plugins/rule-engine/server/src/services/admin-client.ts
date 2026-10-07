@@ -12,6 +12,7 @@
 import type {
   AuditObjectType,
   AuditTrailResponse,
+  CandidateFlowBody,
   CreateConnectionRequest,
   CreateConnectionResponse,
   CreateFlowRequest,
@@ -21,7 +22,10 @@ import type {
   CreateScheduleRequest,
   CreateWebhookRequest,
   CreateWebhookResponse,
+  DryRunFlowCandidateRequest,
   DryRunFlowRequest,
+  DryRunFlowResponse,
+  DryRunInput,
   EngineGroup,
   GetConnectionResponse,
   GetFlowResponse,
@@ -43,6 +47,7 @@ import type {
   TriggerScheduleRunResponse,
   UpdateScheduleRequest,
   UpdateWebhookRequest,
+  ValidateFlowCandidateRequest,
   ValidateFlowRequest,
   ValidateFlowResponse,
   WebhookLogsResponse,
@@ -156,6 +161,41 @@ export class AdminClient {
   validateFlow(flowId: string, version: number): Promise<ValidateFlowResponse> {
     const body: ValidateFlowRequest = { env: this.env, flowId, version };
     return this.request<ValidateFlowResponse>('POST', '/admin/flows/validate', body);
+  }
+
+  /**
+   * POST /admin/flows/validate — CANDIDATE mode: body `{ env, flow: { flowId, method, path, tree, fixtures? } }`.
+   * Validates an inline flow tree without requiring it to be stored first.
+   */
+  validateFlowCandidate(flow: Omit<CandidateFlowBody, 'env'>): Promise<ValidateFlowResponse> {
+    const body: ValidateFlowCandidateRequest = { env: this.env, flow };
+    return this.request<ValidateFlowResponse>('POST', '/admin/flows/validate', body);
+  }
+
+  /**
+   * POST /admin/flows/dry-run — CANDIDATE mode: body `{ env, flow: { ... }, input, mocks? }`.
+   * Runs an inline flow tree with test input, writes suppressed. Returns trace and response.
+   */
+  dryRunFlowCandidate(req: {
+    flowId: string;
+    method: string;
+    path: string;
+    tree: CandidateFlowBody['tree'];
+    input: DryRunInput;
+    mocks?: Record<string, Record<string, unknown>>;
+  }): Promise<DryRunFlowResponse> {
+    const body: DryRunFlowCandidateRequest = {
+      env: this.env,
+      flow: {
+        flowId: req.flowId,
+        method: req.method,
+        path: req.path,
+        tree: req.tree,
+      },
+      input: req.input,
+      mocks: req.mocks,
+    };
+    return this.request<DryRunFlowResponse>('POST', '/admin/flows/dry-run', body);
   }
 
   /** POST /admin/flows/{id}/publish — advance the active pointer. 422 if un-validated. */

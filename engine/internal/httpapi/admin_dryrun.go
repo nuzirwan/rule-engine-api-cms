@@ -8,14 +8,15 @@ import (
 	"nzr-rules-engine/internal/observ"
 )
 
-// dryRunRequest is the wire shape for POST /admin/flows/dry-run. version is
-// optional (defaults to the active version); mocks is optional (omitted => reads
-// hit real sources via deps.Conns, writes always suppressed). Writes are ALWAYS
-// suppressed under dry-run (AC-14).
+// dryRunRequest is the wire shape for POST /admin/flows/dry-run. Mode is
+// selected by the fields: stored mode = flowId + positive version (or
+// input.method + input.path to resolve active); candidate mode = inline flow
+// object. Writes are ALWAYS suppressed under dry-run (AC-14).
 type dryRunRequest struct {
 	Env     string                    `json:"env,omitempty"`
 	FlowID  string                    `json:"flowId,omitempty"`
 	Version int                       `json:"version,omitempty"`
+	Flow    *candidateFlowBody        `json:"flow,omitempty"`
 	Input   dryRunInput               `json:"input"`
 	Mocks   map[string]map[string]any `json:"mocks,omitempty"`
 }
@@ -33,6 +34,9 @@ type dryRunInput struct {
 // stitched response. It ALWAYS returns 200 with {trace, response, errors[]} on a
 // result; a flow error is summarized in errors[] (dry-run is a debugger). A bad
 // request shape (no resolvable flow) is a 400 (§2.7).
+//
+// Mode selection: candidate mode = inline flow object; stored mode = flowId +
+// positive version (or input.method + input.path to resolve active).
 func (a *Admin) dryRunFlow(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStore(w) {
 		return
@@ -48,19 +52,38 @@ func (a *Admin) dryRunFlow(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Resolve the flow version: a positive version loads that exact version; else
-	// default to the active version. Both need an identifier to resolve against.
+	// Resolve the flow: candidate mode (inline flow object) or stored mode
+	// (flowId+version or input.method+path to lookup).
 	var (
-		fv  config.FlowVersion
-		err error
+		tree   flow.Node
+		flowID string
+		ver    int
+		err    error
 	)
 	switch {
+	case req.Flow != nil:
+		// Candidate mode: use inline flow object
+		tree = req.Flow.Tree
+		flowID = req.Flow.FlowID
+		ver = 0 // candidate has no version
 	case req.FlowID != "" && req.Version > 0:
+		var fv config.FlowVersion
 		fv, err = a.store.GetFlowVersion(ctx, a.env, req.FlowID, req.Version)
+		if err == nil {
+			tree = fv.Tree
+			flowID = fv.FlowID
+			ver = fv.Version
+		}
 	case req.Input.Method != "" && req.Input.Path != "":
+		var fv config.FlowVersion
 		fv, err = a.store.ActiveFlow(ctx, a.env, req.Input.Method, req.Input.Path)
+		if err == nil {
+			tree = fv.Tree
+			flowID = fv.FlowID
+			ver = fv.Version
+		}
 	default:
-		writeError(w, http.StatusBadRequest, "invalid request: provide flowId+version or input.method+input.path")
+		writeError(w, http.StatusBadRequest, "invalid request: provide flow object, flowId+version, or input.method+input.path")
 		return
 	}
 	if err != nil {
@@ -97,8 +120,7 @@ func (a *Admin) dryRunFlow(w http.ResponseWriter, r *http.Request) {
 		Log:    a.deps.Log,
 	}
 
-	tree := fv.Tree
-	runErr := a.interp.Run(runCtx, &tree, flow.Version{FlowID: fv.FlowID, Version: fv.Version}, c, deps)
+	runErr := a.interp.Run(runCtx, &tree, flow.Version{FlowID: flowID, Version: ver}, c, deps)
 
 	rec := collector.Result(runCtx, true)
 	errsOut := []string{}

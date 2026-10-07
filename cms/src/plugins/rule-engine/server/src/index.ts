@@ -18,6 +18,7 @@ import environmentController from './controllers/environment';
 import flowController from './controllers/flow';
 import templateController from './controllers/template';
 import entityPublishController from './controllers/entity-publish';
+import validateController from './controllers/validate';
 import routes from './routes';
 
 const PLUGIN_ID = 'rule-engine';
@@ -41,6 +42,7 @@ export default {
     flow: flowController,
     template: templateController,
     'entity-publish': entityPublishController,
+    validate: validateController,
   },
 
   routes,

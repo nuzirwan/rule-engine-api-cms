@@ -38,8 +38,9 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Button, Field, Flex, Textarea } from '@strapi/design-system';
-import { Upload, Download } from '@strapi/icons';
+import { Box, Button, Field, Flex, Textarea, Modal } from '@strapi/design-system';
+import { Upload, Download, Check, Play } from '@strapi/icons';
+import { useFetchClient } from '@strapi/admin/strapi-admin';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
@@ -321,6 +322,27 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
   const [specDraft, setSpecDraft] = React.useState<string>('');
   const [specError, setSpecError] = React.useState<string | null>(null);
   const [importError, setImportError] = React.useState<string | null>(null);
+
+  // Validate/Dry-run state
+  const { post } = useFetchClient();
+  const [validateState, setValidateState] = React.useState<{
+    loading: boolean;
+    result: { ok: boolean; structural: unknown[]; fixtures: unknown[] } | null;
+    error: string | null;
+  }>({ loading: false, result: null, error: null });
+  const [dryRunState, setDryRunState] = React.useState<{
+    loading: boolean;
+    result: { trace: unknown[]; response: unknown; errors: string[] } | null;
+    error: string | null;
+  }>({ loading: false, result: null, error: null });
+  const [showDryRunModal, setShowDryRunModal] = React.useState(false);
+  const [dryRunInput, setDryRunInput] = React.useState<string>(JSON.stringify({
+    method: 'GET',
+    path: '/',
+    params: {},
+    body: {},
+    headers: {}
+  }, null, 2));
 
   // File input ref for import functionality
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -626,6 +648,123 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     [emit]
   );
 
+  // Validate: call the validate endpoint with the current canvas tree.
+  const handleValidate = React.useCallback(async () => {
+    // Build the current tree from canvas
+    const graph: CanvasGraph = {
+      nodes: nodes.map(fromFlowNode),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        branchKey: typeof e.label === 'string' ? e.label : undefined,
+      })),
+    };
+
+    let tree: EngineNode;
+    try {
+      const result = canvasToTree(graph);
+      tree = result.tree;
+    } catch (err) {
+      setValidateState({
+        loading: false,
+        result: null,
+        error: 'Cannot validate: flow must have a trigger root node connected to other nodes',
+      });
+      return;
+    }
+
+    setValidateState({ loading: true, result: null, error: null });
+    try {
+      const response = await post('/rule-engine/validate', {
+        body: {
+          flowId: 'canvas-preview',
+          method: 'GET',
+          path: '/preview',
+          tree,
+        },
+      });
+      setValidateState({
+        loading: false,
+        result: response.data as { ok: boolean; structural: unknown[]; fixtures: unknown[] },
+        error: null,
+      });
+    } catch (err) {
+      const msg = (err as Error)?.message || 'Validation request failed';
+      setValidateState({ loading: false, result: null, error: msg });
+    }
+  }, [nodes, edges, post]);
+
+  // Dry Run: open the modal for input, then call the dry-run endpoint.
+  const handleDryRunOpen = React.useCallback(() => {
+    setShowDryRunModal(true);
+    setDryRunState({ loading: false, result: null, error: null });
+  }, []);
+
+  const handleDryRunClose = React.useCallback(() => {
+    setShowDryRunModal(false);
+  }, []);
+
+  const handleDryRunExecute = React.useCallback(async () => {
+    // Build the current tree from canvas
+    const graph: CanvasGraph = {
+      nodes: nodes.map(fromFlowNode),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        branchKey: typeof e.label === 'string' ? e.label : undefined,
+      })),
+    };
+
+    let tree: EngineNode;
+    try {
+      const result = canvasToTree(graph);
+      tree = result.tree;
+    } catch (err) {
+      setDryRunState({
+        loading: false,
+        result: null,
+        error: 'Cannot dry-run: flow must have a trigger root node connected to other nodes',
+      });
+      return;
+    }
+
+    // Parse the input JSON
+    let inputObj: unknown;
+    try {
+      inputObj = JSON.parse(dryRunInput);
+    } catch (err) {
+      setDryRunState({
+        loading: false,
+        result: null,
+        error: 'Invalid JSON in test input: ' + (err as Error).message,
+      });
+      return;
+    }
+
+    setDryRunState({ loading: true, result: null, error: null });
+    try {
+      const response = await post('/rule-engine/dry-run', {
+        body: {
+          flowId: 'canvas-preview',
+          method: 'GET',
+          path: '/preview',
+          tree,
+          input: inputObj,
+        },
+      });
+      setDryRunState({
+        loading: false,
+        result: response.data as { trace: unknown[]; response: unknown; errors: string[] },
+        error: null,
+      });
+    } catch (err) {
+      const msg = (err as Error)?.message || 'Dry-run request failed';
+      setDryRunState({ loading: false, result: null, error: msg });
+    }
+  }, [nodes, edges, dryRunInput, post]);
+
   const label = intlLabel?.defaultMessage ?? name;
 
   if (!parsed.ok) {
@@ -757,6 +896,73 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
               style={{ display: 'none' }}
             />
 
+            {/* Validate / Dry Run section */}
+            <Box paddingTop={2} style={{ borderTop: '1px solid #4a4a6a' }}>
+              <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
+                Test Flow
+              </div>
+            </Box>
+            <Flex direction="row" gap={2}>
+              <Button
+                variant="secondary"
+                size="S"
+                startIcon={<Check />}
+                onClick={handleValidate}
+                disabled={disabled || validateState.loading}
+                loading={validateState.loading}
+              >
+                Validate
+              </Button>
+              <Button
+                variant="secondary"
+                size="S"
+                startIcon={<Play />}
+                onClick={handleDryRunOpen}
+                disabled={disabled}
+              >
+                Dry Run
+              </Button>
+            </Flex>
+            {/* Validation result display */}
+            {validateState.error && (
+              <div style={{ color: '#ee5e52', fontSize: 12 }}>
+                {validateState.error}
+              </div>
+            )}
+            {validateState.result && (
+              <div style={{ fontSize: 12 }}>
+                {validateState.result.ok ? (
+                  <div style={{ color: '#5cb176' }}>✓ Flow is valid</div>
+                ) : (
+                  <div style={{ color: '#ee5e52' }}>
+                    <div>✗ Validation failed</div>
+                    {validateState.result.structural.length > 0 && (
+                      <div style={{ marginTop: 4 }}>
+                        <strong>Structural issues:</strong>
+                        <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                          {validateState.result.structural.map((issue, i) => (
+                            <li key={i}>{JSON.stringify(issue)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {validateState.result.fixtures.some((f: unknown) => !(f as { passed?: boolean }).passed) && (
+                      <div style={{ marginTop: 4 }}>
+                        <strong>Fixture failures:</strong>
+                        <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                          {validateState.result.fixtures
+                            .filter((f: unknown) => !(f as { passed?: boolean }).passed)
+                            .map((f: unknown, i) => (
+                              <li key={i}>{JSON.stringify(f)}</li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <Box paddingTop={2} style={{ borderTop: '1px solid #4a4a6a' }}>
               <div style={{ color: '#ffffff', fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>
                 Palette (drag or click)
@@ -800,6 +1006,102 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
           </Flex>
         </Box>
       </Flex>
+
+      {/* Dry Run Modal */}
+      <Modal.Root open={showDryRunModal} onOpenChange={(open) => !open && handleDryRunClose()}>
+        <Modal.Content>
+          <Modal.Header>
+            <Modal.Title>Dry Run Flow</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <Flex direction="column" gap={4}>
+              <div>
+                <div style={{ marginBottom: 8, fontWeight: 500 }}>Test Input (JSON)</div>
+                <Textarea
+                  name="dry-run-input"
+                  value={dryRunInput}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDryRunInput(e.currentTarget.value)}
+                  rows={8}
+                  style={{ fontFamily: 'monospace', fontSize: 12 }}
+                  placeholder={JSON.stringify({
+                    method: 'GET',
+                    path: '/',
+                    params: {},
+                    body: {},
+                    headers: {}
+                  }, null, 2)}
+                />
+                <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>
+                  Provide method, path, params, body, and headers as the test input.
+                </div>
+              </div>
+
+              {dryRunState.error && (
+                <div style={{ color: '#ee5e52', fontSize: 12 }}>
+                  {dryRunState.error}
+                </div>
+              )}
+
+              {dryRunState.result && (
+                <div style={{ fontSize: 12 }}>
+                  {dryRunState.result.errors.length > 0 ? (
+                    <div style={{ color: '#ee5e52', marginBottom: 8 }}>
+                      <strong>Errors:</strong>
+                      <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                        {dryRunState.result.errors.map((err, i) => (
+                          <li key={i}>{err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <div style={{ color: '#5cb176', marginBottom: 8 }}>✓ Flow executed successfully</div>
+                  )}
+
+                  <div style={{ marginBottom: 8 }}>
+                    <strong>Response:</strong>
+                    <pre style={{
+                      background: '#f0f0f0',
+                      padding: 8,
+                      borderRadius: 4,
+                      fontSize: 11,
+                      overflow: 'auto',
+                      maxHeight: 150,
+                    }}>
+                      {JSON.stringify(dryRunState.result.response, null, 2)}
+                    </pre>
+                  </div>
+
+                  <div>
+                    <strong>Execution Trace ({dryRunState.result.trace.length} steps):</strong>
+                    <pre style={{
+                      background: '#f0f0f0',
+                      padding: 8,
+                      borderRadius: 4,
+                      fontSize: 11,
+                      overflow: 'auto',
+                      maxHeight: 200,
+                    }}>
+                      {JSON.stringify(dryRunState.result.trace, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </Flex>
+          </Modal.Body>
+          <Modal.Footer>
+            <Modal.Close>
+              <Button variant="tertiary">Close</Button>
+            </Modal.Close>
+            <Button
+              onClick={handleDryRunExecute}
+              disabled={dryRunState.loading}
+              loading={dryRunState.loading}
+            >
+              Run
+            </Button>
+          </Modal.Footer>
+        </Modal.Content>
+      </Modal.Root>
     </Field.Root>
   );
 });

@@ -140,6 +140,49 @@ export interface DryRunFlowRequest {
 }
 
 // ----------------------------------------------------------------------------
+// Candidate-mode validate/dry-run (inline flow tree, no storage required)
+// ----------------------------------------------------------------------------
+
+/** Candidate flow body for inline validate/dry-run (no flowId+version lookup). */
+export interface CandidateFlowBody {
+  flowId: string;
+  method: string;
+  path: string;
+  tree: EngineNode;
+  fixtures?: EngineFixture[];
+}
+
+/** POST /admin/flows/validate body — CANDIDATE mode (inline flow object). */
+export interface ValidateFlowCandidateRequest {
+  env: string;
+  flow: CandidateFlowBody;
+}
+
+/** Input shape for dry-run: mirrors the data-plane edge request structure. */
+export interface DryRunInput {
+  method?: string;
+  path?: string;
+  params?: Record<string, unknown>;
+  body?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}
+
+/** POST /admin/flows/dry-run body — CANDIDATE mode (inline flow + input). */
+export interface DryRunFlowCandidateRequest {
+  env: string;
+  flow: CandidateFlowBody;
+  input: DryRunInput;
+  mocks?: Record<string, Record<string, unknown>>;
+}
+
+/** 200 from POST /admin/flows/dry-run. */
+export interface DryRunFlowResponse {
+  trace: unknown[];
+  response: unknown;
+  errors: string[];
+}
+
+// ----------------------------------------------------------------------------
 // Admin response bodies (keys as the handlers emit them)
 // ----------------------------------------------------------------------------
 
