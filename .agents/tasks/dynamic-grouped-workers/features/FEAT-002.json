@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Create database migration 0004_groups for all group-related tables: groups, group_connections junction table, group_audit, group_connections_audit, flow_group_audit, and ALTER flow_versions to add group_id FK. Seed a 'default' group that cannot be deleted.",
+  "status": "completed",
+  "steps": [
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/0004_groups.up.sql with: CREATE TABLE groups (id VARCHAR(64) PRIMARY KEY, name VARCHAR(128) NOT NULL, description TEXT, version INT NOT NULL DEFAULT 1, scaling_mode VARCHAR(16) NOT NULL DEFAULT 'dynamic', min_replicas INT NOT NULL DEFAULT 0, max_replicas INT NOT NULL DEFAULT 10, scale_down_delay_seconds INT NOT NULL DEFAULT 300, startup_timeout_seconds INT NOT NULL DEFAULT 30, cpu_request VARCHAR(16) DEFAULT '100m', cpu_limit VARCHAR(16) DEFAULT '500m', memory_request VARCHAR(16) DEFAULT '128Mi', memory_limit VARCHAR(16) DEFAULT '512Mi', enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()) with CHECK constraints for scaling_mode IN ('static','dynamic','ephemeral'), replicas, and static min check.",
+    "Add CREATE TABLE group_connections (group_id VARCHAR(64) NOT NULL REFERENCES groups(id) ON DELETE CASCADE, connection_key VARCHAR(64) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (group_id, connection_key)) with index on group_id.",
+    "Add CREATE TABLE group_audit (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), group_id VARCHAR(64) NOT NULL, operation VARCHAR(16) NOT NULL CHECK (operation IN ('INSERT','UPDATE','DELETE','ROLLBACK','AUTO_ROLLBACK','RESTORE')), old_data JSONB, new_data JSONB, changed_by VARCHAR(128) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reason TEXT, request_id VARCHAR(64)) with indexes on group_id and changed_at DESC.",
+    "Add CREATE TABLE group_connections_audit (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), group_id VARCHAR(64) NOT NULL, operation VARCHAR(16) NOT NULL CHECK (operation IN ('INSERT','DELETE','BULK_REPLACE')), connection_key VARCHAR(64), old_connections TEXT[], new_connections TEXT[], changed_by VARCHAR(128) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reason TEXT, request_id VARCHAR(64)) with indexes.",
+    "Add CREATE TABLE flow_group_audit (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), flow_id VARCHAR(64) NOT NULL, old_group VARCHAR(64), new_group VARCHAR(64), changed_by VARCHAR(128) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reason TEXT, request_id VARCHAR(64)) with indexes on flow_id and changed_at DESC.",
+    "Add ALTER TABLE flow_versions ADD COLUMN group_id VARCHAR(64) REFERENCES groups(id) ON DELETE RESTRICT with index idx_flow_versions_group.",
+    "Add INSERT into groups for 'default' group (id='default', name='Default', description='Default group for ungrouped flows', scaling_mode='dynamic', enabled=true).",
+    "Create /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/0004_groups.down.sql with: DROP TABLE in reverse order (flow_group_audit, group_connections_audit, group_audit, group_connections), ALTER TABLE flow_versions DROP COLUMN group_id, DROP TABLE groups.",
+    "Update /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine/migrations/migrations.go to embed the new migration files."
+  ],
+  "acceptance_criteria": [
+    "0004_groups.up.sql is valid SQL syntax (no parse errors)",
+    "0004_groups.down.sql correctly reverses all changes",
+    "groups table has version column for hot-reload detection",
+    "group_connections is a junction table (not JSONB array) per design",
+    "All audit tables capture full state including connections for rollback",
+    "flow_versions.group_id has ON DELETE RESTRICT (not CASCADE) per design",
+    "Default group is seeded with id='default'",
+    "migrations.go updated to include new files"
+  ],
+  "verification": [
+    "cd /home/nuzirwan/project/rule-engine-api/.worktrees/dynamic-grouped-workers-phase1/engine && go build ./..."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
