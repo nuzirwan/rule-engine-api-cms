@@ -207,7 +207,19 @@ func (s *GroupStore) Update(ctx context.Context, group *Group, changedBy, reason
         return fmt.Errorf("validation failed: %w", err)
     }
     
-    _, err := s.db.ExecContext(ctx, `
+    tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+    
+    // CRITICAL: Capture pre-mutation state BEFORE the update (includes connections)
+    oldData, err := s.getGroupAuditData(ctx, tx, group.ID)
+    if err != nil {
+        return fmt.Errorf("failed to capture pre-mutation state: %w", err)
+    }
+    
+    _, err = tx.ExecContext(ctx, `
         UPDATE groups SET 
             name = $2,
             scaling_mode = $3,
@@ -218,8 +230,26 @@ func (s *GroupStore) Update(ctx context.Context, group *Group, changedBy, reason
             updated_at = NOW()
         WHERE id = $1
     `, group.ID, group.Name, group.Scaling.Mode, group.Scaling.MinReplicas, group.Scaling.MaxReplicas)
+    if err != nil {
+        return err
+    }
     
-    return err
+    // Capture post-mutation state for audit
+    newData, err := s.getGroupAuditData(ctx, tx, group.ID)
+    if err != nil {
+        return fmt.Errorf("failed to capture post-mutation state: %w", err)
+    }
+    
+    // Record audit with both old and new state (including denormalized connections)
+    _, err = tx.ExecContext(ctx, `
+        INSERT INTO group_audit (group_id, operation, old_data, new_data, changed_by, reason, request_id)
+        VALUES ($1, 'UPDATE', $2, $3, $4, $5, $6)
+    `, group.ID, oldData, newData, changedBy, reason, ctx.Value("requestID"))
+    if err != nil {
+        return err
+    }
+    
+    return tx.Commit()
 }
 ```
 ```
@@ -812,6 +842,19 @@ flow_duration_seconds{group, flow_id}
 - CMS group content type in Strapi
 - Publish transform: CMS group → engine config
 
+**Phase 1 Scope Clarification:**
+
+Phase 1 is **data model only**. Gateway mode (routing to isolated workers) is NOT
+available until Phase 4 completes. During Phase 1:
+
+- Groups exist in the database and can be configured via Admin API or CMS
+- Flows can be assigned to groups (the `group_id` column is populated)
+- Audit trails are captured for all mutations
+- BUT: `dispatch.mode` remains `inline` — all flows run in the engine process
+- Gateway mode (workers) requires Phase 4 (`generate-manifests` CLI + K8s resources)
+
+This is intentional: the data model must be stable before K8s resources depend on it.
+
 **Database Schema:**
 
 ```sql
@@ -956,13 +999,15 @@ CREATE INDEX idx_group_connections_audit_changed_at ON group_connections_audit(c
       "relation": "manyToMany",
       "target": "api::connection.connection",
       "mappedBy": "groups"
-    },
-    "flows": {
-      "type": "relation",
-      "relation": "oneToMany",
-      "target": "api::flow.flow",
-      "mappedBy": "group"
     }
+    // NOTE: The "flows" relation is intentionally OMITTED from the group content type.
+    // Flow-to-group assignment is controlled via the flow's "group" relation (manyToOne),
+    // not by editing the group's flows list. This prevents confusion where CMS operators
+    // might expect adding a flow to a group's flows list would assign it (it wouldn't—
+    // the webhook transform ignores the group's flows field).
+    //
+    // To see which flows belong to a group in CMS, use a filtered view on the Flow
+    // content type instead of a relation on Group.
   }
 }
 ```
@@ -1371,7 +1416,7 @@ CREATE TABLE group_audit (
     reason          TEXT,                        -- Optional reason for change
     request_id      VARCHAR(64),                -- Correlation ID for tracing
     
-    CONSTRAINT chk_operation CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE'))
+    CONSTRAINT chk_operation CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE', 'ROLLBACK', 'AUTO_ROLLBACK', 'RESTORE'))
 );
 
 CREATE INDEX idx_group_audit_group_id ON group_audit(group_id);
@@ -1483,7 +1528,26 @@ func (s *GroupStore) Rollback(ctx context.Context, groupID, targetAuditID, reaso
         }
         
         // Restore connections junction table
-        if err := s.replaceGroupConnections(ctx, tx, groupID, auditData.Connections, changedBy, "ROLLBACK"); err != nil {
+        // Handle legacy audit records that may have nil connections
+        connections := auditData.Connections
+        if connections == nil {
+            // Fallback: fetch from group_connections_audit for closest timestamp
+            var fallbackConnections pq.StringArray
+            err := tx.QueryRowContext(ctx, `
+                SELECT old_connections FROM group_connections_audit
+                WHERE group_id = $1 AND changed_at <= (
+                    SELECT changed_at FROM group_audit WHERE id = $2
+                )
+                ORDER BY changed_at DESC
+                LIMIT 1
+            `, groupID, targetAuditID).Scan(&fallbackConnections)
+            if err != nil && err != sql.ErrNoRows {
+                return fmt.Errorf("failed to fetch legacy connections: %w", err)
+            }
+            connections = []string(fallbackConnections)
+        }
+        
+        if err := s.replaceGroupConnections(ctx, tx, groupID, connections, changedBy, "ROLLBACK"); err != nil {
             return err
         }
     }
@@ -1501,6 +1565,7 @@ func (s *GroupStore) Rollback(ctx context.Context, groupID, targetAuditID, reaso
 }
 
 // replaceGroupConnections atomically replaces all connections for a group
+// and increments group version to ensure workers detect the change
 func (s *GroupStore) replaceGroupConnections(ctx context.Context, tx *sql.Tx, groupID string, connections []string, changedBy, reason string) error {
     // Get current connections for audit
     var oldConnections []string
@@ -1515,6 +1580,11 @@ func (s *GroupStore) replaceGroupConnections(ctx context.Context, tx *sql.Tx, gr
             return err
         }
         oldConnections = append(oldConnections, key)
+    }
+    
+    // Skip if no change
+    if equalStringSlices(oldConnections, connections) {
+        return nil
     }
 
     // Delete existing connections
@@ -1533,6 +1603,17 @@ func (s *GroupStore) replaceGroupConnections(ctx context.Context, tx *sql.Tx, gr
             return err
         }
     }
+    
+    // CRITICAL: Increment group version so workers detect the connection change
+    // Without this, workers polling GET /internal/groups/{id}/version would miss
+    // connection-only updates
+    _, err = tx.ExecContext(ctx, `
+        UPDATE groups SET version = version + 1, updated_at = NOW()
+        WHERE id = $1
+    `, groupID)
+    if err != nil {
+        return err
+    }
 
     // Record in group_connections_audit
     _, err = tx.ExecContext(ctx, `
@@ -1541,6 +1622,22 @@ func (s *GroupStore) replaceGroupConnections(ctx context.Context, tx *sql.Tx, gr
     `, groupID, pq.Array(oldConnections), pq.Array(connections), changedBy, reason)
     
     return err
+}
+
+func equalStringSlices(a, b []string) bool {
+    if len(a) != len(b) {
+        return false
+    }
+    aMap := make(map[string]struct{}, len(a))
+    for _, v := range a {
+        aMap[v] = struct{}{}
+    }
+    for _, v := range b {
+        if _, ok := aMap[v]; !ok {
+            return false
+        }
+    }
+    return true
 }
 
 // getGroupAuditData retrieves the full denormalized state for audit storage
@@ -1631,7 +1728,7 @@ kubectl rollout restart deployment/engine-gateway -n flow-engine
 | Flow assignment | < 1 minute | API rollback |
 | Worker image | < 3 minutes | K8s rollout undo |
 | Gateway config | < 5 minutes | Git revert + redeploy |
-| Full group deletion | 5-10 minutes | Restore from audit + regenerate manifests + GitOps sync (see procedure below) |
+| Full group deletion | 5-15 minutes | Restore from audit + regenerate manifests + GitOps sync (see procedure below); 10-20 min realistic if PR review required |
 
 #### Full Group Deletion Recovery Procedure
 
@@ -1648,19 +1745,33 @@ POST /admin/groups/{group_id}/restore-from-audit
 # 2. Regenerate K8s manifests (< 1 minute)
 engine groups generate-manifests {group_id} --output=./k8s/workers/{group_id}/
 
-# 3. Commit manifests to Git (1-2 minutes, depends on CI)
+# 3a. NORMAL PATH: Commit manifests to Git (1-2 minutes, depends on CI)
 git add k8s/workers/{group_id}/
 git commit -m "fix: restore deleted group {group_id} manifests"
 git push origin main
 
-# 4. Wait for GitOps sync (1-5 minutes, depends on ArgoCD/Flux sync interval)
-# Or force sync immediately:
+# 3b. EMERGENCY PATH: If GitOps pipeline is unavailable (infra repo down, approvers
+#     unavailable, ArgoCD misconfigured), apply directly to cluster:
+kubectl apply -f k8s/workers/{group_id}/ -n flow-workers
+# ⚠️ This bypasses GitOps. Post-incident: commit manifests to Git and reconcile
+#    ArgoCD state: argocd app sync flow-workers --prune=false
+
+# 4. Wait for sync (GitOps) or rollout (emergency path)
+# Normal: wait for ArgoCD/Flux sync (1-5 minutes, depends on sync interval)
 argocd app sync flow-workers --resource=deployment/worker-{group_id}
+# Emergency: already applied, verify rollout:
+kubectl rollout status deployment/worker-{group_id} -n flow-workers
 
 # 5. Verify worker is running
 kubectl rollout status deployment/worker-{group_id} -n flow-workers
 curl -f http://worker-{group_id}:8080/healthz
 ```
+
+**Emergency GitOps bypass policy:**
+- Allowed only during active incidents (P1/P2)
+- Requires verbal approval from on-call lead
+- Must be documented in incident timeline
+- Post-incident: reconcile Git state within 24 hours
 
 **API for restore-from-audit:**
 ```go
@@ -1856,7 +1967,7 @@ Before deploying any group or worker changes, verify:
 | 5 | K8s namespace exists | `kubectl get ns {namespace}` | ✅ |
 | 6 | K8s secrets created for group | `kubectl get secret worker-{group}` | ✅ |
 | 7 | Resource quotas allow deployment | `kubectl describe quota -n {namespace}` | ✅ |
-| 8 | No conflicting deployments in progress | Check CI/CD pipeline status | ✅ |
+| 8 | No conflicting deployments in progress | `argocd app get flow-workers --refresh` (verify no sync in progress for target namespace) | ✅ |
 | 9 | Rollback plan documented | Written in deployment ticket | ✅ |
 | 10 | Monitoring dashboards ready | Grafana group dashboard exists | ⚠️ |
 
@@ -1950,6 +2061,18 @@ Phase 5: Gateway Activation
 The CMS publish in Phase 3a only creates the DB record. The actual K8s resources
 are created in Phase 3b via CLI → Git → GitOps. Do not expect workers to exist
 immediately after CMS publish.
+
+**CMS-to-K8s workflow clarification:**
+
+Whether using Admin API (6a) or CMS (6b), the workflow is the same:
+1. Group config stored in database (Phase 3a)
+2. Operator runs `engine groups generate-manifests` (Phase 3b, step 7)
+3. Generated YAML committed to Git and synced via ArgoCD/Flux
+4. K8s creates worker deployment
+
+CMS publish does NOT automatically trigger manifest generation or K8s deployment.
+The CMS webhook only stores the group configuration in the database. Manual
+operator action (or CI automation) is required to generate and apply manifests.
 
 ### Canary Deployment Strategy
 
@@ -2102,7 +2225,64 @@ spec:
         args:
         - name: group
           value: orders
+---
+# AnalysisTemplate for automated canary promotion
+# Defines the metrics query and success threshold
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: flow-workers
+spec:
+  args:
+  - name: group
+  metrics:
+  - name: success-rate
+    # Require 99%+ success rate over 5-minute window
+    successCondition: result[0] >= 0.99
+    failureLimit: 3
+    interval: 60s
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring.svc:9090
+        query: |
+          sum(rate(flow_requests_total{group="{{args.group}}",status!="error"}[5m]))
+          /
+          sum(rate(flow_requests_total{group="{{args.group}}"}[5m]))
+  - name: error-rate
+    # Fail if error rate exceeds 1%
+    failureCondition: result[0] > 0.01
+    failureLimit: 3
+    interval: 60s
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring.svc:9090
+        query: |
+          sum(rate(flow_requests_total{group="{{args.group}}",status="error"}[5m]))
+          /
+          sum(rate(flow_requests_total{group="{{args.group}}"}[5m]))
+  - name: latency-p99
+    # Fail if p99 latency exceeds 2 seconds
+    failureCondition: result[0] > 2000
+    failureLimit: 3
+    interval: 60s
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring.svc:9090
+        query: |
+          histogram_quantile(0.99, sum(rate(flow_duration_seconds_bucket{group="{{args.group}}"}[5m])) by (le)) * 1000
 ```
+
+**Manual canary evaluation criteria (when not using Argo Rollouts):**
+
+If using the native canary implementation without automated analysis, operators must evaluate:
+
+| Metric | Query | Threshold | Action |
+|--------|-------|-----------|--------|
+| Success rate | `sum(rate(flow_requests_total{group="orders",track="canary",status!="error"}[5m])) / sum(rate(flow_requests_total{group="orders",track="canary"}[5m]))` | ≥ 0.99 | Continue if met, abort if < 0.98 |
+| Error rate delta | `(canary_error_rate - stable_error_rate) / stable_error_rate` | < 0.1 (10% worse) | Abort if canary is significantly worse |
+| P99 latency | `histogram_quantile(0.99, sum(rate(flow_duration_seconds_bucket{group="orders",track="canary"}[5m])) by (le))` | < 2s | Abort if latency regression |
+| OOM restarts | `kube_pod_container_status_restarts_total{pod=~"worker-orders-canary.*"}` | 0 in last 5m | Abort if any restarts |
 
 ### Blue-Green Deployment Strategy
 
@@ -2220,13 +2400,21 @@ func (g *Gateway) watchRuntimeConfig(ctx context.Context) {
 5. **Cleanup after successful switch**
    ```bash
    # After 10 minutes stable on green:
-   # 1. Rename green to become the new blue (update labels/names)
-   # 2. Delete old blue
-   kubectl delete deployment worker-orders-blue -n flow-workers
    
-   # 3. Clear endpoint override (green is now the primary via WorkerRegistry)
+   # 1. Update the stable deployment's image to match green's image
+   #    (You cannot rename a K8s deployment—update the image instead)
+   kubectl set image deployment/worker-orders worker=nzr-flow-worker:v1.3.0 -n flow-workers
+   
+   # 2. Wait for stable deployment rollout
+   kubectl rollout status deployment/worker-orders -n flow-workers
+   
+   # 3. Clear endpoint override (traffic now routes via WorkerRegistry to updated stable)
    kubectl patch configmap gateway-runtime-config -n flow-engine --type=merge \
      -p '{"data":{"config.yaml":"groups:\n  orders:\n    endpointOverride: \"\""}}'
+   
+   # 4. Delete green deployment (no longer needed)
+   kubectl delete deployment worker-orders-green -n flow-workers
+   kubectl delete service worker-orders-green -n flow-workers
    ```
 
 ### Deployment Windows
@@ -2510,21 +2698,28 @@ func (s *GroupStore) Delete(ctx context.Context, groupID, changedBy, reason stri
 The default group auto-creation in DB does NOT automatically create K8s resources.
 This is intentional—K8s manifests require GitOps review. The bootstrap sequence is:
 
-1. **First engine startup (inline mode):**
-   - Engine starts with `dispatch.mode: inline` (no workers needed)
+1. **Phases 1-3 (inline mode):**
+   - Engine runs with `dispatch.mode: inline` (no workers needed)
    - `EnsureDefaultGroup()` creates the default group in DB
    - All flows run inline in the engine process (existing behavior)
+   - Group configuration and flow assignments can be set up during this time
+   - This gives time to stabilize the data model before K8s resources depend on it
 
-2. **Before switching to gateway mode:**
+2. **Before Phase 4 (gateway mode prerequisites):**
    - Operator runs `engine groups generate-manifests default --output=./k8s/workers/default/`
    - Operator commits manifests to Git and triggers GitOps sync
    - K8s creates `worker-default` deployment
    - Operator verifies: `kubectl rollout status deployment/worker-default`
 
-3. **Switch to gateway mode:**
+3. **Phase 4+ (gateway mode):**
    - Operator updates config: `dispatch.mode: gateway`
    - Engine restarts, now routes to workers
    - Requests to ungrouped flows dispatch to `worker-default`
+
+**Phase dependency:** Gateway mode (`dispatch.mode: gateway`) is only available after
+Phase 4 (`generate-manifests` CLI is implemented). Attempting to enable gateway mode
+before Phase 4 will result in clear errors—see "Error handling when worker doesn't
+exist" below.
 
 **CLI bootstrap command for new deployments:**
 
