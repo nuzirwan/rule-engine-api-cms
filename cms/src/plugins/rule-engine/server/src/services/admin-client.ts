@@ -13,6 +13,7 @@ import type {
   AuditObjectType,
   AuditTrailResponse,
   CandidateFlowBody,
+  ConnectorSchemaResponse,
   CreateConnectionRequest,
   CreateConnectionResponse,
   CreateFlowRequest,
@@ -239,9 +240,15 @@ export class AdminClient {
     return this.request<ListConnectionsResponse>('GET', '/admin/connections');
   }
 
+  /** GET /admin/connectors/schema — get all connector secret schemas. */
+  getConnectorSchemas(): Promise<ConnectorSchemaResponse> {
+    return this.request<ConnectorSchemaResponse>('GET', '/admin/connectors/schema');
+  }
+
   /**
    * POST /admin/connections/test — test a connection with ephemeral credentials.
-   * The secret is passed in the request body and is never stored.
+   * Accepts either a single secret (legacy) or a secrets map (multi-secret).
+   * The secrets are passed in the request body and are never stored.
    */
   testConnection(req: Omit<TestConnectionRequest, 'env'>): Promise<TestConnectionResponse> {
     return this.request<TestConnectionResponse>('POST', '/admin/connections/test', req);

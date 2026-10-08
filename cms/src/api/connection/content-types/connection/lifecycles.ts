@@ -1,6 +1,33 @@
 import { errors } from '@strapi/utils';
 
 /**
+ * Validates that secretRefs is null, undefined, or a {string: string} map.
+ * Throws a ValidationError if the shape is invalid.
+ */
+export function validateSecretRefs(refs: unknown): void {
+  if (refs == null) {
+    return;
+  }
+  if (typeof refs !== 'object' || Array.isArray(refs)) {
+    throw new errors.ValidationError(
+      'secretRefs must be an object (map of string keys to string values)'
+    );
+  }
+  for (const [key, value] of Object.entries(refs as Record<string, unknown>)) {
+    if (typeof key !== 'string') {
+      throw new errors.ValidationError(
+        `secretRefs key "${key}" must be a string`
+      );
+    }
+    if (typeof value !== 'string') {
+      throw new errors.ValidationError(
+        `secretRefs value for key "${key}" must be a string, got ${typeof value}`
+      );
+    }
+  }
+}
+
+/**
  * Connection secret-denylist guard (design §3.3.1).
  *
  * The CMS-side superset of the engine's edge guard: it rejects any key in a
@@ -70,10 +97,12 @@ export function assertNoSecretInSettings(data: { settings?: unknown } | undefine
 }
 
 export default {
-  beforeCreate(event: { params: { data: { settings?: unknown } } }) {
+  beforeCreate(event: { params: { data: { settings?: unknown; secretRefs?: unknown } } }) {
     assertNoSecretInSettings(event.params.data);
+    validateSecretRefs(event.params.data.secretRefs);
   },
-  beforeUpdate(event: { params: { data: { settings?: unknown } } }) {
+  beforeUpdate(event: { params: { data: { settings?: unknown; secretRefs?: unknown } } }) {
     assertNoSecretInSettings(event.params.data);
+    validateSecretRefs(event.params.data.secretRefs);
   },
 };

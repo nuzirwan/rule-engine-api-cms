@@ -625,6 +625,27 @@ export interface TriggerScheduleRunResponse {
 }
 
 // ============================================================================
+// Connector Schema Types (multi-secret refs)
+// ============================================================================
+
+/** A single secret field definition for a connector's schema. */
+export interface SecretField {
+  name: string;
+  required: boolean;
+  label: string;
+}
+
+/** Schema for a connector's secrets (null means dynamic, e.g. REST). */
+export interface ConnectorSchema {
+  secrets: SecretField[] | null;
+}
+
+/** 200 from GET /admin/connectors/schema. */
+export interface ConnectorSchemaResponse {
+  connectors: Record<string, ConnectorSchema>;
+}
+
+// ============================================================================
 // Test Connection Types (test-connection feature)
 // ============================================================================
 

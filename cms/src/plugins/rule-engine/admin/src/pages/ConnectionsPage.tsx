@@ -52,6 +52,7 @@ interface ConnectionEntry {
   type: 'postgres' | 'mysql' | 'valkey' | 'rest' | 'http' | 'kafka' | 'rabbitmq';
   settings: ConnectionSettings[];
   secretRef: string | null;
+  secretRefs?: Record<string, string> | null;
 }
 
 // Badge variants per connection type
@@ -108,6 +109,29 @@ function getConnectionHost(settings: ConnectionSettings[]): string {
   return '—';
 }
 
+/**
+ * Format secret refs display: shows count when multiple, ref when single, or dash when none.
+ */
+function getSecretRefsDisplay(
+  secretRef: string | null,
+  secretRefs?: Record<string, string> | null
+): string {
+  // Check multi-secret refs first
+  if (secretRefs && typeof secretRefs === 'object') {
+    const count = Object.keys(secretRefs).length;
+    if (count > 0) {
+      return `${count} secret${count > 1 ? 's' : ''}`;
+    }
+  }
+
+  // Fall back to legacy secretRef
+  if (secretRef) {
+    return secretRef;
+  }
+
+  return '—';
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -134,7 +158,7 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const response = await get('/api/connections?populate=settings');
+      const response = await get('/api/connections?populate=settings&fields[0]=key&fields[1]=type&fields[2]=secretRef&fields[3]=secretRefs');
       const data = response.data?.data ?? [];
       setConnections(data);
     } catch (err) {
@@ -256,8 +280,15 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({
                       </Typography>
                     </Td>
                     <Td>
-                      <Typography textColor={connection.secretRef ? undefined : 'neutral500'}>
-                        {connection.secretRef || '—'}
+                      <Typography
+                        textColor={
+                          connection.secretRef ||
+                          (connection.secretRefs && Object.keys(connection.secretRefs).length > 0)
+                            ? undefined
+                            : 'neutral500'
+                        }
+                      >
+                        {getSecretRefsDisplay(connection.secretRef, connection.secretRefs)}
                       </Typography>
                     </Td>
                     <Td>
@@ -288,6 +319,7 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({
           connectionType={selectedConnection.type}
           settings={selectedConnection.settings as unknown as Record<string, unknown>}
           connectionKey={selectedConnection.key}
+          secretRefs={selectedConnection.secretRefs}
         />
       )}
     </Layouts.Root>

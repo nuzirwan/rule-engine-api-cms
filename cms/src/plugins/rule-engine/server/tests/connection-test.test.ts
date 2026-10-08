@@ -128,7 +128,7 @@ describe('POST /rule-engine/connections/test', () => {
     await controller.testConnection(ctx);
 
     expect(ctx.status).toBe(400);
-    expect(ctx.body).toEqual({ error: 'Missing or invalid "secret" field' });
+    expect(ctx.body).toEqual({ error: 'Missing "secret" or "secrets" field' });
   });
 
   it('returns 503 (recoverable) when engine returns 5xx', async () => {
@@ -186,6 +186,117 @@ describe('POST /rule-engine/connections/test', () => {
     });
 
     await controller.testConnection(ctx);
+
+    expect(ctx.status).toBe(503);
+    expect(ctx.body).toEqual({
+      error: 'ADMIN_API_BASE_URL (or Environment.adminApiBaseUrl) is required',
+      recoverable: false,
+    });
+  });
+
+  it('accepts secrets map instead of single secret', async () => {
+    const scope = engine()
+      .post('/admin/connections/test', (b: unknown) => {
+        const body = b as Record<string, unknown>;
+        expect(body.type).toBe('kafka');
+        expect(body.settings).toEqual({ brokers: ['localhost:9092'] });
+        expect(body.secrets).toEqual({ username: 'user', password: 'pass' });
+        expect(body.secret).toBeUndefined();
+        return true;
+      })
+      .reply(200, { success: true, message: 'Connection successful' });
+
+    const controller = makeController();
+    const ctx = makeCtx({
+      type: 'kafka',
+      settings: { brokers: ['localhost:9092'] },
+      secrets: { username: 'user', password: 'pass' },
+    });
+
+    await controller.testConnection(ctx);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.body).toEqual({ success: true, message: 'Connection successful' });
+    scope.done();
+  });
+
+  it('prefers secrets map over single secret when both provided', async () => {
+    const scope = engine()
+      .post('/admin/connections/test', (b: unknown) => {
+        const body = b as Record<string, unknown>;
+        expect(body.secrets).toEqual({ password: 'multi-pass' });
+        expect(body.secret).toBeUndefined();
+        return true;
+      })
+      .reply(200, { success: true });
+
+    const controller = makeController();
+    const ctx = makeCtx({
+      type: 'postgres',
+      settings: { host: 'localhost' },
+      secret: 'single-pass',
+      secrets: { password: 'multi-pass' },
+    });
+
+    await controller.testConnection(ctx);
+
+    expect(ctx.status).toBe(200);
+    scope.done();
+  });
+});
+
+describe('GET /rule-engine/connectors/schema', () => {
+  it('returns connector schemas on success', async () => {
+    const schemaResponse = {
+      connectors: {
+        postgres: { secrets: [{ name: 'password', required: false, label: 'Database Password' }] },
+        rest: { secrets: null },
+        kafka: { secrets: [
+          { name: 'password', required: false, label: 'SASL Password' },
+          { name: 'username', required: false, label: 'SASL Username' },
+        ]},
+      },
+    };
+
+    const scope = engine()
+      .get('/admin/connectors/schema')
+      .reply(200, schemaResponse);
+
+    const controller = makeController();
+    const ctx = { status: 200, body: undefined as unknown };
+
+    await controller.getConnectorSchemas(ctx);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.body).toEqual(schemaResponse);
+    scope.done();
+  });
+
+  it('returns 503 (recoverable) when engine returns 5xx', async () => {
+    const scope = engine()
+      .get('/admin/connectors/schema')
+      .reply(500, { error: 'internal error' });
+
+    const controller = makeController();
+    const ctx = { status: 200, body: undefined as unknown };
+
+    await controller.getConnectorSchemas(ctx);
+
+    expect(ctx.status).toBe(503);
+    expect(ctx.body).toEqual({
+      error: 'admin request GET /admin/connectors/schema returned 500',
+      recoverable: true,
+    });
+    scope.done();
+  });
+
+  it('returns 503 when ADMIN_API_BASE_URL is not configured', async () => {
+    delete process.env.ADMIN_API_BASE_URL;
+
+    const controller = makeController();
+    const ctx = { status: 200, body: undefined as unknown };
+
+    await controller.getConnectorSchemas(ctx);
 
     expect(ctx.status).toBe(503);
     expect(ctx.body).toEqual({

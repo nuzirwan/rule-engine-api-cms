@@ -36,6 +36,9 @@
       "type": "string",
       "maxLength": 256
     },
+    "secretRefs": {
+      "type": "json"
+    },
     "resilience": {
       "type": "component",
       "repeatable": false,

@@ -55,6 +55,15 @@ export default {
           policies: [],
         },
       },
+      {
+        // GET /connectors/schema — get connector secret schemas.
+        method: 'GET',
+        path: '/connectors/schema',
+        handler: 'connection-test.getConnectorSchemas',
+        config: {
+          policies: [],
+        },
+      },
       // --- Sync routes (FEAT-002) ---
       {
         // GET /sync/status — compare CMS vs engine, return diff status.

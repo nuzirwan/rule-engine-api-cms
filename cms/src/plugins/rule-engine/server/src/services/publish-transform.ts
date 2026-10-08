@@ -83,6 +83,7 @@ export interface ConnectionEntry {
   type: string;
   settings?: Record<string, unknown> | null;
   secretRef?: string | null;
+  secretRefs?: Record<string, string> | null;
   resilience?: ResilienceEntry | null;
 }
 
@@ -177,8 +178,8 @@ export function resilienceToEngine(resilience?: ResilienceEntry | null): EngineR
 /**
  * connectionToEnginePayload — flat createConnectionRequest. Passes discrete,
  * credential-free settings through, emits Go-cased ns resilience, and carries
- * secretRef only. THROWS a TransformError BEFORE returning if any settings key
- * matches the secret denylist (belt-and-suspenders over the content-type guard).
+ * secretRef and secretRefs. THROWS a TransformError BEFORE returning if any
+ * settings key matches the secret denylist (belt-and-suspenders over the content-type guard).
  */
 export function connectionToEnginePayload(
   entry: ConnectionEntry,
@@ -194,7 +195,7 @@ export function connectionToEnginePayload(
     );
   }
 
-  return {
+  const payload: CreateConnectionRequest = {
     env,
     key: entry.key,
     type: entry.type,
@@ -202,6 +203,12 @@ export function connectionToEnginePayload(
     secretRef: entry.secretRef ?? '',
     resilience: resilienceToEngine(entry.resilience),
   };
+
+  if (entry.secretRefs != null && Object.keys(entry.secretRefs).length > 0) {
+    payload.secretRefs = entry.secretRefs;
+  }
+
+  return payload;
 }
 
 // ----------------------------------------------------------------------------

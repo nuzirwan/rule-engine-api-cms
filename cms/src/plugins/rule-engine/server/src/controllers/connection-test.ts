@@ -1,9 +1,10 @@
 // connection-test.ts — controller for testing connection credentials. Provides:
 //   * POST /rule-engine/connections/test — test a connection with ephemeral credentials
+//   * GET /rule-engine/connectors/schema — get connector secret schemas
 //
-// This endpoint proxies to the engine's POST /admin/connections/test, passing the
-// connection type, settings, and secret. The secret is used once to test the
-// connection and is never stored.
+// The test endpoint proxies to the engine's POST /admin/connections/test, passing the
+// connection type, settings, and secrets. The secrets are used once to test the
+// connection and are never stored.
 //
 // Error classification follows the §5.5 table:
 //   * 5xx / transport (recoverable) → 503
@@ -11,7 +12,7 @@
 //   * Config missing → 503 (env not provisioned)
 
 import { AdminApiError, AdminClient, resolveAdminConfig } from '../services/admin-client';
-import type { TestConnectionResponse } from '../../../../../../types/engine';
+import type { ConnectorSchemaResponse, TestConnectionResponse } from '../../../../../../types/engine';
 
 /** The request body for POST /rule-engine/connections/test. */
 interface TestConnectionRequestBody {
@@ -19,8 +20,10 @@ interface TestConnectionRequestBody {
   type: string;
   /** Connection settings (host, port, database, user, etc.). */
   settings: Record<string, unknown>;
-  /** The plaintext secret/password to test with (never stored). */
-  secret: string;
+  /** Legacy single secret/password to test with (never stored). */
+  secret?: string;
+  /** Multi-secret map keyed by role (e.g., {password: "p", username: "u"}). */
+  secrets?: Record<string, string>;
 }
 
 /**
@@ -64,15 +67,20 @@ export default function connectionTestController(
     /**
      * POST /rule-engine/connections/test — test a connection with ephemeral credentials.
      *
-     * Body: { type, settings, secret }
+     * Body: { type, settings, secret?, secrets? }
      * Returns: { success, message?, error? }
+     *
+     * Accepts either:
+     *   - `secret` (string): legacy single secret
+     *   - `secrets` (map): multi-secret map keyed by role
+     * If both are provided, `secrets` takes precedence.
      */
     async testConnection(ctx: {
       request: { body: TestConnectionRequestBody };
       status: number;
       body: unknown;
     }) {
-      const { type, settings, secret } = ctx.request.body;
+      const { type, settings, secret, secrets } = ctx.request.body;
 
       // Validate required fields
       if (!type || typeof type !== 'string') {
@@ -85,9 +93,14 @@ export default function connectionTestController(
         ctx.body = { error: 'Missing or invalid "settings" field' };
         return;
       }
-      if (secret === undefined || secret === null || typeof secret !== 'string') {
+
+      // At least one of secret or secrets must be provided
+      const hasSecret = secret !== undefined && secret !== null && typeof secret === 'string';
+      const hasSecrets = secrets !== undefined && secrets !== null && typeof secrets === 'object';
+
+      if (!hasSecret && !hasSecrets) {
         ctx.status = 400;
-        ctx.body = { error: 'Missing or invalid "secret" field' };
+        ctx.body = { error: 'Missing "secret" or "secrets" field' };
         return;
       }
 
@@ -95,11 +108,40 @@ export default function connectionTestController(
       if (!client) return;
 
       try {
-        const response: TestConnectionResponse = await client.testConnection({
+        // Build request: prefer secrets map over legacy single secret
+        const req: { type: string; settings: Record<string, unknown>; secret?: string; secrets?: Record<string, string> } = {
           type,
           settings,
-          secret,
-        });
+        };
+
+        if (hasSecrets) {
+          req.secrets = secrets;
+        } else if (hasSecret) {
+          req.secret = secret;
+        }
+
+        const response: TestConnectionResponse = await client.testConnection(req);
+        ctx.body = response;
+      } catch (err) {
+        handleApiError(ctx, err);
+      }
+    },
+
+    /**
+     * GET /rule-engine/connectors/schema — get all connector secret schemas.
+     *
+     * Returns: { connectors: { [type]: { secrets: SecretField[] | null } } }
+     * REST connector has secrets: null (dynamic).
+     */
+    async getConnectorSchemas(ctx: {
+      status: number;
+      body: unknown;
+    }) {
+      const client = createClient(ctx);
+      if (!client) return;
+
+      try {
+        const response: ConnectorSchemaResponse = await client.getConnectorSchemas();
         ctx.body = response;
       } catch (err) {
         handleApiError(ctx, err);
