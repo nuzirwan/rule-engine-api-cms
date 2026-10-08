@@ -544,3 +544,67 @@ func (a *Admin) testConnection(w http.ResponseWriter, r *http.Request) {
 		Message: "Connection successful",
 	})
 }
+
+// ---- GET /admin/connectors/schema -> List all connector schemas ----
+
+// connectorSchemaResponse is the wire shape for a single connector's schema.
+type connectorSchemaResponse struct {
+	Type    string                `json:"type"`
+	Secrets []connect.SecretField `json:"secrets"` // nil means dynamic secrets
+}
+
+// listConnectorSchemas returns the secret schema for all registered connectors.
+// Used by the CMS to build dynamic secret-entry forms.
+func (a *Admin) listConnectorSchemas(w http.ResponseWriter, r *http.Request) {
+	// Get the connector registry to enumerate all connectors.
+	registry, ok := a.deps.Conns.(connect.ConnectorRegistry)
+	if !ok || a.deps.Conns == nil {
+		writeError(w, http.StatusInternalServerError, "connector registry unavailable")
+		return
+	}
+
+	connectors := registry.AllConnectors()
+	schemas := make([]connectorSchemaResponse, 0, len(connectors))
+
+	for typ, conn := range connectors {
+		schema := connectorSchemaResponse{Type: typ}
+		// Check if connector implements SecretSchemaProvider
+		if provider, ok := conn.(connect.SecretSchemaProvider); ok {
+			schema.Secrets = provider.SecretSchema()
+		}
+		schemas = append(schemas, schema)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"connectors": schemas})
+}
+
+// ---- GET /admin/connectors/{type}/schema -> Get single connector schema ----
+
+// getConnectorSchema returns the secret schema for a specific connector type.
+func (a *Admin) getConnectorSchema(w http.ResponseWriter, r *http.Request) {
+	connType := r.PathValue("type")
+	if connType == "" {
+		writeError(w, http.StatusBadRequest, "invalid request: missing connector type")
+		return
+	}
+
+	// Look up the connector by type from the registry.
+	lookup, ok := a.deps.Conns.(connect.ConnectorLookup)
+	if !ok || a.deps.Conns == nil {
+		writeError(w, http.StatusInternalServerError, "connector registry unavailable")
+		return
+	}
+	connector, found := lookup.Connector(connType)
+	if !found {
+		writeError(w, http.StatusNotFound, "unknown connection type: "+connType)
+		return
+	}
+
+	schema := connectorSchemaResponse{Type: connType}
+	// Check if connector implements SecretSchemaProvider
+	if provider, ok := connector.(connect.SecretSchemaProvider); ok {
+		schema.Secrets = provider.SecretSchema()
+	}
+
+	writeJSON(w, http.StatusOK, schema)
+}

@@ -30,6 +30,14 @@ func (valkeyConnector) Capabilities() connect.Capability {
 	return connect.CapKeyValue | connect.CapDedupStore
 }
 
+// SecretSchema implements connect.SecretSchemaProvider. Valkey accepts an
+// optional Redis password secret.
+func (valkeyConnector) SecretSchema() []connect.SecretField {
+	return []connect.SecretField{
+		{Name: "password", Required: false, Label: "Redis Password"},
+	}
+}
+
 // Open builds a valkey client from the def's Settings and the resolved secret.
 // Settings carry addr/addrs (InitAddress), db (SelectDB), and optional tls; the
 // resolved secret supplies the password. No per-op timeout is set on the client
@@ -53,7 +61,12 @@ func (valkeyConnector) Open(ctx context.Context, def connect.ConnectionDef) (con
 	if user, ok := stringSetting(def.Settings, "user"); ok {
 		opt.Username = user
 	}
-	if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
+	// Prefer SecretsFrom (multi-secret) with fallback to SecretFrom (legacy).
+	if secrets, ok := connect.SecretsFrom(ctx); ok {
+		if pwSec, found := secrets["password"]; found && !pwSec.IsZero() {
+			opt.Password = string(pwSec.Reveal())
+		}
+	} else if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
 		opt.Password = string(sec.Reveal())
 	}
 

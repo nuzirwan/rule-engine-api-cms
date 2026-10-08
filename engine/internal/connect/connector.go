@@ -152,3 +152,28 @@ func SecretsFrom(ctx context.Context) (map[string]Secret, bool) {
 	s, ok := ctx.Value(secretsCtxKey{}).(map[string]Secret)
 	return s, ok
 }
+
+// SecretField describes one secret field a connector can accept. Used by the CMS
+// to build dynamic secret-entry forms and by the engine to document what secrets
+// a connector type expects.
+type SecretField struct {
+	Name     string `json:"name"`     // e.g. "password", "apiKey", "username"
+	Required bool   `json:"required"` // whether the secret is mandatory for the connector
+	Label    string `json:"label"`    // human-readable label for UI display
+}
+
+// SecretSchemaProvider is an optional interface connectors may implement to
+// advertise the secret fields they accept. The CMS fetches this schema to build
+// dynamic secret-entry UI. A connector that returns nil indicates dynamic secrets
+// (e.g. REST headers where the user defines arbitrary secret names).
+type SecretSchemaProvider interface {
+	SecretSchema() []SecretField
+}
+
+// ConnectorRegistry extends ConnectorLookup with the ability to enumerate all
+// registered connectors. Used by admin endpoints that need to list all connector
+// types and their secret schemas.
+type ConnectorRegistry interface {
+	ConnectorLookup
+	AllConnectors() map[string]Connector
+}

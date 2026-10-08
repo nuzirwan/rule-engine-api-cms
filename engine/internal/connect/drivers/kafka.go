@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl"
+	"github.com/segmentio/kafka-go/sasl/plain"
+	"github.com/segmentio/kafka-go/sasl/scram"
 
 	"nzr-rules-engine/internal/connect"
 )
@@ -37,11 +40,24 @@ func (kafkaConnector) Capabilities() connect.Capability {
 	return connect.CapSubscribe | connect.CapPublish
 }
 
+// SecretSchema implements connect.SecretSchemaProvider. Kafka accepts optional
+// SASL username and password secrets for authenticated connections.
+func (kafkaConnector) SecretSchema() []connect.SecretField {
+	return []connect.SecretField{
+		{Name: "username", Required: false, Label: "SASL Username"},
+		{Name: "password", Required: false, Label: "SASL Password"},
+	}
+}
+
 // Open builds a Kafka client from the def's Settings. Settings should include:
 //   - brokers: []string or comma-separated string of broker addresses
 //   - topic: string topic name for consuming/producing
 //   - groupID: string consumer group ID (required for consumption)
 //   - partition (optional): int partition number (default 0 for producer)
+//   - saslMechanism (optional): string SASL mechanism ("PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512")
+//
+// When saslMechanism is set, secrets "username" and "password" are read from
+// SecretsFrom(ctx) for authentication.
 //
 // For consumers, messages are committed after successful handler execution.
 // Failed handlers trigger dead-letter routing to "{topic}-dlq".
@@ -75,6 +91,27 @@ func (kafkaConnector) Open(ctx context.Context, def connect.ConnectionDef) (conn
 		maxRetries = r
 	}
 
+	// Build SASL dialer if mechanism is configured
+	var dialer *kafka.Dialer
+	if mechanism, ok := stringSetting(def.Settings, "saslMechanism"); ok && mechanism != "" {
+		var username, password string
+		if secrets, ok := connect.SecretsFrom(ctx); ok {
+			if userSec, found := secrets["username"]; found && !userSec.IsZero() {
+				username = string(userSec.Reveal())
+			}
+			if pwSec, found := secrets["password"]; found && !pwSec.IsZero() {
+				password = string(pwSec.Reveal())
+			}
+		}
+		saslMech, err := buildSASLMechanism(mechanism, username, password)
+		if err != nil {
+			return nil, connect.NewConnError(connect.Validation, def.Key, "", "invalid sasl mechanism", err)
+		}
+		dialer = &kafka.Dialer{
+			SASLMechanism: saslMech,
+		}
+	}
+
 	return &kafkaClient{
 		key:        def.Key,
 		brokers:    brokers,
@@ -83,6 +120,7 @@ func (kafkaConnector) Open(ctx context.Context, def connect.ConnectionDef) (conn
 		partition:  partition,
 		dlqTopic:   dlqTopic,
 		maxRetries: maxRetries,
+		dialer:     dialer,
 	}, nil
 }
 
@@ -97,6 +135,7 @@ type kafkaClient struct {
 	partition  int
 	dlqTopic   string
 	maxRetries int
+	dialer     *kafka.Dialer // optional SASL dialer for authenticated connections
 
 	mu       sync.Mutex
 	reader   *kafka.Reader
@@ -150,14 +189,18 @@ func (c *kafkaClient) subscribe(ctx context.Context, handler connect.MessageHand
 	// Create the consumer reader. kafka-go handles rebalance internally via
 	// consumer groups. When a rebalance occurs, in-flight messages complete
 	// before partition release (coordinated by CommitMessages).
-	c.reader = kafka.NewReader(kafka.ReaderConfig{
+	readerCfg := kafka.ReaderConfig{
 		Brokers:  c.brokers,
 		Topic:    c.topic,
 		GroupID:  c.groupID,
 		MaxBytes: 10e6, // 10MB max per fetch
 		// StartOffset only applies when no committed offset exists for the group
 		StartOffset: kafka.FirstOffset,
-	})
+	}
+	if c.dialer != nil {
+		readerCfg.Dialer = c.dialer
+	}
+	c.reader = kafka.NewReader(readerCfg)
 
 	c.handler = handler
 	c.stopCh = make(chan struct{})
@@ -287,12 +330,18 @@ func (c *kafkaClient) getOrCreateWriter() *kafka.Writer {
 		return c.writer
 	}
 
-	c.writer = &kafka.Writer{
+	w := &kafka.Writer{
 		Addr:         kafka.TCP(c.brokers...),
 		Balancer:     &kafka.LeastBytes{},
 		RequiredAcks: kafka.RequireOne,
 		Async:        false, // Sync writes for reliability
 	}
+	if c.dialer != nil {
+		w.Transport = &kafka.Transport{
+			SASL: c.dialer.SASLMechanism,
+		}
+	}
+	c.writer = w
 	return c.writer
 }
 
@@ -369,7 +418,13 @@ func (c *kafkaClient) publish(ctx context.Context, op connect.Operation) (any, e
 
 // ping verifies connectivity to the Kafka cluster.
 func (c *kafkaClient) ping(ctx context.Context) (any, error) {
-	conn, err := kafka.DialContext(ctx, "tcp", c.brokers[0])
+	var conn *kafka.Conn
+	var err error
+	if c.dialer != nil {
+		conn, err = c.dialer.DialContext(ctx, "tcp", c.brokers[0])
+	} else {
+		conn, err = kafka.DialContext(ctx, "tcp", c.brokers[0])
+	}
 	if err != nil {
 		return nil, c.classify("ping", err)
 	}
@@ -494,4 +549,21 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// buildSASLMechanism creates a SASL mechanism based on the mechanism name.
+func buildSASLMechanism(mechanism, username, password string) (sasl.Mechanism, error) {
+	switch mechanism {
+	case "PLAIN":
+		return &plain.Mechanism{
+			Username: username,
+			Password: password,
+		}, nil
+	case "SCRAM-SHA-256":
+		return scram.Mechanism(scram.SHA256, username, password)
+	case "SCRAM-SHA-512":
+		return scram.Mechanism(scram.SHA512, username, password)
+	default:
+		return nil, errors.New("unsupported SASL mechanism: " + mechanism)
+	}
 }

@@ -26,6 +26,9 @@ type registry struct {
 // compile-time assertion that registry satisfies the frozen Registry seam.
 var _ Registry = (*registry)(nil)
 
+// compile-time assertion that registry satisfies ConnectorRegistry.
+var _ ConnectorRegistry = (*registry)(nil)
+
 // SecretProvider returns the registry's secret provider for use by other
 // components that need to resolve secret refs (e.g. webhook signature verification).
 func (r *registry) SecretProvider() SecretProvider {
@@ -299,4 +302,16 @@ func (r *registry) Connector(typ string) (Connector, bool) {
 	defer r.mu.RUnlock()
 	c, ok := r.byType[typ]
 	return c, ok
+}
+
+// AllConnectors returns a copy of the registered connectors keyed by type.
+// Used by admin endpoints to enumerate all connector types.
+func (r *registry) AllConnectors() map[string]Connector {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Connector, len(r.byType))
+	for k, v := range r.byType {
+		out[k] = v
+	}
+	return out
 }

@@ -37,27 +37,71 @@ func (rabbitmqConnector) Capabilities() connect.Capability {
 	return connect.CapSubscribe | connect.CapPublish
 }
 
+// SecretSchema implements connect.SecretSchemaProvider. RabbitMQ accepts optional
+// username and password secrets for authenticated connections.
+func (rabbitmqConnector) SecretSchema() []connect.SecretField {
+	return []connect.SecretField{
+		{Name: "username", Required: false, Label: "Username"},
+		{Name: "password", Required: false, Label: "Password"},
+	}
+}
+
 // Open builds a RabbitMQ client from the def's Settings and the resolved secret.
 // Settings should include:
-//   - url: AMQP URL (amqp://user:pass@host:port/vhost)
+//   - url: AMQP URL (amqp://user:pass@host:port/vhost) — OR use discrete settings:
+//   - host: string hostname (default "localhost")
+//   - port: int port number (default 5672)
+//   - vhost: string virtual host (default "/")
 //   - queue: string queue name for consuming
 //   - exchange (optional): string exchange name for publishing
 //   - routingKey (optional): string routing key for publishing
 //   - prefetch (optional): int prefetch count (default 10)
 //
+// When using discrete settings (no url), credentials are read from SecretsFrom(ctx)
+// for "username" and "password" secrets. When using url, the URL-embedded
+// credentials are used (legacy behavior).
+//
 // For consumers, messages are acked after successful handler execution.
 // Failed handlers trigger nack without requeue (goes to DLX if configured).
 func (rabbitmqConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
-	url, ok := stringSetting(def.Settings, "url")
-	if !ok || url == "" {
-		return nil, connect.NewConnError(connect.Validation, def.Key, "", "rabbitmq settings need url", nil)
+	var url string
+
+	// Check for URL-based configuration first (legacy path)
+	if rawURL, ok := stringSetting(def.Settings, "url"); ok && rawURL != "" {
+		url = rawURL
+	} else {
+		// Build URL from discrete settings with secrets
+		host, _ := stringSetting(def.Settings, "host")
+		if host == "" {
+			host = "localhost"
+		}
+		port := 5672
+		if p, ok := intSetting(def.Settings, "port"); ok {
+			port = p
+		}
+		vhost, _ := stringSetting(def.Settings, "vhost")
+		if vhost == "" {
+			vhost = "/"
+		}
+
+		// Get credentials from secrets
+		username := "guest"
+		password := "guest"
+		if secrets, ok := connect.SecretsFrom(ctx); ok {
+			if userSec, found := secrets["username"]; found && !userSec.IsZero() {
+				username = string(userSec.Reveal())
+			}
+			if pwSec, found := secrets["password"]; found && !pwSec.IsZero() {
+				password = string(pwSec.Reveal())
+			}
+		}
+
+		// Build AMQP URL: amqp://user:pass@host:port/vhost
+		url = fmt.Sprintf("amqp://%s:%s@%s:%d%s", username, password, host, port, vhost)
 	}
 
-	// Allow password override from secret
-	if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
-		// Parse URL and inject password (simplified: assumes url doesn't have password)
-		// In practice, the URL itself may contain credentials or be built from components
-		_ = sec // URL already contains credentials for RabbitMQ; secret can override
+	if url == "" {
+		return nil, connect.NewConnError(connect.Validation, def.Key, "", "rabbitmq settings need url or host", nil)
 	}
 
 	queue, _ := stringSetting(def.Settings, "queue")

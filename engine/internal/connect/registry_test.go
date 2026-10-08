@@ -265,3 +265,40 @@ func TestMergePolicyFieldLevel(t *testing.T) {
 		t.Fatalf("nil override changed the base policy: %+v", same)
 	}
 }
+
+// TestRegistryAllConnectors verifies AllConnectors returns a copy of registered connectors.
+func TestRegistryAllConnectors(t *testing.T) {
+	fc := newFakeConnector("fake")
+	defs := []ConnectionDef{
+		{Key: "conn1", Type: "fake"},
+	}
+	r := newTestRegistry(t, fc, defs...)
+
+	connectors := r.AllConnectors()
+	if len(connectors) != 1 {
+		t.Fatalf("expected 1 connector, got %d", len(connectors))
+	}
+
+	if connectors["fake"] == nil {
+		t.Fatal("expected 'fake' connector in result")
+	}
+	if connectors["fake"].Type() != "fake" {
+		t.Fatalf("expected connector type 'fake', got %q", connectors["fake"].Type())
+	}
+
+	// Verify it's a copy (modifying the map doesn't affect the registry)
+	delete(connectors, "fake")
+	connectors2 := r.AllConnectors()
+	if connectors2["fake"] == nil {
+		t.Fatal("deleting from returned map affected the registry")
+	}
+}
+
+// TestConnectorRegistryInterface verifies registry implements ConnectorRegistry.
+func TestConnectorRegistryInterface(t *testing.T) {
+	fc := newFakeConnector("fake")
+	r := newTestRegistry(t, fc, ConnectionDef{Key: "conn1", Type: "fake"})
+
+	// Verify *registry satisfies ConnectorRegistry
+	var _ ConnectorRegistry = r
+}

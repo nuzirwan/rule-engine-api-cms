@@ -102,6 +102,8 @@ func (a *Admin) mount(mux *http.ServeMux) {
 	mux.Handle("POST /admin/connections", h(a.createConnection))
 	mux.Handle("POST /admin/connections/test", h(a.testConnection))
 	mux.Handle("GET /admin/connections", h(a.listConnections))
+	mux.Handle("GET /admin/connectors/schema", h(a.listConnectorSchemas))
+	mux.Handle("GET /admin/connectors/{type}/schema", h(a.getConnectorSchema))
 	mux.Handle("GET /admin/audit/{type}/{id}", h(a.auditTrail))
 	// Read endpoints for CMS sync:
 	mux.Handle("GET /admin/flows", h(a.listFlows))

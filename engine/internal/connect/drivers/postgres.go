@@ -29,6 +29,14 @@ func (pgConnector) Lifecycle() connect.Lifecycle { return connect.LifecyclePoole
 // Capabilities implements connect.Connector. Postgres supports query/exec.
 func (pgConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
 
+// SecretSchema implements connect.SecretSchemaProvider. Postgres accepts an
+// optional database password secret.
+func (pgConnector) SecretSchema() []connect.SecretField {
+	return []connect.SecretField{
+		{Name: "password", Required: false, Label: "Database Password"},
+	}
+}
+
 // Open builds a pgxpool from the def's Settings and the resolved secret, then
 // wraps it in a pgClient. The pool is the shared resource (one per key, AC-5).
 // Settings may carry a ready-made "dsn", or discrete host/port/database/user
@@ -42,7 +50,12 @@ func (pgConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect
 	// Inject the password from the resolved secret onto the parsed config so it
 	// never has to be interpolated into the DSN string (and so a redacted DSN is
 	// safe to log). pgxpool.ParseConfig has already parsed any dsn-embedded user.
-	if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
+	// Prefer SecretsFrom (multi-secret) with fallback to SecretFrom (legacy).
+	if secrets, ok := connect.SecretsFrom(ctx); ok {
+		if pwSec, found := secrets["password"]; found && !pwSec.IsZero() {
+			cfg.ConnConfig.Password = string(pwSec.Reveal())
+		}
+	} else if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
 		cfg.ConnConfig.Password = string(sec.Reveal())
 	}
 	applyPoolSettings(cfg, def.Settings)

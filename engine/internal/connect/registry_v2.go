@@ -24,6 +24,9 @@ type registryV2 struct {
 // compile-time assertion that registryV2 satisfies the frozen Registry seam.
 var _ Registry = (*registryV2)(nil)
 
+// compile-time assertion that registryV2 satisfies ConnectorRegistry.
+var _ ConnectorRegistry = (*registryV2)(nil)
+
 // newRegistryV2 builds a lazy-pool registry. It opens NO connections at
 // construction time — they open on first Client() call (AC-G2).
 func newRegistryV2(connectors []Connector, defs []ConnectionDef, secrets SecretProvider, tracer observ.Tracer, log observ.Logger) (*registryV2, error) {
@@ -171,4 +174,16 @@ func (r *registryV2) Connector(typ string) (Connector, bool) {
 	defer r.mu.RUnlock()
 	c, ok := r.byType[typ]
 	return c, ok
+}
+
+// AllConnectors returns a copy of the registered connectors keyed by type.
+// Used by admin endpoints to enumerate all connector types.
+func (r *registryV2) AllConnectors() map[string]Connector {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Connector, len(r.byType))
+	for k, v := range r.byType {
+		out[k] = v
+	}
+	return out
 }

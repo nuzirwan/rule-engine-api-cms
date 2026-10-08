@@ -36,10 +36,18 @@ func (c restConnector) Lifecycle() connect.Lifecycle { return connect.LifecycleE
 // Capabilities implements connect.Connector. REST supports query/exec via HTTP.
 func (c restConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
 
+// SecretSchema implements connect.SecretSchemaProvider. REST returns nil to
+// indicate dynamic secrets — the user defines arbitrary secret names which are
+// injected as HTTP header values where the secret key is the header name.
+func (c restConnector) SecretSchema() []connect.SecretField {
+	return nil // dynamic: secrets are injected as headers by key name
+}
+
 // Open builds the shared client from Settings (baseURL, default headers, and
-// transport tunables). A resolved secret, when present, is exposed as a default
-// bearer/credential header value only if the def names a header for it; by
-// default no secret is placed in headers (the thin slice REST stub needs none).
+// transport tunables). Secrets from SecretsFrom(ctx) are injected as default
+// header values where the secret key is the header name (e.g. secret "Authorization"
+// becomes header "Authorization: <secret value>"). This allows flexible auth
+// schemes like Bearer tokens, API keys, or custom headers.
 func (c restConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
 	baseURL, _ := stringSetting(def.Settings, "baseURL")
 
@@ -53,6 +61,20 @@ func (c restConnector) Open(ctx context.Context, def connect.ConnectionDef) (con
 	}
 
 	defaultHeaders := stringMapSetting(def.Settings, "headers")
+	if defaultHeaders == nil {
+		defaultHeaders = make(map[string]string)
+	}
+
+	// Inject resolved secrets as headers: each secret key becomes a header name,
+	// the secret value becomes the header value. This allows dynamic auth headers
+	// (e.g. "Authorization" -> "Bearer xxx", "X-API-Key" -> "key123").
+	if secrets, ok := connect.SecretsFrom(ctx); ok {
+		for headerName, sec := range secrets {
+			if !sec.IsZero() {
+				defaultHeaders[headerName] = string(sec.Reveal())
+			}
+		}
+	}
 
 	return &restClient{
 		key:            def.Key,

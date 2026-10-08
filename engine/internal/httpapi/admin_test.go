@@ -663,3 +663,152 @@ func TestAdminTestConnection(t *testing.T) {
 		}
 	})
 }
+
+// fakeSchemaConnector implements SecretSchemaProvider for testing schema endpoints.
+type fakeSchemaConnector struct {
+	typ    string
+	schema []connect.SecretField
+}
+
+func (f *fakeSchemaConnector) Type() string                     { return f.typ }
+func (f *fakeSchemaConnector) Lifecycle() connect.Lifecycle     { return connect.LifecyclePooled }
+func (f *fakeSchemaConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
+func (f *fakeSchemaConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
+	return &fakeClient{}, nil
+}
+func (f *fakeSchemaConnector) SecretSchema() []connect.SecretField {
+	return f.schema
+}
+
+// fakeConnectorRegistry implements ConnectorRegistry for testing schema endpoints.
+type fakeConnectorRegistry struct {
+	connectors map[string]connect.Connector
+}
+
+func (f *fakeConnectorRegistry) Connector(typ string) (connect.Connector, bool) {
+	c, ok := f.connectors[typ]
+	return c, ok
+}
+
+func (f *fakeConnectorRegistry) AllConnectors() map[string]connect.Connector {
+	out := make(map[string]connect.Connector, len(f.connectors))
+	for k, v := range f.connectors {
+		out[k] = v
+	}
+	return out
+}
+
+func (f *fakeConnectorRegistry) Client(ctx context.Context, key string) (connect.Client, error) {
+	return nil, nil
+}
+func (f *fakeConnectorRegistry) Reload(ctx context.Context, defs []connect.ConnectionDef) error {
+	return nil
+}
+func (f *fakeConnectorRegistry) HealthCheck(ctx context.Context) error { return nil }
+func (f *fakeConnectorRegistry) Close() error                          { return nil }
+func (f *fakeConnectorRegistry) SecretProvider() connect.SecretProvider {
+	return connect.NewEnvSecretProvider()
+}
+
+// TestAdminListConnectorSchemas tests GET /admin/connectors/schema endpoint.
+func TestAdminListConnectorSchemas(t *testing.T) {
+	store := &fakeAdminStore{}
+	conns := &fakeConnectorRegistry{
+		connectors: map[string]connect.Connector{
+			"postgres": &fakeSchemaConnector{
+				typ:    "postgres",
+				schema: []connect.SecretField{{Name: "password", Required: false, Label: "Database Password"}},
+			},
+			"rest": &fakeSchemaConnector{
+				typ:    "rest",
+				schema: nil, // dynamic secrets
+			},
+		},
+	}
+	h := newAdminTestHandlerWithConns(t, store, conns)
+
+	rec := doJSON(t, h, http.MethodGet, "/admin/connectors/schema", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list connector schemas status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	connectors, ok := out["connectors"].([]any)
+	if !ok {
+		t.Fatal("expected connectors array in response")
+	}
+	if len(connectors) != 2 {
+		t.Fatalf("expected 2 connectors, got %d", len(connectors))
+	}
+
+	// Verify postgres has secrets, rest has null
+	found := map[string]bool{}
+	for _, c := range connectors {
+		cm := c.(map[string]any)
+		typ := cm["type"].(string)
+		found[typ] = true
+		if typ == "postgres" {
+			secrets := cm["secrets"]
+			if secrets == nil {
+				t.Fatal("postgres should have secrets, got nil")
+			}
+			secretsList := secrets.([]any)
+			if len(secretsList) != 1 {
+				t.Fatalf("postgres should have 1 secret, got %d", len(secretsList))
+			}
+		}
+		if typ == "rest" {
+			if cm["secrets"] != nil {
+				t.Fatalf("rest should have nil secrets, got %v", cm["secrets"])
+			}
+		}
+	}
+	if !found["postgres"] || !found["rest"] {
+		t.Fatal("missing expected connector types in response")
+	}
+}
+
+// TestAdminGetConnectorSchema tests GET /admin/connectors/{type}/schema endpoint.
+func TestAdminGetConnectorSchema(t *testing.T) {
+	store := &fakeAdminStore{}
+	conns := &fakeConnectorRegistry{
+		connectors: map[string]connect.Connector{
+			"postgres": &fakeSchemaConnector{
+				typ:    "postgres",
+				schema: []connect.SecretField{{Name: "password", Required: false, Label: "Database Password"}},
+			},
+		},
+	}
+	h := newAdminTestHandlerWithConns(t, store, conns)
+
+	// Test successful lookup
+	rec := doJSON(t, h, http.MethodGet, "/admin/connectors/postgres/schema", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get connector schema status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var out connectorSchemaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if out.Type != "postgres" {
+		t.Fatalf("expected type 'postgres', got %q", out.Type)
+	}
+	if len(out.Secrets) != 1 {
+		t.Fatalf("expected 1 secret, got %d", len(out.Secrets))
+	}
+	if out.Secrets[0].Name != "password" {
+		t.Fatalf("expected secret name 'password', got %q", out.Secrets[0].Name)
+	}
+
+	// Test unknown type -> 404
+	rec = doJSON(t, h, http.MethodGet, "/admin/connectors/unknown/schema", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown connector schema status = %d want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}

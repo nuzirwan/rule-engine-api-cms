@@ -29,6 +29,14 @@ func (mysqlConnector) Lifecycle() connect.Lifecycle { return connect.LifecyclePo
 // Capabilities implements connect.Connector. MySQL supports query/exec.
 func (mysqlConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
 
+// SecretSchema implements connect.SecretSchemaProvider. MySQL accepts an
+// optional database password secret.
+func (mysqlConnector) SecretSchema() []connect.SecretField {
+	return []connect.SecretField{
+		{Name: "password", Required: false, Label: "Database Password"},
+	}
+}
+
 // Open builds a *sql.DB from the def's Settings and the resolved secret, then
 // wraps it in a mysqlClient. The pool is the shared resource (one per key, AC-5).
 // Settings may carry a ready-made "dsn", or discrete host/port/database/user
@@ -36,8 +44,13 @@ func (mysqlConnector) Capabilities() connect.Capability { return connect.CapQuer
 func (mysqlConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
 	dsn := buildMySQLDSN(def)
 
-	// If secret present via connect.SecretFrom(ctx), rebuild DSN with password injected.
-	if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
+	// If secret present, rebuild DSN with password injected.
+	// Prefer SecretsFrom (multi-secret) with fallback to SecretFrom (legacy).
+	if secrets, ok := connect.SecretsFrom(ctx); ok {
+		if pwSec, found := secrets["password"]; found && !pwSec.IsZero() {
+			dsn = injectMySQLPassword(dsn, string(pwSec.Reveal()))
+		}
+	} else if sec, ok := connect.SecretFrom(ctx); ok && !sec.IsZero() {
 		dsn = injectMySQLPassword(dsn, string(sec.Reveal()))
 	}
 
