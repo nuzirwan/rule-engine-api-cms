@@ -737,38 +737,33 @@ func TestAdminListConnectorSchemas(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 
-	connectors, ok := out["connectors"].([]any)
+	connectors, ok := out["connectors"].(map[string]any)
 	if !ok {
-		t.Fatal("expected connectors array in response")
+		t.Fatal("expected connectors map in response")
 	}
 	if len(connectors) != 2 {
 		t.Fatalf("expected 2 connectors, got %d", len(connectors))
 	}
 
 	// Verify postgres has secrets, rest has null
-	found := map[string]bool{}
-	for _, c := range connectors {
-		cm := c.(map[string]any)
-		typ := cm["type"].(string)
-		found[typ] = true
-		if typ == "postgres" {
-			secrets := cm["secrets"]
-			if secrets == nil {
-				t.Fatal("postgres should have secrets, got nil")
-			}
-			secretsList := secrets.([]any)
-			if len(secretsList) != 1 {
-				t.Fatalf("postgres should have 1 secret, got %d", len(secretsList))
-			}
-		}
-		if typ == "rest" {
-			if cm["secrets"] != nil {
-				t.Fatalf("rest should have nil secrets, got %v", cm["secrets"])
-			}
-		}
+	postgresSchema, ok := connectors["postgres"].(map[string]any)
+	if !ok {
+		t.Fatal("missing postgres in connectors map")
 	}
-	if !found["postgres"] || !found["rest"] {
-		t.Fatal("missing expected connector types in response")
+	if postgresSchema["secrets"] == nil {
+		t.Fatal("postgres should have secrets, got nil")
+	}
+	secretsList := postgresSchema["secrets"].([]any)
+	if len(secretsList) != 1 {
+		t.Fatalf("postgres should have 1 secret, got %d", len(secretsList))
+	}
+
+	restSchema, ok := connectors["rest"].(map[string]any)
+	if !ok {
+		t.Fatal("missing rest in connectors map")
+	}
+	if restSchema["secrets"] != nil {
+		t.Fatalf("rest should have nil secrets, got %v", restSchema["secrets"])
 	}
 }
 

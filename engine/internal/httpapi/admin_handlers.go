@@ -567,7 +567,14 @@ func (a *Admin) testConnection(w http.ResponseWriter, r *http.Request) {
 
 // ---- GET /admin/connectors/schema -> List all connector schemas ----
 
-// connectorSchemaResponse is the wire shape for a single connector's schema.
+// connectorSchemaEntry is the wire shape for a single connector's schema.
+// Used as the value in the connectors map response.
+type connectorSchemaEntry struct {
+	Secrets []connect.SecretField `json:"secrets"` // nil means dynamic secrets
+}
+
+// connectorSchemaResponse is the wire shape for a single connector type lookup.
+// Used by GET /admin/connectors/{type}/schema.
 type connectorSchemaResponse struct {
 	Type    string                `json:"type"`
 	Secrets []connect.SecretField `json:"secrets"` // nil means dynamic secrets
@@ -575,6 +582,7 @@ type connectorSchemaResponse struct {
 
 // listConnectorSchemas returns the secret schema for all registered connectors.
 // Used by the CMS to build dynamic secret-entry forms.
+// Response: {"connectors": {"postgres": {"secrets": [...]}, "rest": {"secrets": null}, ...}}
 func (a *Admin) listConnectorSchemas(w http.ResponseWriter, r *http.Request) {
 	// Get the connector registry to enumerate all connectors.
 	registry, ok := a.deps.Conns.(connect.ConnectorRegistry)
@@ -584,15 +592,15 @@ func (a *Admin) listConnectorSchemas(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connectors := registry.AllConnectors()
-	schemas := make([]connectorSchemaResponse, 0, len(connectors))
+	schemas := make(map[string]connectorSchemaEntry, len(connectors))
 
 	for typ, conn := range connectors {
-		schema := connectorSchemaResponse{Type: typ}
+		entry := connectorSchemaEntry{}
 		// Check if connector implements SecretSchemaProvider
 		if provider, ok := conn.(connect.SecretSchemaProvider); ok {
-			schema.Secrets = provider.SecretSchema()
+			entry.Secrets = provider.SecretSchema()
 		}
-		schemas = append(schemas, schema)
+		schemas[typ] = entry
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": schemas})
