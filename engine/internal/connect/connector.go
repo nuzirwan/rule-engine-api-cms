@@ -134,3 +134,21 @@ func SecretFrom(ctx context.Context) (Secret, bool) {
 	s, ok := ctx.Value(secretCtxKey{}).(Secret)
 	return s, ok
 }
+
+// secretsCtxKey carries multiple resolved secrets (keyed by role, e.g. "password",
+// "apiKey") from the registry into a Connector.Open. It is unexported so only
+// this package can place or read it.
+type secretsCtxKey struct{}
+
+// WithSecrets returns a context carrying multiple resolved secrets for a pending
+// Open. The map keys are the role names (e.g. "password", "apiKey").
+func WithSecrets(ctx context.Context, secrets map[string]Secret) context.Context {
+	return context.WithValue(ctx, secretsCtxKey{}, secrets)
+}
+
+// SecretsFrom returns the resolved secrets map placed on ctx by the registry, if
+// any. A driver Open calls this to obtain multiple credentials by role name.
+func SecretsFrom(ctx context.Context) (map[string]Secret, bool) {
+	s, ok := ctx.Value(secretsCtxKey{}).(map[string]Secret)
+	return s, ok
+}

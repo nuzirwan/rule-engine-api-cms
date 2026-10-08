@@ -86,6 +86,7 @@ type ResiliencePolicy struct {
 type ConnectionDef struct {
 	Key, Type  string
 	Settings   map[string]any
-	SecretRef  string
+	SecretRef  string            // legacy single secret ref (e.g. "env:DB_PASSWORD")
+	SecretRefs map[string]string // multi-secret refs keyed by role (e.g. {"password": "env:X", "apiKey": "env:Y"})
 	Resilience ResiliencePolicy
 }

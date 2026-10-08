@@ -210,12 +210,9 @@ func (p *ConnectionPool) open(ctx context.Context, def ConnectionDef) (Client, e
 	if !ok {
 		return nil, newErr(Validation, def.Key, "", "no connector registered for type "+def.Type)
 	}
-	if def.SecretRef != "" {
-		sec, err := p.secrets.Resolve(ctx, def.SecretRef)
-		if err != nil {
-			return nil, wrapErr(Validation, def.Key, "", "resolve secret ref", err)
-		}
-		ctx = WithSecret(ctx, sec)
+	ctx, err := p.resolveSecrets(ctx, def)
+	if err != nil {
+		return nil, err
 	}
 	inner, err := conn.Open(ctx, def)
 	if err != nil {
@@ -223,6 +220,43 @@ func (p *ConnectionPool) open(ctx context.Context, def ConnectionDef) (Client, e
 	}
 	p.openCount.Add(1)
 	return newResilientClient(def.Key, inner, def.Resilience), nil
+}
+
+// resolveSecrets resolves secret refs for a ConnectionDef and places them on ctx.
+// When SecretRefs is non-empty, it resolves all refs and calls WithSecrets; for
+// backward compat, if a "password" key exists, it also calls WithSecret with that
+// value. When SecretRefs is empty but SecretRef is set, it falls back to the
+// legacy single-secret behavior (treating it as the "password" role).
+func (p *ConnectionPool) resolveSecrets(ctx context.Context, def ConnectionDef) (context.Context, error) {
+	// Multi-secret path: SecretRefs takes precedence
+	if len(def.SecretRefs) > 0 {
+		secrets := make(map[string]Secret, len(def.SecretRefs))
+		for role, ref := range def.SecretRefs {
+			sec, err := p.secrets.Resolve(ctx, ref)
+			if err != nil {
+				return ctx, wrapErr(Validation, def.Key, "", "resolve secret ref for "+role, err)
+			}
+			secrets[role] = sec
+		}
+		ctx = WithSecrets(ctx, secrets)
+		// Backward compat: if "password" key exists, also set the single secret
+		if pwSec, ok := secrets["password"]; ok {
+			ctx = WithSecret(ctx, pwSec)
+		}
+		return ctx, nil
+	}
+
+	// Legacy single-secret path: SecretRef treated as "password"
+	if def.SecretRef != "" {
+		sec, err := p.secrets.Resolve(ctx, def.SecretRef)
+		if err != nil {
+			return ctx, wrapErr(Validation, def.Key, "", "resolve secret ref", err)
+		}
+		ctx = WithSecret(ctx, sec)
+		// Also set as multi-secret map for connectors that want to use SecretsFrom
+		ctx = WithSecrets(ctx, map[string]Secret{"password": sec})
+	}
+	return ctx, nil
 }
 
 // UpdateDefs updates the pool's connection definitions. Changed keys are evicted
