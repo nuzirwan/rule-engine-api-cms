@@ -812,3 +812,155 @@ func TestAdminGetConnectorSchema(t *testing.T) {
 		t.Fatalf("unknown connector schema status = %d want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 }
+
+// secretCapturingConnector captures context secrets during Open for test verification.
+type secretCapturingConnector struct {
+	typ         string
+	openClient  connect.Client
+	capturedCtx context.Context
+	capturedDef connect.ConnectionDef
+}
+
+func (f *secretCapturingConnector) Type() string                     { return f.typ }
+func (f *secretCapturingConnector) Lifecycle() connect.Lifecycle     { return connect.LifecyclePooled }
+func (f *secretCapturingConnector) Capabilities() connect.Capability { return connect.CapQueryExec }
+func (f *secretCapturingConnector) Open(ctx context.Context, def connect.ConnectionDef) (connect.Client, error) {
+	f.capturedCtx = ctx
+	f.capturedDef = def
+	return f.openClient, nil
+}
+
+// TestAdminTestConnectionMultiSecret tests POST /admin/connections/test with multi-secret format.
+func TestAdminTestConnectionMultiSecret(t *testing.T) {
+	t.Run("multi-secret format", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		client := &fakeClient{executeErr: nil}
+		connector := &secretCapturingConnector{typ: "kafka", openClient: client}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"kafka": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+
+		// Send multi-secret request
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test",
+			`{"type":"kafka","settings":{"brokers":"localhost:9092"},"secrets":{"username":"user1","password":"pass1"}}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("multi-secret test status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if !out.Success {
+			t.Fatalf("expected success=true, got false with error: %s", out.Error)
+		}
+
+		// Verify secrets were injected via context
+		secrets, ok := connect.SecretsFrom(connector.capturedCtx)
+		if !ok {
+			t.Fatal("expected SecretsFrom to return secrets")
+		}
+		if len(secrets) != 2 {
+			t.Fatalf("expected 2 secrets, got %d", len(secrets))
+		}
+		if string(secrets["username"].Reveal()) != "user1" {
+			t.Fatalf("expected username='user1', got %q", string(secrets["username"].Reveal()))
+		}
+		if string(secrets["password"].Reveal()) != "pass1" {
+			t.Fatalf("expected password='pass1', got %q", string(secrets["password"].Reveal()))
+		}
+
+		// Verify legacy WithSecret was also set for backward compat (password key)
+		legacySecret, ok := connect.SecretFrom(connector.capturedCtx)
+		if !ok {
+			t.Fatal("expected SecretFrom to return secret for backward compat")
+		}
+		if string(legacySecret.Reveal()) != "pass1" {
+			t.Fatalf("expected legacy secret='pass1', got %q", string(legacySecret.Reveal()))
+		}
+	})
+
+	t.Run("legacy single secret still works", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		client := &fakeClient{executeErr: nil}
+		connector := &secretCapturingConnector{typ: "postgres", openClient: client}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"postgres": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+
+		// Send legacy single secret request
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test",
+			`{"type":"postgres","settings":{"host":"localhost"},"secret":"mypassword"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("legacy secret test status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if !out.Success {
+			t.Fatalf("expected success=true, got false with error: %s", out.Error)
+		}
+
+		// Verify legacy WithSecret was set
+		legacySecret, ok := connect.SecretFrom(connector.capturedCtx)
+		if !ok {
+			t.Fatal("expected SecretFrom to return secret")
+		}
+		if string(legacySecret.Reveal()) != "mypassword" {
+			t.Fatalf("expected secret='mypassword', got %q", string(legacySecret.Reveal()))
+		}
+
+		// Verify WithSecrets was also set for forward compat
+		secrets, ok := connect.SecretsFrom(connector.capturedCtx)
+		if !ok {
+			t.Fatal("expected SecretsFrom to return secrets for forward compat")
+		}
+		if len(secrets) != 1 {
+			t.Fatalf("expected 1 secret in map, got %d", len(secrets))
+		}
+		if string(secrets["password"].Reveal()) != "mypassword" {
+			t.Fatalf("expected password='mypassword', got %q", string(secrets["password"].Reveal()))
+		}
+	})
+
+	t.Run("multi-secret without password key", func(t *testing.T) {
+		store := &fakeAdminStore{}
+		client := &fakeClient{executeErr: nil}
+		connector := &secretCapturingConnector{typ: "rest", openClient: client}
+		lookup := &fakeConnectorLookup{connectors: map[string]connect.Connector{"rest": connector}}
+		conns := &fakeTestConnRegistry{fakeConnectorLookup: lookup}
+		h := newAdminTestHandlerWithConns(t, store, conns)
+
+		// Send multi-secret request without password key (e.g. REST with Authorization header)
+		rec := doJSON(t, h, http.MethodPost, "/admin/connections/test",
+			`{"type":"rest","settings":{"baseUrl":"https://api.example.com"},"secrets":{"Authorization":"Bearer token123"}}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("multi-secret no-password test status = %d want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var out testConnectionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if !out.Success {
+			t.Fatalf("expected success=true, got false with error: %s", out.Error)
+		}
+
+		// Verify secrets were injected via context
+		secrets, ok := connect.SecretsFrom(connector.capturedCtx)
+		if !ok {
+			t.Fatal("expected SecretsFrom to return secrets")
+		}
+		if len(secrets) != 1 {
+			t.Fatalf("expected 1 secret, got %d", len(secrets))
+		}
+		if string(secrets["Authorization"].Reveal()) != "Bearer token123" {
+			t.Fatalf("expected Authorization='Bearer token123', got %q", string(secrets["Authorization"].Reveal()))
+		}
+
+		// Verify legacy WithSecret was NOT set (no password key)
+		_, ok = connect.SecretFrom(connector.capturedCtx)
+		if ok {
+			t.Fatal("expected SecretFrom to return nothing when no password key")
+		}
+	})
+}

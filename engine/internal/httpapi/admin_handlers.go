@@ -175,7 +175,8 @@ type createConnectionRequest struct {
 	Key        string                    `json:"key"`
 	Type       string                    `json:"type"`
 	Settings   map[string]any            `json:"settings,omitempty"`
-	SecretRef  string                    `json:"secretRef,omitempty"`
+	SecretRef  string                    `json:"secretRef,omitempty"`  // legacy single secret ref (backward compat)
+	SecretRefs map[string]string         `json:"secretRefs,omitempty"` // multi-secret refs keyed by role (e.g. {"password": "env:X", "apiKey": "env:Y"})
 	Resilience *connect.ResiliencePolicy `json:"resilience,omitempty"`
 	// The secret-value fields below are REJECTED if present; they are declared so
 	// strict decoding does not fail with "unknown field" but the handler can tell
@@ -211,10 +212,11 @@ func (a *Admin) createConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	def := connect.ConnectionDef{
-		Key:       req.Key,
-		Type:      req.Type,
-		Settings:  req.Settings,
-		SecretRef: req.SecretRef,
+		Key:        req.Key,
+		Type:       req.Type,
+		Settings:   req.Settings,
+		SecretRef:  req.SecretRef,
+		SecretRefs: req.SecretRefs,
 	}
 	if req.Resilience != nil {
 		def.Resilience = *req.Resilience
@@ -257,6 +259,7 @@ func (a *Admin) listConnections(w http.ResponseWriter, r *http.Request) {
 			"type":       d.Type,
 			"settings":   redactor.Scrub(d.Settings),
 			"secretRef":  d.SecretRef,
+			"secretRefs": d.SecretRefs,
 			"resilience": d.Resilience,
 		})
 	}
@@ -460,6 +463,7 @@ func (a *Admin) getConnection(w http.ResponseWriter, r *http.Request) {
 		"type":       def.Type,
 		"settings":   redactor.Scrub(def.Settings),
 		"secretRef":  def.SecretRef,
+		"secretRefs": def.SecretRefs,
 		"resilience": def.Resilience,
 	})
 }
@@ -468,11 +472,13 @@ func (a *Admin) getConnection(w http.ResponseWriter, r *http.Request) {
 
 // testConnectionRequest is the wire shape for testing a connection without
 // persisting it. The secret is passed in plaintext (never stored, only used
-// transiently for the test).
+// transiently for the test). Supports both legacy single secret (Secret field)
+// and multi-secret (Secrets map) formats.
 type testConnectionRequest struct {
-	Type     string         `json:"type"`
-	Settings map[string]any `json:"settings,omitempty"`
-	Secret   string         `json:"secret,omitempty"`
+	Type     string            `json:"type"`
+	Settings map[string]any    `json:"settings,omitempty"`
+	Secret   string            `json:"secret,omitempty"`  // legacy single secret (backward compat)
+	Secrets  map[string]string `json:"secrets,omitempty"` // multi-secret map keyed by role (e.g. {"password": "p", "username": "u"})
 }
 
 // testConnectionResponse is the wire shape for the test connection result.
@@ -512,10 +518,24 @@ func (a *Admin) testConnection(w http.ResponseWriter, r *http.Request) {
 		Settings: req.Settings,
 	}
 
-	// If a secret is provided, inject it via context.
+	// Inject secrets via context. Prefer Secrets map over legacy Secret string.
 	ctx := r.Context()
-	if req.Secret != "" {
-		ctx = connect.WithSecret(ctx, connect.NewPlainSecret(req.Secret))
+	if len(req.Secrets) > 0 {
+		// Multi-secret: convert map[string]string to map[string]connect.Secret
+		secrets := make(map[string]connect.Secret, len(req.Secrets))
+		for k, v := range req.Secrets {
+			secrets[k] = connect.NewPlainSecret(v)
+		}
+		ctx = connect.WithSecrets(ctx, secrets)
+		// Also set legacy WithSecret with "password" key for backward compat
+		if pw, ok := secrets["password"]; ok {
+			ctx = connect.WithSecret(ctx, pw)
+		}
+	} else if req.Secret != "" {
+		// Legacy single secret: inject as both WithSecret and WithSecrets{"password": secret}
+		plainSecret := connect.NewPlainSecret(req.Secret)
+		ctx = connect.WithSecret(ctx, plainSecret)
+		ctx = connect.WithSecrets(ctx, map[string]connect.Secret{"password": plainSecret})
 	}
 
 	// Open the connector to get a client.

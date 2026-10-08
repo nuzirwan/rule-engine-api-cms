@@ -113,13 +113,14 @@ export interface CreateJDMRequest {
   version: number;
 }
 
-/** POST /admin/connections body — createConnectionRequest. Flat; secretRef only. */
+/** POST /admin/connections body — createConnectionRequest. Flat; secretRef/secretRefs. */
 export interface CreateConnectionRequest {
   env: string;
   key: string;
   type: string;
   settings: Record<string, unknown>;
-  secretRef: string;
+  secretRef?: string; // legacy single secret ref (backward compat)
+  secretRefs?: Record<string, string>; // multi-secret refs keyed by role (e.g. {"password": "env:X", "apiKey": "env:Y"})
   resilience: EngineResilience;
 }
 
@@ -235,7 +236,8 @@ export interface EngineConnectionDef {
   key: string;
   type: string;
   settings: Record<string, unknown>;
-  secretRef: string;
+  secretRef: string; // legacy single secret ref
+  secretRefs?: Record<string, string> | null; // multi-secret refs (may be null)
   resilience: EngineResilience;
 }
 
@@ -334,7 +336,8 @@ export interface GetConnectionResponse {
   key: string;
   type: string;
   settings: Record<string, unknown>;
-  secretRef: string;
+  secretRef: string; // legacy single secret ref
+  secretRefs?: Record<string, string> | null; // multi-secret refs (may be null)
   resilience: EngineResilience;
 }
 
@@ -629,7 +632,8 @@ export interface TriggerScheduleRunResponse {
 export interface TestConnectionRequest {
   type: string;
   settings: Record<string, unknown>;
-  secret: string;
+  secret?: string; // legacy single secret (backward compat)
+  secrets?: Record<string, string>; // multi-secret map keyed by role (e.g. {"password": "p", "username": "u"})
 }
 
 /** 200 from POST /admin/connections/test. */
