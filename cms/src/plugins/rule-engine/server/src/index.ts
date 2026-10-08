@@ -22,16 +22,14 @@ import validateController from './controllers/validate';
 import connectionTestController from './controllers/connection-test';
 import routes from './routes';
 
-const PLUGIN_ID = 'rule-engine';
-
 export default {
-  register({ strapi }: { strapi: any }) {
-    // Register both custom fields server-side with base type:'json'.
-    strapi.customFields.register([
-      { name: 'flow-canvas', plugin: PLUGIN_ID, type: 'json' },
-      { name: 'jdm-editor', plugin: PLUGIN_ID, type: 'json' },
-    ]);
-  },
+  // NOTE: the two custom fields (flow-canvas, jdm-editor) are registered at the
+  // APP level (cms/src/index.ts register()), which runs early enough that the
+  // content-type schema conversion finds them. We must NOT re-register them here:
+  // strapi.customFields.register throws "already registered" on a duplicate uid,
+  // and this plugin server entry now loads (its routes/controllers are the whole
+  // point), so a duplicate register() here would abort boot.
+  register() {},
 
   bootstrap() {},
 

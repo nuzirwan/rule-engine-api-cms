@@ -182,7 +182,11 @@ func TestInterpreter_BranchesByDecision(t *testing.T) {
 	}
 }
 
-func TestInterpreter_DeferredNodeIsValidation(t *testing.T) {
+// TestInterpreter_SequenceRunsChildrenInOrder proves the sequence control node
+// walks its children in order and a Response child terminates the walk. (This
+// replaces the former "deferred node is a validation error" test: sequence was
+// the last deferred type and is now implemented.)
+func TestInterpreter_SequenceRunsChildrenInOrder(t *testing.T) {
 	tree := &Node{
 		ID:   "root",
 		Type: TypeTrigger,
@@ -191,15 +195,24 @@ func TestInterpreter_DeferredNodeIsValidation(t *testing.T) {
 			ID:   "seq",
 			Type: TypeSequence,
 			Spec: raw(t, SequenceSpec{}),
+			Children: []Node{
+				{ID: "s1", Type: TypeSet, Spec: raw(t, SetSpec{TargetPath: "response.a", Value: "1"})},
+				{ID: "s2", Type: TypeSet, Spec: raw(t, SetSpec{TargetPath: "response.b", Value: "2"})},
+				{ID: "r", Type: TypeResponse, Spec: raw(t, ResponseSpec{Status: 200})},
+			},
 		}},
 	}
 	c := NewCtx("req", "trace", "test", nil)
-	err := New().Run(context.Background(), tree, Version{}, c, Deps{})
-	if err == nil {
-		t.Fatal("expected a validation error for a deferred node, got nil")
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("sequence run returned error: %v", err)
 	}
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("deferred-node error is not Validation-class: %v", err)
+	// targetPath "response.a" nests under a "response" key in Ctx.Response.
+	resp, ok := c.Response["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("sequence produced no nested response object: %+v", c.Response)
+	}
+	if resp["a"] != "1" || resp["b"] != "2" {
+		t.Fatalf("sequence did not run both set children in order: %+v", resp)
 	}
 }
 

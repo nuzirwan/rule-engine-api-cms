@@ -883,8 +883,9 @@ const flowRouteConstraint = "flows_method_path_key"
 
 // classifyPg maps a pgx/driver error to the config taxonomy (§7). A deadline is
 // Timeout; a UNIQUE violation on the flow route constraint is a route-conflict
-// Validation (so the admin edge maps it to 409); everything else from the driver
-// is Upstream (Postgres unreachable or failing) unless already a classified
+// Validation (so the admin edge maps it to 409); a foreign key violation is also
+// Validation (missing referenced entity); everything else from the driver is
+// Upstream (Postgres unreachable or failing) unless already a classified
 // *ConfigError. A ConfigError passes through unchanged so an inner
 // Validation/NotFound keeps its class.
 func classifyPg(op string, err error) error {
@@ -895,12 +896,23 @@ func classifyPg(op string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return wrapErr(Timeout, op, err)
 	}
-	// A (method,path) unique-violation on the flows table is a route conflict,
-	// not an outage: surface it as a typed Validation carrying ErrRouteConflict
-	// so the admin edge can deterministically return 409 instead of 502.
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == flowRouteConstraint {
-		return wrapErr(Validation, op+": route already owned by another flow", ErrRouteConflict)
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation
+			// A (method,path) unique-violation on the flows table is a route conflict,
+			// not an outage: surface it as a typed Validation carrying ErrRouteConflict
+			// so the admin edge can deterministically return 409 instead of 502.
+			if pgErr.ConstraintName == flowRouteConstraint {
+				return wrapErr(Validation, op+": route already owned by another flow", ErrRouteConflict)
+			}
+			return wrapErr(Validation, op+": duplicate key", err)
+		case "23503": // foreign_key_violation
+			// FK violations mean the referenced entity doesn't exist (e.g., schedule
+			// referencing a flow that hasn't been published yet). This is author-fixable
+			// Validation (400), not an outage (500).
+			return wrapErr(Validation, op+": referenced entity not found ("+pgErr.ConstraintName+")", err)
+		}
 	}
 	return wrapErr(Upstream, op, err)
 }

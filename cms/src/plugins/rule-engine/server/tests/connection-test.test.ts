@@ -147,7 +147,7 @@ describe('POST /rule-engine/connections/test', () => {
 
     expect(ctx.status).toBe(503);
     expect(ctx.body).toEqual({
-      error: 'admin request POST /admin/connections/test returned 500',
+      error: 'admin request POST /admin/connections/test returned 500 — internal error',
       recoverable: true,
     });
     scope.done();
@@ -169,7 +169,7 @@ describe('POST /rule-engine/connections/test', () => {
 
     expect(ctx.status).toBe(400);
     expect(ctx.body).toEqual({
-      error: 'admin request POST /admin/connections/test returned 400',
+      error: 'admin request POST /admin/connections/test returned 400 — unknown type',
       recoverable: false,
     });
     scope.done();
@@ -284,7 +284,7 @@ describe('GET /rule-engine/connectors/schema', () => {
 
     expect(ctx.status).toBe(503);
     expect(ctx.body).toEqual({
-      error: 'admin request GET /admin/connectors/schema returned 500',
+      error: 'admin request GET /admin/connectors/schema returned 500 — internal error',
       recoverable: true,
     });
     scope.done();

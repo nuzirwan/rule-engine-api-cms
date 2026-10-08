@@ -13,12 +13,8 @@ export function validateSecretRefs(refs: unknown): void {
       'secretRefs must be an object (map of string keys to string values)'
     );
   }
+  // Object.entries always yields string keys, so only the value type needs checking.
   for (const [key, value] of Object.entries(refs as Record<string, unknown>)) {
-    if (typeof key !== 'string') {
-      throw new errors.ValidationError(
-        `secretRefs key "${key}" must be a string`
-      );
-    }
     if (typeof value !== 'string') {
       throw new errors.ValidationError(
         `secretRefs value for key "${key}" must be a string, got ${typeof value}`

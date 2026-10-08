@@ -111,8 +111,11 @@ func (s *PgStore) ListFlows(ctx context.Context, env string) ([]FlowSummary, err
 		return nil, err
 	}
 
+	// flows carries only created_at (identity rows are immutable; versions are
+	// append-only). Surface created_at as the summary's UpdatedAt timestamp —
+	// there is no mutable updated_at column on flows.
 	rows, err := pool.Query(ctx,
-		`SELECT f.id, f.method, f.path, ap.version, f.updated_at
+		`SELECT f.id, f.method, f.path, ap.version, f.created_at
 		   FROM flows f
 		   LEFT JOIN active_pointers ap ON ap.object_type=$1 AND ap.object_id = f.id
 		  ORDER BY f.path, f.method`, objFlow)
@@ -186,8 +189,10 @@ func (s *PgStore) ListJDMs(ctx context.Context, env string) ([]JDMSummary, error
 		return nil, err
 	}
 
+	// jdms carries only created_at (identity rows are immutable; versions are
+	// append-only). Surface created_at as the summary's UpdatedAt timestamp.
 	rows, err := pool.Query(ctx,
-		`SELECT id, updated_at FROM jdms ORDER BY id`)
+		`SELECT id, created_at FROM jdms ORDER BY id`)
 	if err != nil {
 		return nil, classifyPg("list jdms", err)
 	}

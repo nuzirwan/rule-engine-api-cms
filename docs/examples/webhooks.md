@@ -408,10 +408,9 @@ Flow definition:
             "type": "condition",
             "spec": {
               "jdmId": "payment-status-check",
-              "input": ["input.status"],
+              "input": ["status"],
               "trueKey": "handle-success",
-              "falseKey": "handle-failure",
-              "branchField": "is_success"
+              "falseKey": "handle-failure"
             },
             "children": [
               {

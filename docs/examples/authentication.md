@@ -358,8 +358,7 @@ A flow that checks authorization:
               "jdmId": "order-access-policy",
               "input": ["principal.subject", "principal.roles", "order.org_id"],
               "trueKey": "allow-access",
-              "falseKey": "deny-access",
-              "branchField": "allow"
+              "falseKey": "deny-access"
             },
             "children": [
               {
@@ -394,6 +393,12 @@ A flow that checks authorization:
   }
 }
 ```
+
+The `order-access-policy` decision returns a boolean `result` (truthy to allow).
+With no `branchField`, the condition takes `allow-access` when `result` is truthy
+and `deny-access` otherwise. If you prefer the decision to emit the branch name
+directly, set `branchField` to an output field whose value equals `allow-access`
+or `deny-access`.
 
 ---
 

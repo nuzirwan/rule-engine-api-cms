@@ -9,6 +9,9 @@
     "description": "Author engine config (Flow/Jdm/Connection) and publish it via the admin HTTP API.",
     "kind": "plugin"
   },
+  "scripts": {
+    "build:server": "tsc -p server/tsconfig.build.json"
+  },
   "exports": {
     "./strapi-admin": {
       "types": "./admin/src/index.tsx",
@@ -19,9 +22,9 @@
     "./strapi-server": {
       "types": "./server/src/index.ts",
       "source": "./server/src/index.ts",
-      "import": "./server/src/index.ts",
-      "require": "./server/src/index.ts",
-      "default": "./server/src/index.ts"
+      "import": "./server/dist/src/plugins/rule-engine/server/src/index.js",
+      "require": "./server/dist/src/plugins/rule-engine/server/src/index.js",
+      "default": "./server/dist/src/plugins/rule-engine/server/src/index.js"
     }
   }
 }

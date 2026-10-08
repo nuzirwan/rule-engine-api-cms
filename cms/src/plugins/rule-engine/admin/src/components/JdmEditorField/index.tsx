@@ -16,7 +16,8 @@
 import * as React from 'react';
 import { DecisionGraph, JdmConfigProvider, type DecisionGraphType } from '@gorules/jdm-editor';
 import '@gorules/jdm-editor/dist/style.css';
-import { Field, Flex } from '@strapi/design-system';
+import { Box, Button, Field, Flex } from '@strapi/design-system';
+import { Upload, Download } from '@strapi/icons';
 
 import { parseStoredJson, safeStringify } from '../../lib/parseStored';
 import { RawJsonFallback } from '../RawJsonFallback';
@@ -96,6 +97,75 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
     [flushDebounced]
   );
 
+  // --- Import / Export a full JDM graph JSON -------------------------------
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = React.useState<string | null>(null);
+
+  const handleImportClick = React.useCallback(() => {
+    setImportError(null);
+    fileInputRef.current?.click();
+  }, []);
+
+  /** Validate that a parsed value is a JDM decision graph ({ nodes, edges }). */
+  const isDecisionGraph = (v: unknown): v is DecisionGraphType => {
+    if (!v || typeof v !== 'object') return false;
+    const g = v as { nodes?: unknown; edges?: unknown };
+    return Array.isArray(g.nodes) && Array.isArray(g.edges);
+  };
+
+  const applyImported = React.useCallback(
+    (text: string) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        setImportError(`Invalid JSON: ${(err as Error).message}`);
+        return;
+      }
+      if (!isDecisionGraph(parsed)) {
+        setImportError('Invalid JDM: expected an object with "nodes" and "edges" arrays');
+        return;
+      }
+      setImportError(null);
+      setGraph(parsed);
+      emit(parsed); // flush immediately so the import is persisted on next save
+    },
+    [emit]
+  );
+
+  const handleFileChange = React.useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result;
+        if (typeof text === 'string') applyImported(text);
+        else setImportError('Failed to read file');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+      reader.onerror = () => {
+        setImportError('Failed to read file');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+      reader.readAsText(file);
+    },
+    [applyImported]
+  );
+
+  const handleExport = React.useCallback(() => {
+    const json = JSON.stringify(graph, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'decision.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [graph]);
+
   const label = intlLabel?.defaultMessage ?? name;
 
   // Show skeleton while initializing
@@ -121,6 +191,7 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
           ref={ref}
           direction="column"
           alignItems="stretch"
+          gap={2}
           style={{
             height: EDITOR_HEIGHT,
             minHeight: 500,
@@ -128,6 +199,37 @@ const JdmEditorField = React.forwardRef<HTMLDivElement, InputProps>((props, ref)
             maxWidth: '100%',
           }}
         >
+          {/* Import / Export toolbar — paste a full JDM graph JSON instead of
+              rebuilding it node-by-node. Import replaces the whole graph. */}
+          <Flex direction="row" gap={2} alignItems="center">
+            <Button
+              variant="secondary"
+              size="S"
+              startIcon={<Upload />}
+              onClick={handleImportClick}
+              disabled={disabled}
+            >
+              Import JSON
+            </Button>
+            <Button
+              variant="secondary"
+              size="S"
+              startIcon={<Download />}
+              onClick={handleExport}
+            >
+              Export JSON
+            </Button>
+            {importError && (
+              <Box style={{ color: '#ee5e52', fontSize: 12 }}>{importError}</Box>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+          </Flex>
           <div style={{ flex: '1 1 0%', minHeight: 0, width: '100%', height: '100%' }}>
             <JdmConfigProvider>
               <DecisionGraph value={graph} onChange={handleGraphChange} disabled={disabled} />

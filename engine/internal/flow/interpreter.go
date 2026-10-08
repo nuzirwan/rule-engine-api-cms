@@ -61,7 +61,7 @@ func New() *Interpreter {
 		TypeSet:            setHandler{},
 		TypeResponse:       responseHandler{},
 		TypeSwitch:         switchHandler{},
-		TypeSequence:       deferredHandler{name: "sequence"},
+		TypeSequence:       sequenceHandler{},
 		TypeParallel:       parallelHandler{},
 		TypeForEach:        forEachHandler{},
 		TypeDecision:       decisionHandler{},

@@ -43,7 +43,7 @@ The `input` array in node specs names context paths to project into the decision
 ```json
 {
   "jdmId": "payment-check",
-  "input": ["data.payment_status", "data.amount", "input.customer_tier"]
+  "input": ["payment_status", "amount", "customer_tier"]
 }
 ```
 
@@ -76,8 +76,7 @@ The `condition` node evaluates a decision and branches based on a truthy output 
     "jdmId": "payment-status-check",
     "input": ["data.payment_status", "data.amount"],
     "trueKey": "process-paid",
-    "falseKey": "handle-pending",
-    "branchField": "approved"
+    "falseKey": "handle-pending"
   },
   "children": [
     { "id": "process-paid", "type": "sequence", "spec": {}, "children": [ /* ... */ ] },
@@ -86,24 +85,38 @@ The `condition` node evaluates a decision and branches based on a truthy output 
 }
 ```
 
+The decision table for this condition returns a boolean `result` field (shown
+below); with no `branchField`, a truthy `result` selects `trueKey`.
+
 ### Field Resolution
 
-The condition node determines which branch to take:
+The condition node determines which branch to take from the decision output:
 
-1. If `branchField` is set, reads that field from the decision output
-2. Otherwise falls back to `out["branch"]` then `out["result"]`
-3. Converts the value to boolean using truthy semantics
+1. **If `branchField` is set** — it reads that field as a **string** and matches
+   its value against `trueKey` / `falseKey` (the branch node IDs). The field must
+   therefore contain the *name of the branch to take*, not a boolean. If it
+   matches neither, the condition takes `falseKey` (fall-through).
+2. **If `branchField` is not set** — it checks `out["branch"]` (a string naming
+   the branch), then falls back to a **truthy test** on `out["result"]`: a truthy
+   `result` takes `trueKey`, a falsy one takes `falseKey`.
 
-### Example Decision Table
+**Practical guidance:** the simplest and least error-prone pattern is to **omit
+`branchField`** and have the decision output a boolean `result`. Reserve
+`branchField` for when the decision emits a string that already equals a branch
+node ID. A common mistake is setting `branchField` while the decision returns a
+boolean — the boolean never equals a branch key, so the condition always
+fall-throughs to `falseKey`.
 
-A decision table that returns `{"approved": true}` or `{"approved": false}`:
+### Example Decision Table (boolean `result`, no `branchField`)
 
-| payment_status | amount   | approved |
-|----------------|----------|----------|
-| "PAID"         | -        | true     |
-| "PENDING"      | >= 100   | false    |
-| "PENDING"      | < 100    | false    |
-| -              | -        | false    |
+A decision table that returns `{"result": true}` or `{"result": false}`:
+
+| payment_status | amount   | result |
+|----------------|----------|--------|
+| "PAID"         | -        | true   |
+| "PENDING"      | >= 100   | false  |
+| "PENDING"      | < 100    | false  |
+| -              | -        | false  |
 
 ### Request/Response Example
 
@@ -120,10 +133,10 @@ Decision evaluates with input:
 
 Decision returns:
 ```json
-{ "approved": true }
+{ "result": true }
 ```
 
-Flow takes `process-paid` branch.
+A truthy `result` makes the condition take its `trueKey` branch.
 
 ---
 
@@ -386,7 +399,7 @@ A flow that uses multiple decision types:
             "id": "filter-available",
             "type": "filter",
             "spec": {
-              "over": "input.items",
+              "over": "body.items",
               "jdmId": "item-availability-check",
               "input": ["sku", "quantity"],
               "saveAs": "availableItems",
@@ -398,7 +411,7 @@ A flow that uses multiple decision types:
             "type": "decision",
             "spec": {
               "jdmId": "order-discount",
-              "input": ["input.customer_tier", "availableItems"],
+              "input": ["customer_tier", "availableItems"],
               "saveAs": "discount"
             }
           },
@@ -407,10 +420,9 @@ A flow that uses multiple decision types:
             "type": "condition",
             "spec": {
               "jdmId": "order-approval",
-              "input": ["discount.final_total", "input.customer_id"],
+              "input": ["discount.final_total", "customer_id"],
               "trueKey": "auto-approve",
-              "falseKey": "manual-review",
-              "branchField": "auto_approved"
+              "falseKey": "manual-review"
             },
             "children": [
               { "id": "auto-approve", "type": "set", "spec": { "targetPath": "response.status", "value": "approved" } },

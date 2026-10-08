@@ -677,12 +677,10 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     setValidateState({ loading: true, result: null, error: null });
     try {
       const response = await post('/rule-engine/validate', {
-        body: {
-          flowId: 'canvas-preview',
-          method: 'GET',
-          path: '/preview',
-          tree,
-        },
+        flowId: 'canvas-preview',
+        method: 'GET',
+        path: '/preview',
+        tree,
       });
       setValidateState({
         loading: false,
@@ -746,13 +744,11 @@ const FlowCanvasInner = React.forwardRef<HTMLDivElement, InputProps>((props, ref
     setDryRunState({ loading: true, result: null, error: null });
     try {
       const response = await post('/rule-engine/dry-run', {
-        body: {
-          flowId: 'canvas-preview',
-          method: 'GET',
-          path: '/preview',
-          tree,
-          input: inputObj,
-        },
+        flowId: 'canvas-preview',
+        method: 'GET',
+        path: '/preview',
+        tree,
+        input: inputObj,
       });
       setDryRunState({
         loading: false,

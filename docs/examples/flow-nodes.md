@@ -2,7 +2,9 @@
 
 The rule engine flow interpreter executes a tree of typed nodes. Each node has an
 `id`, `type`, `spec` (type-specific configuration), and optional `children`. This
-guide covers all 16 node types with concrete config examples.
+guide covers all 17 node types with concrete config examples. Every type in the
+taxonomy is executed by the interpreter — control nodes own children and run them;
+leaf nodes do one unit of work and must not have children.
 
 **Related architecture:** [slice-a-interpreter.md](../architecture/lld/slice-a-interpreter.md)
 
@@ -18,6 +20,31 @@ Every node follows this shape:
   "children": [ /* nested nodes for control types */ ]
 }
 ```
+
+## Context Paths
+
+Several specs reference values by a dotted **context path** (`input`, `saveAs`,
+`from`, `over`, `bodyFrom`, `capture`, …). Paths resolve against three roots,
+most-derived first: **Response → Data → Input**. The resolver descends each root
+as a map — it does **not** add an `input.`/`data.`/`response.` namespace prefix
+for you.
+
+- **Request values** (path params, query, headers, parsed `body`) live at the top
+  of the Input root. Reference them **directly by key**: `greet`, `order_id`,
+  `body.amount` (the whole parsed body is under the `body` key). Do **not** write
+  `input.greet`.
+- **Node outputs** are stored under the node's `saveAs` key in the Data root.
+  Reference them as `<saveAs>.<field>` — e.g. an action with `"saveAs": "order"`
+  exposes `order.payment_status`; a decision with `"saveAs": "greeting"` exposes
+  `greeting.message`. Do **not** write `data.order...`.
+- **Response-building** targets (a `set` node's `targetPath`) write under the
+  Response root; `targetPath: "response.message"` nests `message` under a key
+  named `response`, and a terminal `response` node's `bodyFrom: "response"`
+  returns that object.
+
+A stray `input.`/`data.` prefix is the most common cause of a path silently not
+resolving (an empty decision input, a condition that never matches, or a `set`
+"source path not found" error).
 
 ## Node Types Overview
 
@@ -39,6 +66,7 @@ Every node follows this shape:
 | `find`            | leaf     | Find first matching item                   |
 | `map`             | leaf     | Transform array items                      |
 | `reduce`          | leaf     | Aggregate array to single value            |
+| `load`            | leaf     | Load data from inline/file/URL             |
 
 ---
 
@@ -110,7 +138,10 @@ Defines a message queue consumer that activates this flow.
 
 ### sequence — Sequential Execution
 
-Executes children one after another. Stops on first error by default.
+Executes children one after another, in declaration order, threading the same
+context so a later step can read what an earlier step wrote. Stops on the first
+error by default. A `response` child short-circuits the sequence — any siblings
+after it do not run.
 
 ```json
 {
@@ -130,6 +161,20 @@ Executes children one after another. Stops on first error by default.
 | Field         | Type | Default | Description                           |
 |---------------|------|---------|---------------------------------------|
 | `stopOnError` | bool | `true`  | Abort on child failure                |
+
+**Why sequence matters:** leaf nodes (`action`, `decision`, `set`, `response`,
+`filter`, `find`, `map`, `reduce`, `logger`, `load`) **cannot have children** —
+they do one thing and stop. To run several leaf steps in order you wrap them in a
+`sequence` (a control node). This is also how you give a `condition` or `switch`
+branch more than one step: point the branch at a `sequence` that holds the steps.
+
+**`stopOnError` behavior:**
+
+- `true` (default) — the first child error aborts the sequence; later siblings do
+  not run and the error propagates. Use for steps that depend on each other.
+- `false` — a failed child is skipped and the sequence keeps walking (best-effort).
+  Use for independent, non-critical steps (e.g. a notification that shouldn't fail
+  the whole flow). A mid-sequence `response` still stops the walk even in this mode.
 
 ### parallel — Concurrent Execution
 
@@ -168,8 +213,7 @@ Routes to one of two branches based on a ZEN decision result.
     "jdmId": "payment-status-check",
     "input": ["data.payment_status", "data.amount"],
     "trueKey": "process-payment",
-    "falseKey": "await-payment",
-    "branchField": "approved"
+    "falseKey": "await-payment"
   },
   "children": [
     { "id": "process-payment", "type": "sequence", "spec": {}, "children": [ /* ... */ ] },
@@ -178,13 +222,15 @@ Routes to one of two branches based on a ZEN decision result.
 }
 ```
 
+The decision returns a boolean `result`; a truthy result selects `trueKey`.
+
 | Field         | Type     | Description                                         |
 |---------------|----------|-----------------------------------------------------|
 | `jdmId`       | string   | ZEN decision table ID                               |
-| `input`       | []string | Context paths to project into decision input        |
-| `trueKey`     | string   | Child node ID for truthy result                     |
-| `falseKey`    | string   | Child node ID for falsy result                      |
-| `branchField` | string   | Output field to read (falls back to `branch`/`result`) |
+| `input`       | []string | Context keys to project into the decision input (no `input.` prefix — e.g. `greet`, `body.amount`, `order.payment_status`) |
+| `trueKey`     | string   | Child node ID taken when the result is truthy       |
+| `falseKey`    | string   | Child node ID taken otherwise (use `""` to fall through and keep walking) |
+| `branchField` | string   | Optional. When set, the condition reads this output field as a **string** and matches it against `trueKey`/`falseKey` (the field must hold the branch node ID, not a boolean). Omit it to use the truthy `result` convention. |
 
 ### switch — Multi-Branch Routing
 
@@ -557,8 +603,7 @@ A complete order lookup flow with validation, database query, decision logic, an
               "jdmId": "payment-status-check",
               "input": ["order.payment_status"],
               "trueKey": "paid-branch",
-              "falseKey": "pending-branch",
-              "branchField": "isPaid"
+              "falseKey": "pending-branch"
             },
             "children": [
               {
@@ -623,13 +668,141 @@ Response:
 }
 ```
 
+## Decision-Driven Linear Flow
+
+When the "if" logic can live in a decision table, keep the flow a straight line:
+run one `decision`, copy its output into the response, and reply. This is the
+easiest shape to read, and non-technical authors edit the branching as rows in
+the decision table rather than as flow branches.
+
+The decision table outputs the final value (e.g. a `message` field); the flow
+copies it out and responds.
+
+```json
+{
+  "id": "trigger",
+  "type": "trigger",
+  "spec": { "method": "GET", "path": "/mad/{greet}", "input": { "params": ["greet"] } },
+  "children": [
+    {
+      "id": "main-seq",
+      "type": "sequence",
+      "spec": {},
+      "children": [
+        {
+          "id": "decide-greeting",
+          "type": "decision",
+          "spec": { "jdmId": "greet-check", "input": ["greet"], "saveAs": "greeting" }
+        },
+        {
+          "id": "set-message",
+          "type": "set",
+          "spec": { "targetPath": "response.message", "from": "greeting.message" }
+        },
+        {
+          "id": "respond",
+          "type": "response",
+          "spec": { "status": 200, "bodyFrom": "response" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Note the condition's `input` names context keys **without** an `input.` prefix.
+Path params and body fields live directly in the context (`greet`, `body.amount`),
+and data saved by an action/decision node is read by its `saveAs` key
+(`greeting.message`). A stray `input.` prefix is the most common reason a decision
+sees empty input and a branch never matches.
+
+## Multiple Checks (Sequential Conditions)
+
+To run several checks in order, chain `condition` nodes inside a `sequence`,
+using the "set a default, override as each check passes" pattern. Each
+`condition` uses `falseKey: ""` to fall through (keep whatever is set) when it
+does not match, and its match branch is a `sequence` so it can do several steps
+and then run the next check.
+
+This example checks payment status, then (only if paid) the amount tier:
+
+```json
+{
+  "id": "trigger",
+  "type": "trigger",
+  "spec": { "method": "POST", "path": "/orders/check", "input": { "body": true } },
+  "children": [
+    {
+      "id": "main",
+      "type": "sequence",
+      "spec": {},
+      "children": [
+        {
+          "id": "set-default",
+          "type": "set",
+          "spec": { "targetPath": "response.status", "value": "rejected: unpaid" }
+        },
+        {
+          "id": "check-paid",
+          "type": "condition",
+          "spec": { "jdmId": "payment-paid-check", "input": ["body.payment_status"], "trueKey": "paid-seq", "falseKey": "" },
+          "children": [
+            {
+              "id": "paid-seq",
+              "type": "sequence",
+              "spec": {},
+              "children": [
+                {
+                  "id": "set-approved",
+                  "type": "set",
+                  "spec": { "targetPath": "response.status", "value": "approved: standard" }
+                },
+                {
+                  "id": "check-high",
+                  "type": "condition",
+                  "spec": { "jdmId": "amount-high-check", "input": ["body.amount"], "trueKey": "high-set", "falseKey": "" },
+                  "children": [
+                    {
+                      "id": "high-set",
+                      "type": "set",
+                      "spec": { "targetPath": "response.status", "value": "approved: high-value, needs review" }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "respond",
+          "type": "response",
+          "spec": { "status": 200, "bodyFrom": "response" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Behavior for `POST /orders/check`:
+
+| `payment_status` | `amount` | `response.status`                      |
+|------------------|----------|----------------------------------------|
+| `PAID`           | `>= 1000`| `approved: high-value, needs review`   |
+| `PAID`           | `< 1000` | `approved: standard`                   |
+| anything else    | —        | `rejected: unpaid`                     |
+
+The two decision tables (`payment-paid-check`, `amount-high-check`) each return a
+truthy `result` field; see [decision-tables.md](./decision-tables.md) for how a
+`condition` reads the decision output.
+
 ## Best Practices
 
 1. **Unique node IDs** — Every node needs a unique `id` within the flow for tracing and debugging.
 
 2. **Control depth limits** — Static depth is limited to 32 levels; keep flows flat where possible.
 
-3. **Use sequences for ordering** — When steps must execute in order, wrap them in a `sequence` node.
+3. **Use sequences for ordering** — Leaf nodes cannot have children, so to run several leaf steps in order (or to give a condition/switch branch more than one step) wrap them in a `sequence`. Control nodes (`trigger`, `sequence`, `condition`, `switch`, `parallel`, `forEach`) own children; leaf nodes (`action`, `decision`, `set`, `response`, `filter`, `find`, `map`, `reduce`, `logger`, `load`) do not.
 
 4. **Set resilience per-action** — Override timeout/retry for actions that need different behavior than the connection default.
 

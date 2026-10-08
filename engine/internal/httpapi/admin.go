@@ -255,6 +255,7 @@ func (a *Admin) fail(w http.ResponseWriter, ctx context.Context, label string, e
 		a.log.Emit(ctx, "warn", label, map[string]any{
 			"status":      status,
 			"error_class": classLabel(err),
+			"error":       err.Error(),
 		})
 	}
 	writeError(w, status, msg)

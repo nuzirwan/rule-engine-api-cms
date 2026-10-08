@@ -142,7 +142,7 @@ export class AdminClient {
 
     if (!res.ok) {
       throw new AdminApiError(
-        `admin request ${method} ${path} returned ${res.status}`,
+        `admin request ${method} ${path} returned ${res.status}${AdminClient.detailOf(parsed)}`,
         res.status,
         parsed,
         AdminClient.recoverableFor(res.status)
@@ -150,6 +150,31 @@ export class AdminClient {
     }
 
     return parsed as T;
+  }
+
+  /**
+   * Extracts a human-readable detail suffix from an engine error body so a 400
+   * is actionable instead of opaque. The engine returns either {error} or, for a
+   * bad flow tree, {error, issues:[{nodeId,code,message}]}; surface both so the
+   * author sees WHICH node/field is wrong (e.g. a response node with an unknown
+   * `body` spec field). Returns "" when the body carries no usable detail.
+   */
+  private static detailOf(body: unknown): string {
+    if (!body || typeof body !== 'object') return '';
+    const b = body as { error?: unknown; issues?: unknown };
+    const parts: string[] = [];
+    if (typeof b.error === 'string' && b.error) parts.push(b.error);
+    if (Array.isArray(b.issues)) {
+      for (const iss of b.issues) {
+        if (iss && typeof iss === 'object') {
+          const i = iss as { nodeId?: unknown; message?: unknown };
+          const node = typeof i.nodeId === 'string' && i.nodeId ? `node "${i.nodeId}": ` : '';
+          const msg = typeof i.message === 'string' ? i.message : '';
+          if (msg) parts.push(`${node}${msg}`);
+        }
+      }
+    }
+    return parts.length ? ` — ${parts.join('; ')}` : '';
   }
 
   // --- typed methods (map to the as-built /admin/* contract) ---------------

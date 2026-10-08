@@ -13,6 +13,40 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// sequenceHandler runs its children in order, threading the same Ctx. It is the
+// explicit "do these steps in sequence" control node. A Response child short-
+// circuits the walk upward (via Directive.Stop). StopOnError (default true)
+// aborts the sequence on the first child error; StopOnError=false keeps walking
+// past a failed child (best-effort), still honoring a mid-sequence Stop.
+type sequenceHandler struct{}
+
+// Exec implements NodeHandler.
+func (sequenceHandler) Exec(ctx context.Context, c *Ctx, n Node, dep Deps, w Walker) (Directive, error) {
+	spec, err := parseSpec[SequenceSpec](n.Spec)
+	if err != nil {
+		return Directive{}, err
+	}
+	// StopOnError defaults to true (nil => abort on the first child error). The
+	// default path is the same ordered walk trigger/set use, so a Response's Stop
+	// short-circuits and a child error aborts.
+	if spec.StopOnError == nil || *spec.StopOnError {
+		return walkChildren(ctx, n.Children, c, dep, w)
+	}
+	// Best-effort path: keep walking past a child error, but still stop when a
+	// child signals Stop (a Response terminates the whole walk).
+	for i := range n.Children {
+		child := n.Children[i]
+		d, cerr := w.Walk(ctx, &child, c, dep)
+		if cerr != nil {
+			continue
+		}
+		if d.Stop {
+			return d, nil
+		}
+	}
+	return Directive{}, nil
+}
+
 // switchHandler is the N-way branch. It projects the named ctx paths into a
 // decision input, evaluates the JDM, looks up the returned "branch" value in
 // Cases, falls back to Default, and walks the one chosen child via the Walker.

@@ -1482,3 +1482,238 @@ func TestLoad_CombinedWithFilter(t *testing.T) {
 		t.Fatalf("filter result item id=%v, want 2", item["id"])
 	}
 }
+
+// ============================================================================
+// sequence node — comprehensive coverage. The sequence control node runs its
+// children in order, short-circuits on a Response, and respects StopOnError.
+// These tests exercise ordering/data-dependency, short-circuit, both error
+// modes, nesting, and the condition->sequence branch shape that was impossible
+// while sequence was a deferred stub.
+// ============================================================================
+
+// boolPtr is a tiny helper to set the optional StopOnError pointer in a spec.
+func boolPtr(b bool) *bool { return &b }
+
+// countingClient records how many Execute calls it received and can fail on a
+// chosen call index (1-based), returning canned results otherwise. It proves
+// which steps of a sequence actually ran.
+type countingClient struct {
+	calls   int
+	failOn  int   // 1-based call index that returns err; 0 = never fail
+	err     error // error to return on failOn
+	results []any // per-call results (indexed by call-1); nil => empty map
+}
+
+func (c *countingClient) Execute(ctx context.Context, op connect.Operation) (any, error) {
+	c.calls++
+	if c.failOn != 0 && c.calls == c.failOn {
+		return nil, c.err
+	}
+	if c.calls-1 < len(c.results) && c.results[c.calls-1] != nil {
+		return c.results[c.calls-1], nil
+	}
+	return map[string]any{}, nil
+}
+func (c *countingClient) Close() error { return nil }
+
+// TestSequence_OrderedDataDependency proves a sequence runs its children in
+// strict declaration order by making each step depend on the previous step's
+// write: set a -> set b from a -> set c from b. If order broke, the later reads
+// would miss and the walk would error.
+func TestSequence_OrderedDataDependency(t *testing.T) {
+	seq := Node{
+		ID:   "seq",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "s1", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "step1", Value: "a"})},
+			{ID: "s2", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "step2", From: "step1"})},
+			{ID: "s3", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "step3", From: "step2"})},
+			{ID: "r", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{seq}}
+
+	c := NewCtx("r", "t", "e", map[string]any{})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Response["step1"] != "a" || c.Response["step2"] != "a" || c.Response["step3"] != "a" {
+		t.Fatalf("ordered data dependency broke: %+v", c.Response)
+	}
+}
+
+// TestSequence_ResponseShortCircuits proves a Response in the MIDDLE of a
+// sequence stops the walk: the step after the response must NOT run.
+func TestSequence_ResponseShortCircuits(t *testing.T) {
+	seq := Node{
+		ID:   "seq",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "before", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "before", Value: "ran"})},
+			{ID: "resp", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+			{ID: "after", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "after", Value: "ran"})},
+		},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{seq}}
+
+	c := NewCtx("r", "t", "e", map[string]any{})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Response["before"] != "ran" {
+		t.Fatalf("step before response did not run: %+v", c.Response)
+	}
+	if _, present := c.Response["after"]; present {
+		t.Fatalf("step AFTER response ran despite short-circuit: %+v", c.Response)
+	}
+}
+
+// TestSequence_StopOnErrorDefaultAborts proves the default (StopOnError unset =>
+// true): a failing action aborts the sequence; the step after it never runs and
+// the error propagates.
+func TestSequence_StopOnErrorDefaultAborts(t *testing.T) {
+	cc := &countingClient{failOn: 1, err: errors.New("boom")}
+	reg := &fakeRegistry{client: cc}
+
+	seq := Node{
+		ID:   "seq",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}), // StopOnError nil => default true
+		Children: []Node{
+			{ID: "a1", Type: TypeAction, Spec: rawSpec(t, ActionSpec{ConnRef: ConnRef{Connection: "db"}, Operation: connect.Operation{Kind: "exec"}, SaveAs: "x"})},
+			{ID: "a2", Type: TypeAction, Spec: rawSpec(t, ActionSpec{ConnRef: ConnRef{Connection: "db"}, Operation: connect.Operation{Kind: "exec"}, SaveAs: "y"})},
+			{ID: "r", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{seq}}
+
+	c := NewCtx("r", "t", "e", map[string]any{})
+	err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg})
+	if err == nil {
+		t.Fatal("expected the first action's error to abort the sequence")
+	}
+	if cc.calls != 1 {
+		t.Fatalf("expected exactly 1 Execute call (abort after failure), got %d", cc.calls)
+	}
+}
+
+// TestSequence_StopOnErrorFalseContinues proves StopOnError=false keeps walking
+// past a failed child: the first action fails, the second runs, and a trailing
+// Response still terminates the walk successfully.
+func TestSequence_StopOnErrorFalseContinues(t *testing.T) {
+	cc := &countingClient{failOn: 1, err: errors.New("boom"), results: []any{nil, map[string]any{"ok": true}}}
+	reg := &fakeRegistry{client: cc}
+
+	seq := Node{
+		ID:   "seq",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{StopOnError: boolPtr(false)}),
+		Children: []Node{
+			{ID: "a1", Type: TypeAction, Spec: rawSpec(t, ActionSpec{ConnRef: ConnRef{Connection: "db"}, Operation: connect.Operation{Kind: "exec"}, SaveAs: "x"})},
+			{ID: "a2", Type: TypeAction, Spec: rawSpec(t, ActionSpec{ConnRef: ConnRef{Connection: "db"}, Operation: connect.Operation{Kind: "exec"}, SaveAs: "y"})},
+			{ID: "mark", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "reached", Value: "yes"})},
+			{ID: "r", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{seq}}
+
+	c := NewCtx("r", "t", "e", map[string]any{})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{Conns: reg}); err != nil {
+		t.Fatalf("best-effort sequence should not surface the child error, got: %v", err)
+	}
+	if cc.calls != 2 {
+		t.Fatalf("expected both actions attempted (2 Execute calls), got %d", cc.calls)
+	}
+	if c.Response["reached"] != "yes" {
+		t.Fatalf("sequence did not continue to the set after a failed action: %+v", c.Response)
+	}
+}
+
+// TestSequence_Nested proves sequences recurse through the Walker: an outer
+// sequence contains an inner sequence, and both run their children in order.
+func TestSequence_Nested(t *testing.T) {
+	inner := Node{
+		ID:   "inner",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "i1", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "inner1", Value: "x"})},
+			{ID: "i2", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "inner2", Value: "y"})},
+		},
+	}
+	outer := Node{
+		ID:   "outer",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "o1", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "outer1", Value: "a"})},
+			inner,
+			{ID: "r", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{outer}}
+
+	c := NewCtx("r", "t", "e", map[string]any{})
+	if err := New().Run(context.Background(), tree, Version{}, c, Deps{}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if c.Response["outer1"] != "a" || c.Response["inner1"] != "x" || c.Response["inner2"] != "y" {
+		t.Fatalf("nested sequence did not fully run: %+v", c.Response)
+	}
+}
+
+// TestSequence_AsConditionBranch proves the shape that was IMPOSSIBLE while
+// sequence was deferred: a condition whose chosen branch is a sequence that does
+// several steps (decision-style set + response). This is the real-world "if X
+// then do several things then respond" pattern.
+func TestSequence_AsConditionBranch(t *testing.T) {
+	trueSeq := Node{
+		ID:   "yes",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "set-msg", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "message", Value: "friendly"})},
+			{ID: "resp-yes", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	falseSeq := Node{
+		ID:   "no",
+		Type: TypeSequence,
+		Spec: rawSpec(t, SequenceSpec{}),
+		Children: []Node{
+			{ID: "set-default", Type: TypeSet, Spec: rawSpec(t, SetSpec{TargetPath: "message", Value: "default"})},
+			{ID: "resp-no", Type: TypeResponse, Spec: rawSpec(t, ResponseSpec{Status: 200})},
+		},
+	}
+	cond := Node{
+		ID:       "cond",
+		Type:     TypeCondition,
+		Spec:     rawSpec(t, ConditionSpec{JDMID: "greet", Input: []string{"greet"}, TrueKey: "yes", FalseKey: "no"}),
+		Children: []Node{trueSeq, falseSeq},
+	}
+	tree := &Node{ID: "root", Type: TypeTrigger, Spec: rawSpec(t, TriggerSpec{Method: "GET", Path: "/x"}), Children: []Node{cond}}
+
+	t.Run("true branch runs its sequence", func(t *testing.T) {
+		eval := &fakeEvaluator{out: map[string]any{"result": true}}
+		c := NewCtx("r", "t", "e", map[string]any{"greet": "hello"})
+		if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+			t.Fatalf("Run error: %v", err)
+		}
+		if c.Response["message"] != "friendly" {
+			t.Fatalf("true-branch sequence did not run: %+v", c.Response)
+		}
+	})
+
+	t.Run("false branch runs its sequence", func(t *testing.T) {
+		eval := &fakeEvaluator{out: map[string]any{"result": false}}
+		c := NewCtx("r", "t", "e", map[string]any{"greet": "bye"})
+		if err := New().Run(context.Background(), tree, Version{}, c, Deps{Decide: eval}); err != nil {
+			t.Fatalf("Run error: %v", err)
+		}
+		if c.Response["message"] != "default" {
+			t.Fatalf("false-branch sequence did not run: %+v", c.Response)
+		}
+	})
+}

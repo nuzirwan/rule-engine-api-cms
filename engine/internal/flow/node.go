@@ -9,10 +9,11 @@ import (
 	"nzr-rules-engine/internal/observ"
 )
 
-// NodeType names a node kind in the flow tree. The eleven types are the frozen
-// taxonomy; the thin slice executes trigger/action/condition/set/response and
-// refuses the deferred ones (switch/parallel/forEach/decision/logger/sequence)
-// with a validation error at runtime.
+// NodeType names a node kind in the flow tree. All types in the frozen taxonomy
+// below are now executed by the interpreter (the earlier "thin slice" deferred
+// several control types with a runtime validation error; those handlers — switch,
+// parallel, forEach, decision, logger, and sequence — are all implemented now).
+// An unknown type (not in this taxonomy) is still a runtime validation error.
 type NodeType string
 
 // The node type constants (lld-contracts.md).
